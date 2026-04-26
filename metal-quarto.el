@@ -680,14 +680,16 @@ Si xwidget-webkit est disponible, l'ouvrir dans Emacs, sinon navigateur externe.
    " " (metal-toolbar-vpadding)))
 
 (defun metal-quarto-header-line ()
-  "Active la barre d'outils si le tampon courant est un fichier .qmd."
-  (when (and buffer-file-name
-             (string-match-p "\\.qmd\\'" buffer-file-name))
-    (metal-toolbar-setup-header-line-style)
-    (setq-local header-line-format
-                '(:eval (metal-quarto-toolbar-format)))))
+  "Active la barre d'outils dans tout fichier Markdown (Quarto ou non).
+S'applique aux fichiers .md comme aux .qmd : les fonctions de
+formatage (gras, italique, code, etc.) sont identiques.  Le bouton
+« Produire le document » utilise Quarto, qui sait traiter aussi
+bien les fichiers Markdown ordinaires que Quarto."
+  (metal-toolbar-setup-header-line-style)
+  (setq-local header-line-format
+              '(:eval (metal-quarto-toolbar-format))))
 
-;; Activer cette barre pour les fichiers .qmd ouverts en markdown-mode
+;; Activer cette barre pour tous les fichiers Markdown (.md et .qmd)
 (add-hook 'markdown-mode-hook #'metal-quarto-header-line)
 
 ;;; ═══════════════════════════════════════════════════════════════════
