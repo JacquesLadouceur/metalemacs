@@ -1,0 +1,14 @@
+---
+title: "Titre de la présentation"
+format:
+  beamer:
+    callout-appearance: default
+    aspectratio: 169   # 16:9
+    theme: metropolis
+execute:
+  enabled: false
+  echo: true
+language:
+  crossref-lst-title: "Code"
+  listing-title-delim: ":"
+---

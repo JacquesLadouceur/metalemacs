@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Diapositives - Police de caractères - Petite
+# key: Diapositives - Police de caractères - Petite
+# --
+#+LaTeX: \footnotesize

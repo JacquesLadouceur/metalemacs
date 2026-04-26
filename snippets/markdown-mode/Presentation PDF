@@ -1,0 +1,26 @@
+# -*- mode: snippet -*-
+# name: Présentation PDF
+# key: Présentation
+# expand-env: ((yas-indent-line 'fixed))
+# --
+---
+title: ""
+subtitle: ""
+format:
+  beamer:
+    theme: metropolis
+    aspectratio: 169
+    slide-level: 2
+    code-block-font-size: \\footnotesize
+    highlight-style: github
+include-in-header:
+  - text: |
+      \\definecolor{codebg}{RGB}{245,245,245}
+      \\setbeamercolor{block body}{bg=codebg}
+      \usepackage[normalem]{ulem}
+execute:
+  enabled: false
+  echo: true
+lang: fr
+---
+$0

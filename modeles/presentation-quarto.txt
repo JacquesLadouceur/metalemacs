@@ -1,0 +1,20 @@
+---
+title: "Titre"
+subtitle: "Sous-titre"
+format:
+  beamer:
+    theme: metropolis
+    aspectratio: 169
+    slide-level: 2
+    code-block-font-size: \scriptsize
+    highlight-style: github
+filters:
+  - metal-boites.lua
+header-includes: |
+  \usepackage{metal-tcolorbox}
+  \usepackage{booktabs}
+execute:
+  enabled: false
+  echo: true
+lang: fr
+---

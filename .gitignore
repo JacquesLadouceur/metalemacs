@@ -1,0 +1,88 @@
+# ============================================================
+# .gitignore pour MetalEmacs
+# ============================================================
+
+# ---- Packages tiers (gérés par straight.el) ----
+straight/
+elpa/
+quelpa/
+
+# ---- Compilation native Emacs ----
+eln-cache/
+*.elc
+
+# ---- Snippets compilés (régénérés automatiquement) ----
+**/.yas-compiled-snippets.el
+
+# ---- Caches & état runtime ----
+auto-save-list/
+backups/
+recentf
+places
+saveplace
+savehist
+history
+ido.last
+projectile-bookmarks.eld
+.session
+transient/
+url/
+.cache/
+var/
+metal-custom.el
+.org-generic-id-locations
+org-persist/
+tramp
+network-security.data
+
+# ---- Fichiers temporaires / sauvegardes ----
+*~
+\#*\#
+.\#*
+*.bak
+*.tmp
+zip/
+
+# ---- Système metal-securite (corbeille interne) ----
+corbeille/
+
+# ---- Calendriers importés (contiennent potentiellement des tokens) ----
+calendriers/
+
+# ---- Configuration personnelle (à ne JAMAIS committer) ----
+perso.el
+local.el
+.authinfo
+.authinfo.gpg
+secrets.el
+
+# ---- pdf-tools : exclure le dossier MAIS garder epdfinfo.exe ----
+# (binaire Windows pré-compilé, indispensable pour les étudiants Windows ;
+#  Mac/Linux compilent eux-mêmes au premier pdf-tools-install)
+pdf-tools/*
+!pdf-tools/epdfinfo.exe
+
+# ---- Git Portable embarqué (Windows) ----
+# Trop volumineux pour Git ; les étudiants Windows installent Git via Scoop
+PortableGit/
+
+# ---- macOS ----
+.DS_Store
+
+# ---- Windows ----
+Thumbs.db
+desktop.ini
+
+# ---- Linux ----
+*~
+
+# ---- Éditeurs / IDE ----
+.dir-locals.el
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# ---- Documents Org auto-générés ----
+*.org_archive
+.org-id-locations

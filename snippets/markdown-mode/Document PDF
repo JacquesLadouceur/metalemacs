@@ -1,0 +1,14 @@
+# -*- mode: snippet -*-
+# name: Document Configuration
+# key: Document
+# expand-env: ((yas-indent-line 'fixed))
+# --
+---
+title: ""
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+---
+$0

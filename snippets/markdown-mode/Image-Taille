@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Image-Taille
+# key: Taille
+# --
+{fig-align="center" width=50%}

@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Diapositives - Littéral
+# key: Diapositives - Littéral
+# --
+~`yas-selected-text`~

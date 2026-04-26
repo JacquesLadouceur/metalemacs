@@ -1,0 +1,16 @@
+# -*- mode: snippet -*-
+# name: Presentation - Configuration
+# key: presentation
+# --
+#+TITLE: 
+#+SUBTITLE:
+#+AUTHOR:
+#+OPTIONS: toc:nil date:nil H:2
+#+OUTPUT_TYPE: presentation
+#+LANGUAGE: fr
+#+STARTUP: beamer fold 
+#+LATEX_CLASS: beamer
+#+BEAMER_THEME: Madrid [height=12pt]
+#+LATEX_HEADER: \usepackage{metal-beamer}
+#+COLUMNS: %40ITEM %10BEAMER_env(Env) %9BEAMER_envargs(Env Args) %4BEAMER_col(Col) %10BEAMER_extra(Extra)
+#+MACRO: option #+attr_latex: :options [$1]

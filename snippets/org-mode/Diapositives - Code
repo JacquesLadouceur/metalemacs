@@ -1,0 +1,9 @@
+# key: Diapositives - Code
+# name: Diapositives - Code
+# --
+#+ATTR_LATEX: :options [10]
+#+begin_code
+#+begin_src 
+`yas-selected-text`
+#+end_src
+#+end_code

@@ -1,0 +1,21 @@
+#+TITLE: Sites d'actualités NLP/TAL
+#+DESCRIPTION: Liste des sites web pour suivre les actualités en traitement automatique du langage
+
+* Sites d'actualités NLP/TAL
+
+** MIT News - NLP
+https://news.mit.edu/topic/natural-language-processing
+
+** InfoQ - NLP News
+https://www.infoq.com/Natural-Language-Processing/news/
+
+** ActuIA (français)
+https://www.actuia.com
+
+** Hugging Face Blog
+https://huggingface.co/blog
+
+** ACL Anthology
+https://aclanthology.org/
+** GitHub - keon/awesome-nlp
+https://github.com/keon/awesome-nlp?tab=readme-ov-file#research-summaries-and-trends

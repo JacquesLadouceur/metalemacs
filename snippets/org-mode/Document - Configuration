@@ -1,0 +1,11 @@
+#+TITLE: 
+#+SUBTITLE: 
+#+AUTHOR:
+#+DATE: 
+#+OPTIONS: toc:nil num:t date:nil
+#+OUTPUT_TYPE: document
+#+STARTUP: fold
+#+LATEX_CLASS: article
+#+LATEX_HEADER: \usepackage[margin=1in]{geometry}
+#+LATEX_HEADER: \usepackage{listings}
+#+LATEX_HEADER: \lstset{basicstyle=\ttfamily\small, breaklines=true, frame=single, columns=fullflexible, keepspaces=true, showstringspaces=false}

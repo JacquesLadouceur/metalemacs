@@ -1,0 +1,44 @@
+%% metal-tcolorbox.sty — Boîtes colorées réutilisables pour Quarto/LaTeX
+%% À placer dans ~/.emacs.d/ (ou tout répertoire dans TEXINPUTS)
+%%
+%% Usage dans un .qmd :
+%%   header-includes: |
+%%     \usepackage{metal-tcolorbox}
+
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{metal-tcolorbox}[2026/02/19 Boîtes colorées MetalEmacs]
+
+\RequirePackage{tcolorbox}
+\RequirePackage{xcolor}
+
+% ── Couleurs ─────────────────────────────────────────────────────────
+\definecolor{bleufonce}{HTML}{1B4F72}
+\definecolor{bleumoyen}{HTML}{2E86C1}
+\definecolor{bleuclair}{HTML}{D6EAF8}
+\definecolor{vertclair}{HTML}{EAFAF1}
+\definecolor{vertfonce}{HTML}{1E8449}
+\definecolor{orangeclair}{HTML}{FEF9E7}
+\definecolor{orangefonce}{HTML}{E67E22}
+\definecolor{rougeclair}{HTML}{FDEDEC}
+\definecolor{rougefonce}{HTML}{C0392B}
+
+% ── Boîtes ───────────────────────────────────────────────────────────
+\tcbuselibrary{skins, breakable}
+
+\newtcolorbox{infobox}[1][]{
+  colback=bleuclair, colframe=bleumoyen,
+  fonttitle=\bfseries\color{bleufonce}, title=#1, breakable}
+
+\newtcolorbox{exercicebox}[1][]{
+  colback=vertclair, colframe=vertfonce!60,
+  fonttitle=\bfseries\color{vertfonce}, title=#1, breakable}
+
+\newtcolorbox{warningbox}[1][]{
+  colback=orangeclair, colframe=orangefonce!60,
+  fonttitle=\bfseries\color{orangefonce}, title=#1, breakable}
+
+\newtcolorbox{attentionbox}[1][]{
+  colback=rougeclair, colframe=rougefonce!60,
+  fonttitle=\bfseries\color{rougefonce}, title=#1, breakable}
+
+\endinput

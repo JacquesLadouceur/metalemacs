@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Encadré-Astuce
+# key: Astuce
+# --
+:::{.infobox title="Astuce"}
+`yas-selected-text`$0
+:::

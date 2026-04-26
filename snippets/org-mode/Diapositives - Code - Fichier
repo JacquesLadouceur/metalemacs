@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Diapositives - Code - Fichier
+# key: Diapositives - Code - Fichier
+# --
+\center   [[./`yas-selected-text`][`yas-selected-text`]]
+\lstinputlisting[language=Python, basicstyle=\tiny\ttfamily]{./`yas-selected-text`}

@@ -1,0 +1,143 @@
+
+#+SETUPFILE: METAL.cfg
+#+OUTPUT_TYPE: document
+#+TITLE: \large MetalEmacs 1.1\\
+#+TITLE: (M)on (E)nvironnement pour le (T)raitement (A)utomatique du (L)angage
+#+AUTHOR: Jacques Ladouceur
+
+
+
+* Terminologie
+
+ - M : correspond à la touche *alt* (Windows) ou *Option* (MacOs) sur le clavier
+ - C : correspond à la touche *control* sur le clavier
+ - Frame: l'application Emacs
+ - Window: une fenêtre à l'intérieur de l'application
+ - Buffer: contenu d'une fenêtre (texte, programme, etc.)
+ - Le contenu d'une fenêtre est un "buffer" mais un "buffer" n'est pas obligatoirement affiché dans une fenêtre. Regarder dans le menu sous "Buffers"
+
+* Utilisation de l'interface
+
+Les opérations dans cette application peuvent se faire à l'aide de la barre d'outils principale (un peu limitée), avec le menu principal (très bien développé) et avec les barres d'outils contextuelles qui se modifient selon le mode dans lequel on travaille. On peut également utiliser des raccourcis clavier qui permettent une très grande efficacité.
+
+Par exemple, si on ouvre un programme Python, la touche du clavier F5 fait exécuter le programme et la touche F6 démarre un interprète. C'est la même chose pour Prolog: F5 transmet un programme à l'interprète et F6 Démarre un interprète si celui-ci est fermé. Notons que la terminologie est un peu différente entre Python et Prolog.  Par exemple, en Python, on exécute un programme alors qu'en Prolog, on le transmet à l'interprète. 
+
+Pour comprendre les raccourcis clavier, examinons les combinaisons de touches. Il y a des raccourcis préfixés par C-x.  Ceux-ci s'appliquent généralement à la manipulation de l'interface.  Par exemple, C-x 0 ferme la fenêtre active (sauf s'il s'agit de la seule fenêtre ouverte. C-x 1 ferme toutes les fenêtres sauf la fenêtre active. Par contre, le préfixe  M-x (M représente Alt dans Windows et Opt dans MacOS) introduit une commande à saisir au clavier. Par exemple, si on utilise M-x suivi de (à écrire au clavier) *speedbar* Emacs ouvre une fenêtre spécialisée pour la gestion des fichiers. https://www.gnu.org/software/emacs/manual/html_mono/speedbar.html
+
+
+Dans l'explorateur de fichiers et dossiers Treemacs (ici à gauche), les raccourcis claviers sont un peu différents.  Par exemple, avec le focus dans l'explorateur, si on appuie sur la lettre *w* suivi d'un nombre et de <Retour>, la largeur de la fenêtre sera modifiée en fonction de ce nombre.
+
+#+LATEX: \newpage 
+
+#+latex: { \scriptsize
+#+ATTR_LATEX: :environment longtable :align |l|l|l|l|
+#+ATTR_LATEX: :center nil
+#+CAPTION: Raccourcis clavier et menu contextuel
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| \frg *Application*          | \cbc *Fonction*                     | \cbc *Clavier*         | \cbc *Commentaires*                 |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+|                             |                                     |                        |                                     |
+| Archives et sauvegarde      | Dézipper une archive                | U                      |                                     |
+|                             | Zipper un dossier                   | Z                      |                                     |
+|                             | Sauvegarde le buffer dans treemacs  | S                      |                                     |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| Mise à jour de MetalEmacs   | - Utilise .emacs.d.zip              | M                      |                                     |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| Clés USB                    | - Afficher                          | V                      |                                     |
+|                             | - Cacher                            | X                      |                                     |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| Ligne de                    | - *En cas «d'empêtrement» !!!*      | *C-g* ou ESC ESC ESC   |                                     |
+| commandes                   |                                     |                        |                                     |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| \fcbl Gestion des dossiers  | - Modifier la largeur               | w nbr                  |                                     |
+| \fcbl et fichiers           | \fjn - Actualiser le dossier        | \fjn r                 |                                     |
+|                             | - Afficher les dossiers cachés      | t h                    | \fcjn r comme dans "refresh"        |
+| (Fenêtre de gauche)         | - Cacher - Afficher Treemacs        | C-x t t                |                                     |
+|                             | - Créer un dossier                  | c d                    |                                     |
+|                             | \fjn- Créer un fichier              | \fjn c f               |                                     |
+|                             | - Supprimer un dossier              | d                      |                                     |
+|                             | - Supprimer un fichier              | d                      |                                     |
+|                             | - Renommer un fichier               | R                      |                                     |
+|                             | - Copier un fichier                 | yf                     |                                     |
+|                             | \fjn - Annuler une commande         | \fjn C-g               |                                     |
+|                             | \fjn - Ouvrir un fichier hors emacs | \fjn o x               |                                     |
+|                             | Recharger un fichier                | C-x x g                | Sur MacOS: CMD-u                    |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| \fcbl Recherche             | C-s                                 |                        |                                     |
+| Remplacements instantanés   | C-s recherche C-e modification      |                        |                                     |
+| Recherche et remplacement   | C-r                                 |                        |                                     |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| \fcbl Gestion des fenêtres  | \fjn - Fermer la fenêtre active     | \fjn C-x 0             |                                     |
+|                             | - Fermer toutes les fenêtres        | C-x 1                  |                                     |
+|                             | ~~sauf la fenêtre active            |                        |                                     |
+|                             | - Diviser une fenêtre vertica-      | C-x 2                  |                                     |
+|                             | ~~lement                            |                        |                                     |
+|                             | - Diviser une fenêtre horizon-      | C-x 3                  |                                     |
+|                             | ~~talement                          |                        |                                     |
+|                             | - Fermer un onglet et son con-      | C-x K <Retour>         |                                     |
+|                             | ~~tenu                              |                        |                                     |
+|                             | - Annuler une commande              | C-g                    |                                     |
+| \fjn                        | \fjn - Déplacer un buffer (contenu) | \fjn Maj-flèche        | \fjn Le buffer va dans la fenêtre   |
+|                             |                                     |                        | \fjn où pointe la flèche sauf       |
+|                             |                                     |                        | \fjn s'il s'agit d'fenêtre spéciale |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| \fbl Python                 | \fjn - Exécuter le programme actif  | \fjn F5                | *Menu principal*                    |
+|                             | - Démarrer l'interprète             | F6                     | Python-Eval buffer                  |
+|                             | - Déboguer le programme             | C-F5                   | Python-Start interpreter            |
+|                             | \Fjn - Corriger les fins de ligne   | \fjn  F9               | deboguer                            |
+|                             |                                     |                        |                                     |
+|                             | - Supprimer une ligne               | C-S-backspace          |                                     |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+|                             |                                     |                        | *Menu principal*                    |
+| \fbl Prolog                 | \fjn - Consulter un programme       | \fjn F5                | \cbc System-Consult buffer          |
+|                             | - Démarrer l'interprète             | Automatique            | System-Run Prolog                   |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| \frg *Wiktionnaire*         | \cbc *Chercher le mot sous le*      | \cbc *C-c w*           |                                     |
+| \frg                        | \cbc *curseur ou sélectionné*       |                        |                                     |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| \fbl Org-mode               |                                     |                        |                                     |
+|                             | * mot *                             | M-g                    | Gras                                |
+|                             | / mot /                             | M-i                    | Italiques                           |
+|                             | _ mot _                             | M-s                    | Souligné                            |
+|                             | \fcjn #+begin_src ... #end_src      | \fjn F5 s              | Insérer du code  python             |
+|                             | #+begin_center ... #+end_center     | F5 c                   | Insérer du texte centré             |
+|                             | #+begin_comment ... #end_comment    | F5 C                   | Insérer un commentaire              |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+|                             |                                     |                        | *Menu principal*                    |
+| \fbl Org-mode (Tables)      | \cbc - Insérer une rangée           | \cbc M-Maj-Curseur bas | \cbc Table-Row-Insert row           |
+|                             | - Insérer une colonne               | M-Maj-Curseur droit    |                                     |
+|                             | - Insérer une ligne séparatrice     | C-c -                  | Table-Row-Insert Hline              |
+|                             | - Supprimer une ligne               | M-Maj-Curseur haut     |                                     |
+|                             | - Supprimer une colonne             | M-Maj-Curseur gauche   |                                     |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+|                             |                                     |                        |                                     |
+| \fbl Org-mode (exportation) | \fjn - Convertir un document en ODT | \fjn M-F8              | \cbc Pour une table dans la         |
+|                             | - Convertir un document en PDF      | F8                     | conversion en odt, ajuster sa       |
+|                             |                                     |                        | largeur avec la directive:          |
+|                             |                                     |                        |                                     |
+|                             |                                     |                        | #+ATTR_ODT: :rel-width 30           |
+|                             |                                     |                        |                                     |
+|                             |                                     |                        | À mette immédiatement avant la      |
+|                             |                                     |                        | table                               |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+#+latex: }
+
+** Exportation d'un document Org-Mode en format PDF, Libre Office ou Microsoft Word
+
+Emacs peut exporter directement les documents Org-Mode en pdf, Libre Office ou Microsoft Office.  Cependant, pour cela certains logiciels doivent être installés: Libre Office pour les formats pris en charge par Libre Office et Microsoft Word; une version de Latex  pour le format PDF. Pour Windows: MikTex; pour MacOS: MacTex.
+
+** Comparateur de fichiers
+
+- Ouvrir les fichiers dans des buffers contigus
+- M-x ediff-buffers: choisir le premier fichier ensuite le second
+- Utilisation
+  - n pour passer à la différence suivante
+  - p pour revenir à la différence précédente
+  - a pour accepter la version du buffer du haut
+  - b pour accepter la version du buffer du bas
+- Sauvegarder les fichiers
+
+** Métriques textuelles
+
+- Pour le buffer actif
+- M-x count-words

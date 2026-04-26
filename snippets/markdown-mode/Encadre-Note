@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Encadré-Remarque
+# key: Note
+# --
+:::{.infobox title="Remarque"}
+`yas-selected-text`$0
+:::

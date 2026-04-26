@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Police-Taille-Precise
+# key: Police
+# --
+\fontsize{8}{8}\selectfont

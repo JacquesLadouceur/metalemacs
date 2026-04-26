@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Diapositives - Verbatim
+# key: Diapositives - Verbatim
+# --
+\begin{verbatim}
+`yas-selected-text`
+\end{verbatim}

@@ -1,0 +1,28 @@
+name: TAL
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - numpy=1.23.*
+  - matplotlib
+  - gensim
+  - pandas
+  - scikit-learn
+  - joblib
+  - h5py
+  - pyqt=5.15.*
+  - qtpy
+  - chardet
+  - tqdm
+  - spacy
+  - pyarrow
+  - fastparquet
+  - pip
+  - pip:
+    - typing-extensions==4.5.0
+    - ipython==8.12.0
+    - ipykernel==6.21.0
+    - tensorflow==2.10.1
+    - python-pptx
+    - pyinstaller

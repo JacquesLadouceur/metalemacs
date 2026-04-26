@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Lignes verticales
+# key: Lignes
+# --
+#+ATTR_LATEX: :align |l|c|r|

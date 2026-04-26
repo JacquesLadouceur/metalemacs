@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Table-LignesVerticales
+# key: Verti
+# --
+#+ATTR_LATEX: :align |l|c|r|

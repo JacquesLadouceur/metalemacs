@@ -1,0 +1,6 @@
+# key:  Diapositives - Interligne
+# name: Diapositives - Interligne
+# --
+#+LATEX: \begin{spacing}{1.5}
+`yas-selected-text`
+#+LATEX: \end{spacing}

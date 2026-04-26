@@ -1,0 +1,20 @@
+# -*- mode: snippet -*-
+# name: PyQT
+# key: PyQT
+# --
+from PyQt5 import uic
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QTimer
+import sys
+
+app = QApplication(sys.argv)
+F1 = uic.loadUi("Interface.ui")
+
+F1.show()
+
+# Forcer le focus 100 ms après l'ouverture
+QTimer.singleShot(100, lambda: (F1.raise_(), F1.activateWindow()))
+
+
+app.exec_()
+app = None

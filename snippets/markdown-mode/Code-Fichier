@@ -1,0 +1,12 @@
+# -*- mode: snippet -*-
+# name: Code-Fichier
+# key: Code-Fichier
+# --
+
+[\`${1:`(yas-selected-text)`}\`](./$1)
+
+\`\`\`{.${2:python}}
+{{< include \"$1\" >}}
+\`\`\`
+
+

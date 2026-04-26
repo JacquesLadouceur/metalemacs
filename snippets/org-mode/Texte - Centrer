@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Centrer
+# key: Centrer
+# --
+
+#+BEGIN_CENTER
+`yas-selected-text`
+#+END_CENTER

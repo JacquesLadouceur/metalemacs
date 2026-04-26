@@ -1,0 +1,7 @@
+# -*- mode: snippet -*-
+# name: Code
+# key: Code
+# --
+\`\`\`{.python filename="- Titre"}
+`yas-selected-text` 
+\`\`\`

@@ -1,0 +1,17 @@
+# -*- mode: snippet -*-
+# name: Table
+# key: qpdf
+# expand-env: ((yas-indent-line 'fixed))
+# --
+
+\begin{center}
+\begin{tblr}{
+  colspec = {|${2:l|l|l}|},
+  hlines,
+  row{1} = {bg=gray!15, font=\bfseries},
+}
+% Chaque rangée : cellule1 & cellule2 & cellule3 \\\\
+$0
+\end{tblr}
+\end{center}
+

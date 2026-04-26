@@ -1,0 +1,8 @@
+# -*- mode: snippet -*-
+# name: Encadré-Note
+# key: Note
+# --
+::: {.callout-note icon=false}
+### Noter
+`yas-selected-text`
+:::
