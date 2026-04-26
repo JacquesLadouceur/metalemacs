@@ -1,8 +1,8 @@
 # MetalEmacs
 
-Distribution Emacs personnalisée pour l'enseignement de la **linguistique informatique** et du **traitement automatique des langues** à l'Université Laval.
+Distribution Emacs personnalisée pour l'enseignement du **traitement automatique des langues** à l'Université Laval.
 
-Conçue pour les cours **LNG-3108** (Traitement automatique du langage), **LNG-3102** et **LNG-2003**, MetalEmacs offre un environnement clé-en-main pour étudiants comme pour professeurs : Python, Prolog, Quarto, Org-mode, et tous les outils nécessaires à la pratique du TAL.
+Conçue pour les cours **Traitement automatique du langage 1 et 2** (LNG-3102 et LNG-3108) et **Linguistique informatique 1 et 2** (LNG-2003 et LNG-3101), MetalEmacs offre un environnement clé-en-main pour étudiants comme pour professeurs : Python, Prolog, Quarto, Org-mode, et tous les outils nécessaires à la pratique du TAL.
 
 ## Caractéristiques principales
 
