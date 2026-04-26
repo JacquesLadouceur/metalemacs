@@ -86,3 +86,4 @@ desktop.ini
 # ---- Documents Org auto-générés ----
 *.org_archive
 .org-id-locations
+metal-prefs.el
