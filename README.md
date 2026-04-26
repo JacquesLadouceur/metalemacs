@@ -41,7 +41,7 @@ brew install --cask emacs
 [ -d ~/.emacs.d ] && mv ~/.emacs.d ~/.emacs.d.backup
 
 # Cloner MetalEmacs
-git clone https://github.com/LadouceurJacques/metalemacs.git ~/.emacs.d
+git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
 
 # Lancer Emacs (premier démarrage : 5-15 minutes)
 emacs
@@ -59,7 +59,7 @@ if (Test-Path "$env:USERPROFILE\.emacs.d") {
 }
 
 # Cloner MetalEmacs
-git clone https://github.com/LadouceurJacques/metalemacs.git $env:USERPROFILE\.emacs.d
+git clone https://github.com/JacquesLadouceur/metalemacs.git $env:USERPROFILE\.emacs.d
 
 # Lancer Emacs
 runemacs
@@ -75,7 +75,7 @@ sudo apt install emacs git
 [ -d ~/.emacs.d ] && mv ~/.emacs.d ~/.emacs.d.backup
 
 # Cloner MetalEmacs
-git clone https://github.com/LadouceurJacques/metalemacs.git ~/.emacs.d
+git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
 
 # Lancer Emacs
 emacs
@@ -134,7 +134,7 @@ Pour les raccourcis spécifiques à chaque mode (Python, Prolog, Org, etc.), con
 
 ## Contribution
 
-Ce dépôt est destiné aux étudiants des cours LNG-3108, LNG-3102 et LNG-2003. Si vous trouvez un bug ou avez une suggestion, ouvrez une [issue](https://github.com/LadouceurJacques/metalemacs/issues) — votre retour est bienvenu.
+Ce dépôt est destiné aux étudiants des cours LNG-3108, LNG-3102 et LNG-2003. Si vous trouvez un bug ou avez une suggestion, ouvrez une [issue](https://github.com/JacquesLadouceur/metalemacs/issues) — votre retour est bienvenu.
 
 ## Licence
 

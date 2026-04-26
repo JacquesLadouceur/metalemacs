@@ -52,7 +52,7 @@ brew install git
 ### 4. Cloner MetalEmacs
 
 ```bash
-git clone https://github.com/LadouceurJacques/metalemacs.git ~/.emacs.d
+git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
 ```
 
 ### 5. Premier lancement
@@ -114,7 +114,7 @@ if (Test-Path "$env:USERPROFILE\.emacs.d") {
 ### 5. Cloner MetalEmacs
 
 ```powershell
-git clone https://github.com/LadouceurJacques/metalemacs.git "$env:USERPROFILE\.emacs.d"
+git clone https://github.com/JacquesLadouceur/metalemacs.git "$env:USERPROFILE\.emacs.d"
 ```
 
 ### 6. Premier lancement
@@ -149,7 +149,7 @@ sudo apt update
 sudo apt install emacs git build-essential
 
 # Cloner MetalEmacs
-git clone https://github.com/LadouceurJacques/metalemacs.git ~/.emacs.d
+git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
 
 # Lancer
 emacs
@@ -159,7 +159,7 @@ emacs
 
 ```bash
 sudo dnf install emacs git
-git clone https://github.com/LadouceurJacques/metalemacs.git ~/.emacs.d
+git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
 emacs
 ```
 
@@ -167,7 +167,7 @@ emacs
 
 ```bash
 sudo pacman -S emacs git
-git clone https://github.com/LadouceurJacques/metalemacs.git ~/.emacs.d
+git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
 emacs
 ```
 
@@ -300,4 +300,4 @@ Pour personnaliser MetalEmacs sans entrer en conflit avec les mises √† jour, cr√
 
 ## Support
 
-Pour toute question ou bug, ouvrez une [issue](https://github.com/LadouceurJacques/metalemacs/issues) sur GitHub ou contactez Jacques Ladouceur.
+Pour toute question ou bug, ouvrez une [issue](https://github.com/JacquesLadouceur/metalemacs/issues) sur GitHub ou contactez Jacques Ladouceur.
