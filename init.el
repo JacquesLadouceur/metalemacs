@@ -2042,6 +2042,7 @@ Raccourci Treemacs : M (Shift+M)"
 (require 'metal-toolbar)   ; en premier
 (require 'metal-quarto)
 (require 'metal-pdf)
+(require 'metal-git)
 
 (server-start)
 
