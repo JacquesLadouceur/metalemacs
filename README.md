@@ -12,11 +12,10 @@ MetalEmacs offre un environnement Emacs préconfiguré, multiplateforme et accom
 
 ## Fonctionnalités
 
-- **Interface unifiée** : tableau de bord et explorateur de fichiers Treemacs
+- **Interface unifiée** : tableau de bord (`F1`) et explorateur de fichiers Treemacs (`F2`)
 - **Assistant d'installation interactif** pour les outils externes
-- **Édition de code** : Python, SWI-Prolog
-- **Création de documents**: ORG Mode et Quarto
-- **Visualisation et édition de PDF** intégrée
+- **Édition de code** : Python, SWI-Prolog, Quarto, Org-mode
+- **Visualisation PDF** intégrée
 - **Calendrier** avec import ICS
 - **Synchronisation iOS** d'Org-mode via Beorg
 - **Mises à jour automatiques**
@@ -46,17 +45,17 @@ MetalEmacs offre un environnement Emacs préconfiguré, multiplateforme et accom
 > **Note** : sur Windows, la touche `Alt` correspond à `M` dans Emacs (par exemple `M-x` = `Alt-x`).
 
 1. Télécharger et installer **Emacs** depuis <https://ftp.gnu.org/gnu/emacs/windows/> (choisir le sous-dossier de la dernière version et lancer le fichier `emacs-XX.X-installer.exe`)
-2. Télécharger et installer **Git pour Windows** depuis <https://git-scm.com/download/win>
-3. Ouvrir un terminal (`cmd`) et exécuter :
+2. Ouvrir un terminal (`cmd` ou PowerShell) et exécuter :
    ```
+   winget install --id Git.Git -e --source winget
    setx HOME %USERPROFILE%
    ```
-4. **Fermer puis rouvrir** le terminal pour que la nouvelle variable soit prise en compte, puis cloner MetalEmacs :
+3. **Fermer puis rouvrir** le terminal pour que Git et la nouvelle variable `HOME` soient disponibles, puis cloner MetalEmacs :
    ```
    git clone https://github.com/JacquesLadouceur/metalemacs.git %HOME%\.emacs.d
    ```
-5. Démarrer Emacs — premier démarrage : 5 à 15 minutes
-6. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :
+4. Démarrer Emacs — premier démarrage : 5 à 15 minutes
+5. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :
    - Scoop
    - Miniconda
 
@@ -106,20 +105,20 @@ Redémarrer Emacs ensuite. Les nouveaux paquets sont téléchargés automatiquem
 
 ## Modules
 
-| Module | Rôle |
-|---|---|
-| `metal-toolbar.el` | Primitives de barre d'outils header-line |
-| `metal-pdf.el` | Visualisation et impression de PDF |
-| `metal-python.el` | Environnement Python, REPL IPython, gestion Conda |
-| `metal-prolog.el` | Environnement SWI-Prolog avec pliage et tracing |
-| `metal-org.el` | Org-mode étendu, drag-and-drop, sync Beorg |
-| `metal-quarto.el` | Édition Quarto, gestion TinyTeX |
-| `metal-calendrier.el` | Calendrier calfw avec import ICS |
-| `metal-deps.el` | Assistant d'installation des dépendances |
-| `metal-distribution.el` | Mises à jour cloud |
-| `metal-dashboard.el` | Tableau de bord d'accueil |
-| `metal-treemacs.el` | Explorateur de fichiers |
-| `metal-securite.el` | Corbeille interne avec restauration |
+| Module                  | Rôle                                              |
+|-------------------------|---------------------------------------------------|
+| `metal-toolbar.el`      | Primitives de barre d'outils header-line          |
+| `metal-pdf.el`          | Visualisation et impression de PDF                |
+| `metal-python.el`       | Environnement Python, REPL IPython, gestion Conda |
+| `metal-prolog.el`       | Environnement SWI-Prolog avec pliage et tracing   |
+| `metal-org.el`          | Org-mode étendu, drag-and-drop, sync Beorg        |
+| `metal-quarto.el`       | Édition Quarto, gestion TinyTeX                   |
+| `metal-calendrier.el`   | Calendrier calfw avec import ICS                  |
+| `metal-deps.el`         | Assistant d'installation des dépendances          |
+| `metal-distribution.el` | Mises à jour cloud                                |
+| `metal-dashboard.el`    | Tableau de bord d'accueil                         |
+| `metal-treemacs.el`     | Explorateur de fichiers                           |
+| `metal-securite.el`     | Corbeille interne avec restauration               |
 
 ## Signalement de problèmes
 
