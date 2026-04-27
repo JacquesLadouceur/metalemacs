@@ -1,149 +1,135 @@
 # MetalEmacs
 
-Distribution Emacs personnalisée pour l'enseignement du **traitement automatique des langues** à l'Université Laval.
+Distribution Emacs personnalisée conçue au départ pour les étudiants inscrits aux cours de traitement automatique du langage à l'Université Laval.
 
-Conçue pour les cours **Traitement automatique du langage 1 et 2** (LNG-3102 et LNG-3108) et **Linguistique informatique 1 et 2** (LNG-2003 et LNG-3101), MetalEmacs offre un environnement clé-en-main pour étudiants comme pour professeurs : Python, Prolog, Quarto, Org-mode, et tous les outils nécessaires à la pratique du TAL.
+MetalEmacs offre un environnement Emacs préconfiguré, multiplateforme et accompagné d'un assistant d'installation interactif pour certains outils : Python/Conda, Prolog, Quarto, LaTeX, etc.
 
-## Caractéristiques principales
+## Plateformes supportées
 
-- **Multiplateforme** : macOS (Apple Silicon et Intel), Windows, Linux/ChromeOS
-- **Installation guidée** : assistant d'installation des dépendances externes (Python, SWI-Prolog, MiKTeX/TinyTeX, SumatraPDF, etc.)
-- **Interface unifiée** : barres d'outils cohérentes pour PDF, Python, Prolog, Org-mode, Quarto
-- **Modules pédagogiques** :
-  - Parser DCG / coin gauche en SWI-Prolog
-  - Sémantique formelle de style Montague
-  - Outils de POS-tagging avec CRF (corpus Sequoia UD)
-  - Traduction automatique français-anglais
-- **Productivité** :
-  - Tableau de bord personnalisé (`F1`)
-  - Explorateur de fichiers Treemacs (`F2`)
-  - Système de corbeille interne avec restauration
-  - Synchronisation Beorg (iOS) via iCloud Drive
-  - Mises à jour cloud via Synology
+- **macOS** (Apple Silicon et Intel)
+- **Windows 10/11**
+- **ChromeOS** (avec environnement Linux activé) et distributions Linux Debian/Ubuntu
 
-## Prérequis
+## Fonctionnalités
 
-- **Emacs 29.1 ou plus récent** (`emacs --version` pour vérifier)
-- **Git** (pour cloner le dépôt et recevoir les mises à jour)
-- **Connexion Internet** au premier démarrage (pour le téléchargement des paquets, ~15 minutes)
+- **Interface unifiée** : tableau de bord (`F1`) et explorateur de fichiers Treemacs (`F2`)
+- **Assistant d'installation interactif** pour les outils externes
+- **Édition de code** : Python, SWI-Prolog, Quarto, Org-mode
+- **Création de documents en ORG Mode et Quarto
+- **Visualisation et édition de PDF** intégrée
+- **Calendrier** avec import ICS
+- **Synchronisation iOS** d'Org-mode via Beorg
+- **Mises à jour automatiques**
 
-Voir [INSTALL.md](INSTALL.md) pour les instructions détaillées par plateforme.
-
-## Installation rapide
+## Installation
 
 ### macOS
 
-```bash
-# Installer Emacs si nécessaire
-brew install --cask emacs
+> **Note** : sur macOS, la touche `Option` correspond à `M` dans Emacs (par exemple `M-x` = `Option-x`).
 
-# Sauvegarder une éventuelle configuration existante
-[ -d ~/.emacs.d ] && mv ~/.emacs.d ~/.emacs.d.backup
-
-# Cloner MetalEmacs
-git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
-
-# Lancer Emacs (premier démarrage : 5-15 minutes)
-emacs
-```
+1. Télécharger et installer **Emacs pour macOS** depuis <https://emacsformacosx.com/>
+2. Ouvrir un Terminal et cloner MetalEmacs :
+   ```bash
+   git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
+   ```
+   Si Git n'est pas installé, macOS proposera d'installer les **outils de ligne de commande Xcode** — accepter.
+3. Lancer Emacs (premier démarrage : 5 à 15 minutes pour le téléchargement des paquets)
+4. **À la question sur la compilation de `pdfinfo`, répondre non.**
+5. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer dans l'ordre :
+   - Homebrew
+   - Poppler
+   - pdf-tools
+   - Miniconda
 
 ### Windows
 
-```powershell
-# Installer Emacs si nécessaire (avec Scoop)
-scoop install emacs
+> **Note** : sur Windows, la touche `Alt` correspond à `M` dans Emacs (par exemple `M-x` = `Alt-x`).
 
-# Sauvegarder une éventuelle configuration existante
-if (Test-Path "$env:USERPROFILE\.emacs.d") {
-    Rename-Item "$env:USERPROFILE\.emacs.d" ".emacs.d.backup"
-}
+1. Télécharger et installer **Emacs** depuis <https://ftp.gnu.org/gnu/emacs/windows/> (choisir le sous-dossier de la dernière version et lancer le fichier `emacs-XX.X-installer.exe`)
+2. Télécharger et installer **Git pour Windows** depuis <https://git-scm.com/download/win>
+3. Ouvrir un terminal (`cmd`) et exécuter :
+   ```
+   setx HOME %USERPROFILE%
+   ```
+4. **Fermer puis rouvrir** le terminal pour que la nouvelle variable soit prise en compte, puis cloner MetalEmacs :
+   ```
+   git clone https://github.com/JacquesLadouceur/metalemacs.git %HOME%\.emacs.d
+   ```
+5. Démarrer Emacs — premier démarrage : 5 à 15 minutes
+6. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :
+   - Scoop
+   - Miniconda
 
-# Cloner MetalEmacs
-git clone https://github.com/JacquesLadouceur/metalemacs.git $env:USERPROFILE\.emacs.d
+### ChromeOS / Linux
 
-# Lancer Emacs
-runemacs
-```
+> **Note** : la touche `Alt` correspond à `M` dans Emacs (par exemple `M-x` = `Alt-x`).
 
-### Linux / ChromeOS
-
-```bash
-# Installer Emacs si nécessaire
-sudo apt install emacs git
-
-# Sauvegarder une éventuelle configuration existante
-[ -d ~/.emacs.d ] && mv ~/.emacs.d ~/.emacs.d.backup
-
-# Cloner MetalEmacs
-git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
-
-# Lancer Emacs
-emacs
-```
-
-## Premier démarrage
-
-Au tout premier lancement, MetalEmacs affiche un message de bienvenue et télécharge automatiquement une centaine de paquets via [straight.el](https://github.com/radian-software/straight.el). Cette opération prend **5 à 15 minutes** selon la connexion Internet. Les démarrages suivants seront quasi-instantanés.
-
-Après ce premier démarrage, lancez l'**assistant d'installation** pour configurer les dépendances externes (Python, Prolog, LaTeX, etc.) :
-
-```
-M-x metal-deps-afficher-etat
-```
-
-L'assistant détecte automatiquement votre système d'exploitation et propose les commandes appropriées.
+1. Sur Chromebook : activer l'environnement Linux dans **Paramètres → À propos de ChromeOS → Développeurs**
+2. Ouvrir le Terminal et installer les prérequis (un seul copier-coller) :
+   ```bash
+   sudo apt update && sudo apt upgrade -y
+   echo "deb http://deb.debian.org/debian bookworm-backports main" \
+       | sudo tee /etc/apt/sources.list.d/backports.list
+   sudo apt update
+   sudo apt install -y -t bookworm-backports emacs
+   sudo apt install -y git curl fonts-noto fonts-firacode fonts-hack \
+       build-essential libpng-dev zlib1g-dev \
+       libpoppler-glib-dev libpoppler-private-dev
+   ```
+3. Cloner MetalEmacs :
+   ```bash
+   git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
+   ```
+4. Lancer Emacs depuis le lanceur d'applications
+5. **À la question sur la compilation de `pdfinfo`, répondre non.**
+6. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :
+   - Poppler (si disponible)
+   - pdf-tools
+   - Miniconda
 
 ## Mise à jour
 
-Pour mettre à jour MetalEmacs à la dernière version :
+Depuis Emacs (recommandé) :
+
+```
+M-x metal-git-mise-a-jour
+```
+
+Ou en ligne de commande :
 
 ```bash
-cd ~/.emacs.d
+cd ~/.emacs.d           # Sous Windows : cd %HOME%\.emacs.d
 git pull
 ```
 
-Puis redémarrez Emacs. Les nouveaux paquets sont téléchargés automatiquement si nécessaire.
+Redémarrer Emacs ensuite. Les nouveaux paquets sont téléchargés automatiquement si nécessaire.
 
-## Modules principaux
+## Modules
 
 | Module | Rôle |
 |---|---|
 | `metal-toolbar.el` | Primitives de barre d'outils header-line |
 | `metal-pdf.el` | Visualisation et impression de PDF |
-| `metal-python.el` | Environnement Python avec REPL et débogueur |
+| `metal-python.el` | Environnement Python, REPL IPython, gestion Conda |
 | `metal-prolog.el` | Environnement SWI-Prolog avec pliage et tracing |
-| `metal-org.el` | Org-mode étendu avec drag-and-drop et Beorg |
-| `metal-quarto.el` | Édition de documents Quarto avec aperçu |
-| `metal-deps.el` | Assistant d'installation des dépendances externes |
-| `metal-distribution.el` | Système de mise à jour cloud |
-| `metal-dashboard.el` | Tableau de bord d'accueil personnalisé |
-| `metal-treemacs.el` | Explorateur de fichiers style Finder |
+| `metal-org.el` | Org-mode étendu, drag-and-drop, sync Beorg |
+| `metal-quarto.el` | Édition Quarto, gestion TinyTeX |
+| `metal-calendrier.el` | Calendrier calfw avec import ICS |
+| `metal-deps.el` | Assistant d'installation des dépendances |
+| `metal-distribution.el` | Mises à jour cloud |
+| `metal-dashboard.el` | Tableau de bord d'accueil |
+| `metal-treemacs.el` | Explorateur de fichiers |
 | `metal-securite.el` | Corbeille interne avec restauration |
 
-## Raccourcis essentiels
+## Signalement de problèmes
 
-| Raccourci | Action |
-|---|---|
-| `F1` | Ouvrir le tableau de bord |
-| `F2` | Basculer Treemacs (explorateur) et plein écran |
-| `C-c m a` | Assistant d'installation |
-| `C-c m d` | Diagnostic du système |
-| `C-c m u` | Désinstallation guidée |
-
-Pour les raccourcis spécifiques à chaque mode (Python, Prolog, Org, etc.), consultez la barre d'outils en haut de chaque tampon.
-
-## Contribution
-
-Ce dépôt est destiné aux étudiants des cours LNG-3108, LNG-3102 et LNG-2003. Si vous trouvez un bug ou avez une suggestion, ouvrez une [issue](https://github.com/JacquesLadouceur/metalemacs/issues) — votre retour est bienvenu.
+Pour les bugs ou suggestions, ouvrir une [issue](https://github.com/JacquesLadouceur/metalemacs/issues).
 
 ## Licence
 
-Copyright © 2026 Jacques Ladouceur
-
-Le code de MetalEmacs est distribué sous licence GPL v3 (compatible avec Emacs lui-même). Les paquets tiers chargés via straight.el conservent leur licence d'origine.
+Copyright © 2026 Jacques Ladouceur — distribué sous licence GPL v3.
 
 ## Auteur
 
 **Jacques Ladouceur**
-Université Laval — Linguistique informatique
-[jacques.ladouceur@lli.ulaval.ca](mailto:jacques.ladouceur@lli.ulaval.ca)
+[jacques.ladouceur@gmail.com](mailto:jacques.ladouceur@gmail.com)
