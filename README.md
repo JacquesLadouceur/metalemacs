@@ -12,7 +12,7 @@ MetalEmacs offre un environnement Emacs préconfiguré, multiplateforme et accom
 
 ## Fonctionnalités
 
-- **Interface unifiée** : tableau de bord (`F1`) et explorateur de fichiers Treemacs (`F2`)
+- **Interface unifiée** : tableau de bord et explorateur de fichiers Treemacs
 - **Assistant d'installation interactif** pour les outils externes
 - **Édition de code** : Python, SWI-Prolog, Quarto, Org-mode
 - **Création de documents en ORG Mode et Quarto
