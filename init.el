@@ -1621,24 +1621,27 @@ Raccourci Treemacs : M (Shift+M)"
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Bouton "Récents"
+;; Bouton "Système"
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defun ouvrir-emacs-d-dired ()
+  "Ouvre le dossier .emacs.d dans dired."
+  (interactive)
+  (dired user-emacs-directory))
 
-(defun modeline-bouton-fichiers-recents ()
-  "Affiche un bouton  dans la modeline pour recentf."
+(defun modeline-bouton-systeme ()
+  "Affiche un bouton SYS dans la modeline pour ouvrir .emacs.d dans dired."
   (let ((map (make-sparse-keymap)))
-    (define-key map [mode-line mouse-1] #'recentf-open-files)
+    (define-key map [mode-line mouse-1] #'ouvrir-emacs-d-dired)
     (propertize
-     " 🕐 "
+     " SYS "
      'mouse-face 'mode-line-highlight
      'local-map map
-     'help-echo "Clique pour ouvrir les fichiers recents")))
-
+     'help-echo "Clique pour ouvrir .emacs.d dans dired")))
 
 (setq-default mode-line-format
   (append mode-line-format
-          '((:eval (modeline-bouton-fichiers-recents)))))
+          '((:eval (modeline-bouton-systeme)))))
 
 
 ;; *******************************************
