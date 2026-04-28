@@ -482,7 +482,11 @@ Pour les mises à jour futures :
 ")
         (goto-char (point-min))
         (setq buffer-read-only t))
-      (display-buffer buf)
+      ;; Afficher le buffer seul en plein écran pendant l'installation,
+      ;; sans le *scratch* à côté. Le layout normal (dashboard, tab-line,
+      ;; treemacs…) s'installera après, au démarrage suivant.
+      (switch-to-buffer buf)
+      (delete-other-windows)
       (redisplay)))
 
   ;; Installation de straight.el si absent
