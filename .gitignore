@@ -27,7 +27,6 @@ projectile-bookmarks.eld
 .session
 transient/
 url/
-.cache/
 var/
 metal-custom.el
 .org-generic-id-locations
@@ -55,12 +54,6 @@ local.el
 .authinfo
 .authinfo.gpg
 secrets.el
-
-# ---- pdf-tools : exclure le dossier MAIS garder epdfinfo.exe ----
-# (binaire Windows pré-compilé, indispensable pour les étudiants Windows ;
-#  Mac/Linux compilent eux-mêmes au premier pdf-tools-install)
-pdf-tools/*
-!pdf-tools/epdfinfo.exe
 
 # ---- Git Portable embarqué (Windows) ----
 # Trop volumineux pour Git ; les étudiants Windows installent Git via Scoop

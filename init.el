@@ -796,21 +796,16 @@ L'argument FRAME est ignore (garde pour compatibilite)."
             (tab-line-mode 1)))
 
 ;; === PDF-TOOLS ===
-(if (eq system-type 'windows-nt)
-    (use-package pdf-tools
-      :init
-      (setenv "PATH" (concat "~/.emacs.d/pdf-tools/;" (getenv "PATH")))
-      (add-to-list 'exec-path "~/.emacs.d/pdf-tools/")
-      :custom
-      (pdf-info-epdfinfo-program "~/.emacs.d/pdf-tools/epdfinfo.exe")
-      :config
-      (pdf-tools-install)
-      (setq-default pdf-view-display-size 'fit-width))
-  (use-package pdf-tools
-    :defer t
-    :config
-    (pdf-tools-install)
-    (setq-default pdf-view-display-size 'fit-width)))
+;; Au premier démarrage sur Windows, si epdfinfo.exe n'est pas installé,
+;; pdf-tools propose de télécharger et installer MSYS2 automatiquement,
+;; puis compile le binaire et toutes ses dépendances (~10-15 min).
+;; Répondre `n' à « Do you have Msys2 installed? » pour déclencher
+;; l'installation auto, puis `y' à la proposition d'installation MSYS2.
+(use-package pdf-tools
+  :magic ("%PDF" . pdf-view-mode)
+  :config
+  (setq-default pdf-view-display-size 'fit-width)
+  (pdf-tools-install))
 
 
 (defun jl/init-file-p ()
