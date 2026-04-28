@@ -672,7 +672,7 @@ Asks for a SEPARATOR (e.g., \",\" \";\" \"\\t\")."
 ;;  9. DRAG & DROP DE LIENS WEB DANS UN FICHIER ORG
 ;; ============================================================
 
-(defvar metal-org-links-file "~/Documents/BlocNotes/Signets.org"
+(defvar metal-org-links-file "~/Documents/MetalEmacs/Signets.org"
   "Fichier Org où les liens web sont classés par section.")
 
 ;; Cache des sections — évite de relire le fichier à chaque drop

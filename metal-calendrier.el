@@ -6,14 +6,22 @@
 
 ;; Configuration de calfw (Calendar Framework) pour Emacs
 ;; Compatible avec use-package + straight.el
-;; Tous les calendriers dans ~/.emacs.d/calendriers/
+;; Tous les calendriers dans ~/Documents/MetalEmacs/calendriers/
 ;; ========================================================
 
 ;; --- DOSSIER CENTRALISÉ POUR TOUS LES CALENDRIERS ---
-(defvar metal-calendrier-directory (expand-file-name "calendriers" user-emacs-directory)
-  "Dossier contenant tous les fichiers de calendrier")
+;; (defvar metal-calendrier-directory (expand-file-name "calendriers" user-emacs-directory)
+;;   "Dossier contenant tous les fichiers de calendrier")
 
-;; Créer le dossier s'il n'existe pas
+;; ;; Créer le dossier s'il n'existe pas
+;; (unless (file-directory-p metal-calendrier-directory)
+;;   (make-directory metal-calendrier-directory t))
+
+;; --- DOSSIER CENTRALISÉ POUR TOUS LES CALENDRIERS ---
+(defvar metal-calendrier-directory
+  (expand-file-name "Documents/MetalEmacs/calendriers" (getenv "HOME"))
+  "Dossier contenant tous les fichiers de calendrier.")
+
 (unless (file-directory-p metal-calendrier-directory)
   (make-directory metal-calendrier-directory t))
 

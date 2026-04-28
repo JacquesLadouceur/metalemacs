@@ -248,7 +248,7 @@ Si le nouveau fichier existe déjà, ne fait rien (pour éviter d'écraser)."
       (lambda () (interactive)
         (if (fboundp 'metal-org-ouvrir-signets)
             (metal-org-ouvrir-signets)
-          (find-file (expand-file-name "~/Documents/BlocNotes/Signets.org")))))
+          (find-file (expand-file-name "~/Documents/MetalEmacs/Signets.org")))))
      "  "
      (metal-dashboard--make-action-button
       (concat icon-news " " (propertize "Actualités" 'face text-face))
