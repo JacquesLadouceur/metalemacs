@@ -131,10 +131,18 @@ après un court délai.  Les erreurs sont capturées et affichées."
 ;;; ═══════════════════════════════════════════════════════════════════
 
 (defun metal-deps--afficher-buffer-install (buf-name)
-  "Affiche BUF-NAME dans un side-window en bas qui se ferme proprement.
-Évite le doublon de l'assistant lorsqu'on ferme la fenêtre de log :
-- la touche `q' ferme la side-window sans laisser de doublon ;
-- tuer le buffer (`C-x k') ferme aussi automatiquement la fenêtre."
+  "Affiche BUF-NAME comme buffer d'installation avec onglet visible.
+- L'onglet apparaît dans la tab-line (avec le × pour fermer).
+- Le buffer s'ouvre dans une nouvelle fenêtre en bas, fermable proprement
+  via `q', `C-x 0', ou `C-x k' (sans laisser de doublon)."
+  (when (buffer-live-p (get-buffer buf-name))
+    (with-current-buffer buf-name
+      ;; Forcer l'inclusion dans la tab-line (par défaut les buffers en
+      ;; *étoiles* sont exclus). Une fois fait, l'onglet apparaît avec son
+      ;; bouton × pour fermer comme les autres onglets.
+      (setq-local tab-line-exclude nil)
+      (when (fboundp 'tab-line-mode)
+        (tab-line-mode 1))))
   (let ((win (display-buffer
               buf-name
               '((display-buffer-in-side-window)
