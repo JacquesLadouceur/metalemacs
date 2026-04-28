@@ -123,6 +123,24 @@ et la fonction retourne nil (il faudra relancer la création après)."
         (message "📦 Installation lancée dans un terminal Eat. Relancez la création après.")
         nil)))))
 
+(defun metal-conda--accepter-tos ()
+  "Pré-accepter les Terms of Service Conda pour les channels Anaconda.
+Depuis Conda 24.10, `conda env create' échoue avec
+CondaToSNonInteractiveError si les ToS des channels par défaut n'ont pas
+été acceptés. Cette fonction exécute `conda tos accept' pour les 3
+channels concernés. L'opération est locale, rapide, et idempotente
+(aucun effet si déjà accepté), donc safe à appeler avant chaque création."
+  (when-let ((conda-exe (metal-conda--get-conda-exe)))
+    (dolist (channel '("https://repo.anaconda.com/pkgs/main"
+                       "https://repo.anaconda.com/pkgs/r"
+                       "https://repo.anaconda.com/pkgs/msys2"))
+      ;; stdout/stderr ignorés : si le channel n'existe pas sur cette
+      ;; plateforme (msys2 hors Windows) ou si déjà accepté, on s'en fiche.
+      (call-process conda-exe nil nil nil
+                    "tos" "accept"
+                    "--override-channels"
+                    "--channel" channel))))
+
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; 4. Configuration Conda (use-package)
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -562,6 +580,7 @@ Variantes directes :
   (unless (metal-conda--require-conda)
     (user-error "Conda n'est pas installé"))
   (metal-conda--ensure-libmamba)
+  (metal-conda--accepter-tos)
   (let* ((yaml-dir (expand-file-name user-emacs-directory))
          (yaml-files (seq-filter
                       (lambda (f)

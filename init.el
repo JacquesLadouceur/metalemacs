@@ -1030,6 +1030,14 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 ;;  METAL-ORG - Configuration Org-mode
 ;; ===============================
 
+;; Remappe les S-<flèche> d'Org vers C-S-<flèche> dans les contextes spéciaux
+;; (TODO, priorité, timestamps, tableaux). Doit être défini AVANT le chargement
+;; d'Org pour être pris en compte.
+;; Résultat :
+;;   S-<flèche>    → metal-buf-move-* (déplacement de buffer global)
+;;   C-S-<flèche>  → commandes contextuelles Org (cycler TODO, modifier date…)
+(setq org-replace-disputed-keys t)
+
 (require 'metal-org)
 
 ;; (require 'metal-securite)

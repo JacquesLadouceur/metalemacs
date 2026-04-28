@@ -127,6 +127,34 @@ après un court délai.  Les erreurs sont capturées et affichées."
        (run-with-timer 2 nil #'metal-deps-afficher-etat)))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
+;;; Affichage des buffers d'installation
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defun metal-deps--afficher-buffer-install (buf-name)
+  "Affiche BUF-NAME dans un side-window en bas qui se ferme proprement.
+Évite le doublon de l'assistant lorsqu'on ferme la fenêtre de log :
+- la touche `q' ferme la side-window sans laisser de doublon ;
+- tuer le buffer (`C-x k') ferme aussi automatiquement la fenêtre."
+  (let ((win (display-buffer
+              buf-name
+              '((display-buffer-in-side-window)
+                (side . bottom)
+                (slot . 0)
+                (window-height . 0.3)
+                (preserve-size . (nil . t))))))
+    (when (and win (buffer-live-p (get-buffer buf-name)))
+      (with-current-buffer buf-name
+        (local-set-key (kbd "q") #'quit-window)
+        (add-hook 'kill-buffer-hook
+                  (lambda ()
+                    (let ((w (get-buffer-window (current-buffer))))
+                      (when (and (window-live-p w)
+                                 (window-parameter w 'window-side))
+                        (delete-window w))))
+                  nil t)))
+    win))
+
+;;; ═══════════════════════════════════════════════════════════════════
 ;;; File d'attente séquentielle pour installations asynchrones
 ;;; ═══════════════════════════════════════════════════════════════════
 
@@ -984,7 +1012,7 @@ Ouvre un sélecteur de fichiers pour choisir le .deb."
                  (message "✅ draw.io installé avec succès")
                  (run-with-timer 1 nil #'metal-deps-afficher-etat))
              (message "❌ Erreur lors de l'installation de draw.io. Voir %s" buf-name)))))
-      (display-buffer buf-name))))
+      (metal-deps--afficher-buffer-install buf-name))))
 
 (defun metal-deps-installer-drawio ()
   "Installe draw.io Desktop."
@@ -1121,7 +1149,7 @@ dans les fichiers de projet."
                  (metal-deps--configurer-chemin-miktex)
                  (message "✅ MiKTeX installé et configuré (auto-installation des paquets activée)"))
              (message "❌ Erreur lors de l'installation de MiKTeX. Voir %s" buf-name)))))
-      (display-buffer buf-name))))
+      (metal-deps--afficher-buffer-install buf-name))))
 
 (defun metal-deps--configurer-chemin-miktex ()
   "Ajoute MiKTeX au PATH d'Emacs si installé via Scoop."
@@ -1181,7 +1209,7 @@ d'impression natif Windows avec fermeture automatique."
                      (setenv "PATH" (concat sumatra-bin ";" (getenv "PATH")))))
                  (message "✅ SumatraPDF installé (impression PDF native disponible)"))
              (message "❌ Erreur lors de l'installation de SumatraPDF. Voir %s" buf-name)))))
-      (display-buffer buf-name))))
+      (metal-deps--afficher-buffer-install buf-name))))
 
 (defun metal-deps-desinstaller-sumatrapdf ()
   "Désinstalle SumatraPDF via Scoop."
