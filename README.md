@@ -49,12 +49,23 @@ MetalEmacs offre un environnement Emacs préconfiguré, multiplateforme et accom
 2. Ouvrir un terminal (`cmd` ou PowerShell) et exécuter :
    ```
    winget install --id Git.Git -e --source winget
+   
    setx HOME %USERPROFILE%
    ```
 3. **Fermer puis rouvrir** le terminal pour que Git et la nouvelle variable `HOME` soient disponibles, puis cloner MetalEmacs :
+
+- Powershell
+
+   ```
+   git clone https://github.com/JacquesLadouceur/metalemacs.git $HOME\.emacs.d
+   ```
+   
+- CMD
+
    ```
    git clone https://github.com/JacquesLadouceur/metalemacs.git %HOME%\.emacs.d
    ```
+
 4. Démarrer Emacs — premier démarrage : 5 à 15 minutes
 5. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :
    - Scoop
