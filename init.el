@@ -462,22 +462,19 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
 Premier démarrage détecté.  MetalEmacs va maintenant télécharger
 et installer toutes ses dépendances.
 
-⏱  Cette opération peut prendre 5 à 15 minutes selon votre
+    Cette opération peut prendre 5 à 15 minutes selon votre
     connexion Internet (~100 paquets à télécharger et compiler).
 
-📋 Étapes en cours :
+   Étapes en cours :
    1. Installation de straight.el (gestionnaire de paquets)
    2. Téléchargement des paquets MELPA et GNU ELPA
    3. Compilation native (Emacs 29+) en arrière-plan
-
-💡 Pour suivre la progression en détail :
-   M-x view-echo-area-messages
 
 Après ce premier démarrage, les lancements ultérieurs seront
 quasi-instantanés.
 
 Pour les mises à jour futures :
-   cd ~/.emacs.d && git pull
+   M-x metal-git-mise-a-jour
    puis redémarrez Emacs.
 ")
         (goto-char (point-min))
