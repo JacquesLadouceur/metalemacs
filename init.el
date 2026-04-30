@@ -1453,7 +1453,6 @@ déplacé pour éviter les onglets fantômes."
 (global-set-key (kbd "<S-left>")  #'metal-buf-move-left)
 (global-set-key (kbd "<S-right>") #'metal-buf-move-right)
 
-(add-to-list 'exec-path "~/.emacs.d/zip300xn")
 
 (setq ns-pop-up-frames nil)  ;; Empêche la création de nouveaux frames
 
@@ -1464,7 +1463,7 @@ déplacé pour éviter les onglets fantômes."
 ;;    dossier contenant un sous-dossier .emacs.d
 ;;    puis appuyer sur M (Shift+M)
 ;; *******************************************
-(defun metal-mettre-a-jour-emacs-d ()
+(defun metal-mise-a-jour-emacs-d ()
   "Met à jour .emacs.d depuis un ZIP ou un dossier sélectionné dans Treemacs.
 Accepte les sources suivantes :
   - Un fichier emacs.d.zip ou .emacs.d.zip (sera extrait)

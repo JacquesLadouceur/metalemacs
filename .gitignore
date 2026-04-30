@@ -55,10 +55,6 @@ local.el
 .authinfo.gpg
 secrets.el
 
-# ---- Git Portable embarqué (Windows) ----
-# Trop volumineux pour Git ; les étudiants Windows installent Git via Scoop
-PortableGit/
-
 # ---- macOS ----
 .DS_Store
 
