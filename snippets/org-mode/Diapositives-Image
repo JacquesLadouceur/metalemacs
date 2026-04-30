@@ -1,6 +1,6 @@
 # -*- mode: snippet -*-
 # name: Diapositives - Image
-# key: image
+# key: dimg
 # --
 #+attr_latex: :width .70\textwidth
 [[./`yas-selected-text`]]

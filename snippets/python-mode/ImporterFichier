@@ -1,5 +1,0 @@
-# -*- mode: snippet -*-
-# name: Importer un texte
-# key: Importer
-# --
-texte = open(Nom,encoding='utf8').read()

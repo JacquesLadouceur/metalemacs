@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Code - Police (\tiny)
+# key: code-tiny
+# --
+\AddToHookNext{env/Highlighting/begin}{\tiny}

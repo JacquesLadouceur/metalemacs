@@ -1,5 +1,5 @@
 # -*- mode: snippet -*-
-# name: Image-Taille
-# key: Taille
+# name: Image - Attributs
+# key: img-attr
 # --
 {fig-align="center" width=50%}

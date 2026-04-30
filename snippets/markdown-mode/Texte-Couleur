@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Couleur
+# key: couleur
+# --
+\textcolor{${1:$$(yas-choose-value '("red" "blue" "green" "orange" "purple" "gray"))}}{${0:`yas-selected-text`}}

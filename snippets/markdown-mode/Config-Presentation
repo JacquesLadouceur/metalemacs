@@ -1,6 +1,6 @@
 # -*- mode: snippet -*-
-# name: Présentation PDF
-# key: Présentation
+# name: Configuration - PrÃ©sentation PDF
+# key: conf-pres
 # expand-env: ((yas-indent-line 'fixed))
 # --
 ---

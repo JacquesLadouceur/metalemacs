@@ -1,6 +1,0 @@
-# -*- mode: snippet -*-
-# name: Taille ajustée
-# key: Taille
-# --
-
-{shrink=5}

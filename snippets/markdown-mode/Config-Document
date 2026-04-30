@@ -1,6 +1,6 @@
 # -*- mode: snippet -*-
-# name: Document Configuration
-# key: Document
+# name: Configuration - Document PDF
+# key: conf-doc
 # expand-env: ((yas-indent-line 'fixed))
 # --
 ---

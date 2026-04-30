@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: Diapositive - Rétrécissement
+# key: shrink
+# --
+
+{shrink=5}

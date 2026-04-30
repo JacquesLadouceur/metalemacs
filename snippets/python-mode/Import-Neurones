@@ -1,6 +1,6 @@
 # -*- mode: snippet -*-
-# name: ImportNeurones
-# key: ImportNeurones
+# name: Imports - Neurones/TAL
+# key: neurones
 # --
 # -*- coding: utf-8 -*-
 import ast, pickle, json

@@ -1,5 +1,6 @@
-# key: Diapositives - Code
+# -*- mode: snippet -*-
 # name: Diapositives - Code
+# key: dcode
 # --
 #+ATTR_LATEX: :options [10]
 #+begin_code

@@ -1,6 +1,6 @@
 # -*- mode: snippet -*-
 # name: Diapositives - Verbatim
-# key: Diapositives - Verbatim
+# key: dverb
 # --
 \begin{verbatim}
 `yas-selected-text`

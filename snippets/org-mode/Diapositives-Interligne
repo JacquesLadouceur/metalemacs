@@ -1,5 +1,6 @@
-# key:  Diapositives - Interligne
+# -*- mode: snippet -*-
 # name: Diapositives - Interligne
+# key: dinter
 # --
 #+LATEX: \begin{spacing}{1.5}
 `yas-selected-text`

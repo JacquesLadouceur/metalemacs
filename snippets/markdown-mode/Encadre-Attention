@@ -1,7 +1,8 @@
 # -*- mode: snippet -*-
-# name: Encadré-Attention
-# key: Attention
+# name: Encadré - Attention
+# key: attention
 # --
 :::{.attentionbox title="Attention"}
 `yas-selected-text`$0
 :::
+

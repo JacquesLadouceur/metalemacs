@@ -1,5 +1,6 @@
-# key: Diapositives -  Remarque
+# -*- mode: snippet -*-
 # name: Diapositives - Remarque
+# key: drem
 # --
 \begin{remarque}
 `yas-selected-text`

@@ -1,25 +1,32 @@
 # MetalEmacs
 
-Distribution Emacs personnalisée conçue au départ pour les étudiants inscrits aux cours de traitement automatique du langage à l'Université Laval.
+MetalEmacs (Metal: **M**on **E**nvironnement pour le **T**raitement **A**utomatique du **L**angage) est une distribution Emacs personnalisée multiplateforme  que j'ai développé au départ pour les étudiants inscrits à mes cours en traitement automatique du langage (TAL) à l'Université Laval.  J'ai assemblé plusieurs «paquets» qui permettent d'exécuter toutes les tâches requises pour la réalisation d'un projet ou d'une étude de cas en TAL.
 
-MetalEmacs offre un environnement Emacs préconfiguré, multiplateforme et accompagné d'un assistant d'installation interactif pour certains outils : Python/Conda, Prolog, Quarto, LaTeX, etc.
+- Analyse, observations et annotation de textes
+- Prise de notes
+- Programmation en Python et Prolog
+- Installation d'un environnement Python préconfiguré pour le TAL
+- Création de diagrammes
+- Rédaction d'un rapport technique (en Org-Mode ou Quarto)
+- Préparation de présentations
+- Etc.
+
+Le tout est organisé dans une interface unifiée qui comprend:
+
+- **tableau de bord** 
+- **Explorateur de fichiers** (Treemacs)
+- **Assistant d'installation interactif** pour les outils externes
+- **Visualisation PDF** intégrée
+- **Calendrier** avec import ICS
+- **Synchronisation iOS** d'Org-mode via Beorg
+- **Mises à jour automatiques**
 
 ## Plateformes supportées
 
 - **macOS** (Apple Silicon et Intel)
 - **Windows 10/11**
-- **ChromeOS** (avec environnement Linux activé) et distributions Linux Debian/Ubuntu
+- **Linux/ChromeOS** (Debian/Ubuntu)
 
-## Fonctionnalités
-
-- **Interface unifiée** : tableau de bord (`F1`) et explorateur de fichiers Treemacs (`F2`)
-- **Assistant d'installation interactif** pour les outils externes
-- **Édition de code** : Python, SWI-Prolog
-- **Édition de documents** : Quarto, Org-mode
-- **Visualisation PDF** intégrée
-- **Calendrier** avec import ICS
-- **Synchronisation iOS** d'Org-mode via Beorg
-- **Mises à jour automatiques**
 
 ## Installation
 
@@ -54,17 +61,18 @@ MetalEmacs offre un environnement Emacs préconfiguré, multiplateforme et accom
    ```
 3. **Fermer puis rouvrir** le terminal pour que Git et la nouvelle variable `HOME` soient disponibles, puis cloner MetalEmacs :
 
-- Powershell
+- À partir de Windows PowerShell
 
    ```
    git clone https://github.com/JacquesLadouceur/metalemacs.git $HOME\.emacs.d
    ```
    
-- CMD
+- À partir de Invite de commandes (Command Line ou Command prompt)
 
    ```
    git clone https://github.com/JacquesLadouceur/metalemacs.git %HOME%\.emacs.d
    ```
+   
 
 4. Démarrer Emacs — premier démarrage : 5 à 15 minutes
 5. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :

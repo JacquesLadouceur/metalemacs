@@ -1,5 +1,5 @@
 # -*- mode: snippet -*-
 # name: Barre verticale mathématique
-# key: Barre verticale
+# key: barre
 # --
 \textbar{}

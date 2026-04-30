@@ -1,6 +1,6 @@
 # -*- mode: snippet -*-
 # name: Code
-# key: Code
+# key: code
 # --
 \`\`\`{.python filename="- Titre"}
 `yas-selected-text` 

@@ -1,5 +1,5 @@
 # -*- mode: snippet -*-
-# name: Table - Lignes verticales
-# key: tbl-verti
+# name: Tables - Lignes verticales
+# key: verti
 # --
 #+ATTR_LATEX: :align |l|c|r|

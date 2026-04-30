@@ -1,7 +1,8 @@
 # -*- mode: snippet -*-
 # name: Diapositives - Espacement vertical
-# key: Diapositives - Espacement vertical
+# key: desp
 # --
 
 $0
 #+LATEX: \vspace{${1:1em}}
+

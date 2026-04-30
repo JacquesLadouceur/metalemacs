@@ -1,6 +1,6 @@
 # -*- mode: snippet -*-
-# name: Centrer
-# key: Centrer
+# name: Texte - Centrer
+# key: center
 # --
 
 #+BEGIN_CENTER
