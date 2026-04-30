@@ -74,7 +74,7 @@ Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'
      winget install --id Git.Git -e --source winget
      setx HOME $env:USERPROFILE
      ```
-   - Avec l'**Invite de commandes** (*Command Prompt*) :
+   - **Ou** avec l'**Invite de commandes** (*Command Prompt*) :
      ```cmd
      winget install --id Git.Git -e --source winget
      setx HOME %USERPROFILE%
@@ -86,7 +86,7 @@ Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'
      ```powershell
      git clone https://github.com/JacquesLadouceur/metalemacs.git $HOME\.emacs.d
      ```
-   - Avec l'**Invite de commandes** (*Command Prompt*) :
+   - **Ou** avec l'**Invite de commandes** (*Command Prompt*) :
      ```cmd
      git clone https://github.com/JacquesLadouceur/metalemacs.git %HOME%\.emacs.d
      ```
