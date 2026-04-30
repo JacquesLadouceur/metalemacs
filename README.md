@@ -12,7 +12,7 @@ J'ai assemblé un ensemble de paquets Emacs (*packages*) qui couvrent toutes les
 - Rédaction d'un rapport technique (en Org-mode ou Quarto)
 - Préparation de présentations
 
-![Tableau de bord MetalEmacs 1.1](docs/images/tableau-de-bord.png)
+![Tableau de bord MetalEmacs 1.1](docs/images/Tableau-de-bord.png) 
 *Tableau de bord à l'ouverture : accès rapide aux fonctions principales et aux fichiers récents.*
 
 Le tout est organisé dans une interface unifiée qui comprend :
