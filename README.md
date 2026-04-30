@@ -66,22 +66,31 @@ Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'
 > **Note** : sur Windows, la touche `Alt` correspond à `M` dans Emacs (par exemple `M-x` = `Alt-x`).
 
 1. Télécharger et installer **Emacs** depuis <https://ftp.gnu.org/gnu/emacs/windows/> (choisir le sous-dossier de la dernière version et lancer le fichier `emacs-XX.X-installer.exe`)
-2. Ouvrir un terminal (Invite de commandes ou PowerShell) et exécuter :
-   ```
-   winget install --id Git.Git -e --source winget
-   setx HOME %USERPROFILE%
-   ```
-3. **Fermer puis rouvrir** le terminal pour que Git et la nouvelle variable `HOME` soient disponibles, puis cloner MetalEmacs selon le terminal utilisé :
+
+2. Ouvrir un terminal et exécuter les commandes selon le shell utilisé :
 
    - Avec **Windows PowerShell** :
+     ```powershell
+     winget install --id Git.Git -e --source winget
+     setx HOME $env:USERPROFILE
      ```
-     git clone https://github.com/JacquesLadouceur/metalemacs.git $HOME\.emacs.d
+   - Avec l'**Invite de commandes** (*Command Prompt*) :
+     ```cmd
+     winget install --id Git.Git -e --source winget
+     setx HOME %USERPROFILE%
      ```
 
-   - Avec l'**Invite de commandes** (*Command Prompt*) :
+3. **Fermer puis rouvrir** le terminal pour que Git et la nouvelle variable `HOME` soient disponibles, puis cloner MetalEmacs :
+
+   - Avec **Windows PowerShell** :
+     ```powershell
+     git clone https://github.com/JacquesLadouceur/metalemacs.git $HOME\.emacs.d
      ```
+   - Avec l'**Invite de commandes** (*Command Prompt*) :
+     ```cmd
      git clone https://github.com/JacquesLadouceur/metalemacs.git %HOME%\.emacs.d
      ```
+
 
 4. Démarrer Emacs (premier démarrage : 5 à 15 minutes)
 5. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :
