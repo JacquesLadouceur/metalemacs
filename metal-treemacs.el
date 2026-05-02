@@ -165,15 +165,15 @@ Retourne le chemin du fichier installé, ou nil en cas d'échec."
         (make-directory font-dir t))
       (message "Téléchargement de Hack Nerd Font Mono...")
       (url-copy-file url zip-file t)
-      (let ((default-directory temporary-file-directory))
-        (call-process "unzip" nil nil nil "-o" "-j" zip-file
-                      "HackNerdFontMono-Regular.ttf"
-                      "-d" font-dir))
+      ;; Extraction avec tar (disponible sur macOS, Linux, Windows 10+)
+      (let ((default-directory font-dir))
+        (call-process "tar" nil nil nil "-xf" zip-file
+                      "HackNerdFontMono-Regular.ttf"))
       (delete-file zip-file)
       ;; Linux : rafraîchir le cache fontconfig
       (when (eq system-type 'gnu/linux)
         (call-process "fc-cache" nil nil nil "-f"))
-      ;; Windows : enregistrer dans HKCU
+      ;; Windows : enregistrer dans HKCU pour utilisation sans droits admin
       (when (and (eq system-type 'windows-nt) (file-exists-p target-font))
         (call-process "reg" nil nil nil
                       "add"
@@ -213,9 +213,14 @@ Retourne le chemin du fichier installé, ou nil en cas d'échec."
       (princ "╚══════════════════════════════════════════════════════════════════╝\n"))
     (read-from-minibuffer
      "Appuyez sur Entrée pour continuer le démarrage (icônes affichées comme carrés jusqu'au redémarrage)... "))
+
+  ;; ─── Mapper la zone Unicode privée vers Hack Nerd Font Mono ───
+  ;; Sans cela, Emacs ne sait pas afficher les glyphes nerd-icons (zones
+  ;; U+E000–U+F8FF et U+F0000–U+FFFFF) même si la fonte est installée :
+  ;; il les rend comme des boîtes hexadécimales de secours.
   (when (find-font (font-spec :family "Hack Nerd Font Mono"))
-  (set-fontset-font t '(#xe000 . #xf8ff)   "Hack Nerd Font Mono" nil 'append)
-  (set-fontset-font t '(#xf0000 . #xfffff) "Hack Nerd Font Mono" nil 'append)))
+    (set-fontset-font t '(#xe000 . #xf8ff)   "Hack Nerd Font Mono" nil 'append)
+    (set-fontset-font t '(#xf0000 . #xfffff) "Hack Nerd Font Mono" nil 'append)))
 
 (use-package treemacs-nerd-icons
   :straight t
