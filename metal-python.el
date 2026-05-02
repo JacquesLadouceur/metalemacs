@@ -964,49 +964,90 @@ EVENT est l'événement souris. Nécessite dape chargé."
 
 
 
+;; (defun metal-python--setup-buffer ()
+;;   "Configuration complète d'un buffer Python.
+;; Appelé via `python-mode-hook' et `python-ts-mode-hook'."
+;;   ;; --- Indentation ---
+;;   (setq-local indent-tabs-mode nil)
+;;   (setq-local python-indent-offset 4)
+;;   (setq-local tab-width 4)
+;;   ;; --- TAB / Shift-TAB ---
+;;   (local-set-key (kbd "<tab>")   #'metal-python-tab)
+;;   (local-set-key (kbd "TAB")     #'metal-python-tab)
+;;   (local-set-key [backtab]       #'metal-python-backtab)
+;;   (local-set-key (kbd "<S-tab>") #'metal-python-backtab)
+;;   ;; --- Raccourcis exécution ---
+;;   (local-set-key [f5]           #'metal-python-sauvegarde-execute)
+;;   (local-set-key (kbd "C-<f5>") #'metal-python-deboguer)
+;;   (local-set-key [f6]           #'metal-python-redemarre)
+;;   ;; --- Breakpoints : clic gauche dans la marge pour poser/enlever ---
+;;   ;; (Les raccourcis clavier F5/F10/F11 sont gérés par le header-line
+;;   ;; pendant une session dape — voir section 13b.)
+;;   (local-set-key (kbd "<left-margin> <mouse-1>") #'metal-python-toggle-breakpoint-marge)
+;;   (local-set-key (kbd "<left-fringe> <mouse-1>") #'metal-python-toggle-breakpoint-marge)
+;;   ;; --- Header-line dape : apparaît pendant une session de débogage ---
+;;   (metal-python--dape-header-setup)
+;;   ;; --- Complétion CAPF (Corfu/Cape) ---
+;;   (setq-local completion-at-point-functions
+;;               (list (car (default-value 'completion-at-point-functions))
+;;                     #'cape-keyword
+;;                     #'cape-dabbrev
+;;                     #'cape-file))
+;;   ;; --- Eldoc : une ligne seulement dans l'echo area ---
+;;   (setq-local eldoc-echo-area-use-multiline-p 1)
+;;   (setq-local eldoc-echo-area-prefer-doc-buffer t)
+;;   ;; --- Activer Conda (pick-interpreter + modeline sont déclenchés
+;;   ;;     automatiquement via `conda-postactivate-hook'). Si aucun env ne
+;;   ;;     peut être activé, on configure quand même l'interpréteur avec ce
+;;   ;;     qui est dispo dans PATH.
+;;   (unless (metal-python--ensure-conda-env)
+;;     (metal-python-pick-interpreter))
+;;   ;; --- Démarrer un shell Python s'il n'y en a pas déjà un ---
+;;   ;; Déféré via run-with-idle-timer pour ne pas bloquer l'ouverture du fichier
+;;   ;; et laisser Emacs finir la configuration du buffer d'abord.
+;;   (unless (metal-python--shell-vivant-p)
+;;     (run-with-idle-timer 0 nil #'metal-python--ensure-shell-visible)))
+
 (defun metal-python--setup-buffer ()
   "Configuration complète d'un buffer Python.
 Appelé via `python-mode-hook' et `python-ts-mode-hook'."
-  ;; --- Indentation ---
-  (setq-local indent-tabs-mode nil)
-  (setq-local python-indent-offset 4)
-  (setq-local tab-width 4)
-  ;; --- TAB / Shift-TAB ---
-  (local-set-key (kbd "<tab>")   #'metal-python-tab)
-  (local-set-key (kbd "TAB")     #'metal-python-tab)
-  (local-set-key [backtab]       #'metal-python-backtab)
-  (local-set-key (kbd "<S-tab>") #'metal-python-backtab)
-  ;; --- Raccourcis exécution ---
-  (local-set-key [f5]           #'metal-python-sauvegarde-execute)
-  (local-set-key (kbd "C-<f5>") #'metal-python-deboguer)
-  (local-set-key [f6]           #'metal-python-redemarre)
-  ;; --- Breakpoints : clic gauche dans la marge pour poser/enlever ---
-  ;; (Les raccourcis clavier F5/F10/F11 sont gérés par le header-line
-  ;; pendant une session dape — voir section 13b.)
-  (local-set-key (kbd "<left-margin> <mouse-1>") #'metal-python-toggle-breakpoint-marge)
-  (local-set-key (kbd "<left-fringe> <mouse-1>") #'metal-python-toggle-breakpoint-marge)
-  ;; --- Header-line dape : apparaît pendant une session de débogage ---
-  (metal-python--dape-header-setup)
-  ;; --- Complétion CAPF (Corfu/Cape) ---
-  (setq-local completion-at-point-functions
-              (list (car (default-value 'completion-at-point-functions))
-                    #'cape-keyword
-                    #'cape-dabbrev
-                    #'cape-file))
-  ;; --- Eldoc : une ligne seulement dans l'echo area ---
-  (setq-local eldoc-echo-area-use-multiline-p 1)
-  (setq-local eldoc-echo-area-prefer-doc-buffer t)
-  ;; --- Activer Conda (pick-interpreter + modeline sont déclenchés
-  ;;     automatiquement via `conda-postactivate-hook'). Si aucun env ne
-  ;;     peut être activé, on configure quand même l'interpréteur avec ce
-  ;;     qui est dispo dans PATH.
-  (unless (metal-python--ensure-conda-env)
-    (metal-python-pick-interpreter))
-  ;; --- Démarrer un shell Python s'il n'y en a pas déjà un ---
-  ;; Déféré via run-with-idle-timer pour ne pas bloquer l'ouverture du fichier
-  ;; et laisser Emacs finir la configuration du buffer d'abord.
-  (unless (metal-python--shell-vivant-p)
-    (run-with-idle-timer 0 nil #'metal-python--ensure-shell-visible)))
+  ;; Ne rien faire dans les sous-buffers indirects (chunks polymode dans les .qmd, .Rmd, .org…)
+  ;; Sinon Conda s'active et un shell Python démarre à chaque ouverture d'un fichier
+  ;; Quarto contenant des chunks {python}, même purement documentaires.
+  (unless (buffer-base-buffer)
+    ;; --- Indentation ---
+    (setq-local indent-tabs-mode nil)
+    (setq-local python-indent-offset 4)
+    (setq-local tab-width 4)
+    ;; --- TAB / Shift-TAB ---
+    (local-set-key (kbd "<tab>")   #'metal-python-tab)
+    (local-set-key (kbd "TAB")     #'metal-python-tab)
+    (local-set-key [backtab]       #'metal-python-backtab)
+    (local-set-key (kbd "<S-tab>") #'metal-python-backtab)
+    ;; --- Raccourcis exécution ---
+    (local-set-key [f5]           #'metal-python-sauvegarde-execute)
+    (local-set-key (kbd "C-<f5>") #'metal-python-deboguer)
+    (local-set-key [f6]           #'metal-python-redemarre)
+    ;; --- Breakpoints : clic gauche dans la marge pour poser/enlever ---
+    (local-set-key (kbd "<left-margin> <mouse-1>") #'metal-python-toggle-breakpoint-marge)
+    (local-set-key (kbd "<left-fringe> <mouse-1>") #'metal-python-toggle-breakpoint-marge)
+    ;; --- Header-line dape ---
+    (metal-python--dape-header-setup)
+    ;; --- Complétion CAPF (Corfu/Cape) ---
+    (setq-local completion-at-point-functions
+                (list (car (default-value 'completion-at-point-functions))
+                      #'cape-keyword
+                      #'cape-dabbrev
+                      #'cape-file))
+    ;; --- Eldoc ---
+    (setq-local eldoc-echo-area-use-multiline-p 1)
+    (setq-local eldoc-echo-area-prefer-doc-buffer t)
+    ;; --- Activer Conda ---
+    (unless (metal-python--ensure-conda-env)
+      (metal-python-pick-interpreter))
+    ;; --- Démarrer un shell Python s'il n'y en a pas déjà un ---
+    (unless (metal-python--shell-vivant-p)
+      (run-with-idle-timer 0 nil #'metal-python--ensure-shell-visible))))
 
 (add-hook 'python-mode-hook    #'metal-python--setup-buffer)
 (add-hook 'python-ts-mode-hook #'metal-python--setup-buffer)

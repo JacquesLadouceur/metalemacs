@@ -2045,6 +2045,14 @@ Raccourci Treemacs : M (Shift+M)"
       (when (and (boundp 'text-scale-mode) text-scale-mode)
         (text-scale-set 0)))))
 
+;; Faire que les buffers transitoires apparaissent en side-window en bas
+(setq display-buffer-alist
+      (append display-buffer-alist
+              '(("\\`\\*\\(Quarto Render\\|Compile-Log\\|Warnings\\|Backtrace\\|Async Shell Command\\|compilation\\)\\*\\'"
+                 (display-buffer-in-side-window)
+                 (side . bottom)
+                 (window-height . 0.30)
+                 (slot . 0)))))
 
 (global-set-key (kbd "C-=") 'metal-text-scale-increase-mouse)
 (global-set-key (kbd "C--") 'metal-text-scale-decrease-mouse)

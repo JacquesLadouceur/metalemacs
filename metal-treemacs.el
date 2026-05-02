@@ -90,55 +90,132 @@ Modifiée automatiquement quand l'utilisateur redimensionne manuellement.")
 
 ;; nerd-icons + treemacs-nerd-icons : rendu épuré et identique partout
 ;; nerd-icons + treemacs-nerd-icons : rendu épuré et identique partout
+;; (use-package nerd-icons
+;;   :straight t
+;;   :config
+;;   ;; Sous Windows : court-circuiter le read-directory-name interactif
+;;   ;; et enregistrer la police dans HKCU sans droits admin
+;;   (when (eq system-type 'windows-nt)
+;;     (defun metal--install-nerd-font-windows ()
+;;       "Enregistre NFM.ttf dans HKCU\\...\\Fonts sans droits administrateur."
+;;       (let* ((font-dir (expand-file-name "AppData/Local/Microsoft/Windows/Fonts"
+;;                                          (getenv "USERPROFILE")))
+;;              (font-file (expand-file-name "NFM.ttf" font-dir)))
+;;         (when (file-exists-p font-file)
+;;           (call-process "reg" nil nil nil
+;;                         "add"
+;;                         "HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+;;                         "/v" "Symbols Nerd Font Mono (TrueType)"
+;;                         "/t" "REG_SZ"
+;;                         "/d" font-file
+;;                         "/f"))))
+;;     (advice-add 'nerd-icons-install-fonts :around
+;;                 (lambda (orig &optional pfx)
+;;                   (cl-letf (((symbol-function 'read-directory-name)
+;;                              (lambda (&rest _)
+;;                                (expand-file-name
+;;                                 "AppData/Local/Microsoft/Windows/Fonts"
+;;                                 (getenv "USERPROFILE")))))
+;;                     (funcall orig pfx)
+;;                     (metal--install-nerd-font-windows)))
+;;                 '((name . metal--nerd-icons-no-dialog))))  ; ← ferme le when
+;;   ;; Installer la police automatiquement si absente (tous les OS)
+;;   (unless (or (find-font (font-spec :family "Symbols Nerd Font Mono"))
+;;               (and (eq system-type 'windows-nt)
+;;                    (file-exists-p
+;;                     (expand-file-name "AppData/Local/Microsoft/Windows/Fonts/NFM.ttf"
+;;                                       (getenv "USERPROFILE")))))
+;;     (nerd-icons-install-fonts t)
+;;     ;; Message bloquant : arrête le chargement d'Emacs tant que
+;;     ;; l'utilisateur n'a pas lu le message et confirmé.
+;;     (with-output-to-temp-buffer "*MetalEmacs — Redémarrage requis*"
+;;       (princ "╔══════════════════════════════════════════════════════════════════╗\n")
+;;       (princ "║                                                                  ║\n")
+;;       (princ "║   📦  Polices Nerd Fonts installées                              ║\n")
+;;       (princ "║                                                                  ║\n")
+;;       (princ "║   Pour que les icônes s'affichent correctement,                  ║\n")
+;;       (princ "║   fermez Emacs et relancez-le.                                   ║\n")
+;;       (princ "║                                                                  ║\n")
+;;       (princ "╚══════════════════════════════════════════════════════════════════╝\n"))
+;;     (read-from-minibuffer
+;;      "Appuyez sur Entrée pour continuer le démarrage (icônes affichées comme carrés jusqu'au redémarrage)... ")))
+
+
 (use-package nerd-icons
   :straight t
   :config
-  ;; Sous Windows : court-circuiter le read-directory-name interactif
-  ;; et enregistrer la police dans HKCU sans droits admin
-  (when (eq system-type 'windows-nt)
-    (defun metal--install-nerd-font-windows ()
-      "Enregistre NFM.ttf dans HKCU\\...\\Fonts sans droits administrateur."
-      (let* ((font-dir (expand-file-name "AppData/Local/Microsoft/Windows/Fonts"
-                                         (getenv "USERPROFILE")))
-             (font-file (expand-file-name "NFM.ttf" font-dir)))
-        (when (file-exists-p font-file)
-          (call-process "reg" nil nil nil
-                        "add"
-                        "HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
-                        "/v" "Symbols Nerd Font Mono (TrueType)"
-                        "/t" "REG_SZ"
-                        "/d" font-file
-                        "/f"))))
-    (advice-add 'nerd-icons-install-fonts :around
-                (lambda (orig &optional pfx)
-                  (cl-letf (((symbol-function 'read-directory-name)
-                             (lambda (&rest _)
-                               (expand-file-name
-                                "AppData/Local/Microsoft/Windows/Fonts"
-                                (getenv "USERPROFILE")))))
-                    (funcall orig pfx)
-                    (metal--install-nerd-font-windows)))
-                '((name . metal--nerd-icons-no-dialog))))  ; ← ferme le when
-  ;; Installer la police automatiquement si absente (tous les OS)
-  (unless (or (find-font (font-spec :family "Symbols Nerd Font Mono"))
-              (and (eq system-type 'windows-nt)
-                   (file-exists-p
-                    (expand-file-name "AppData/Local/Microsoft/Windows/Fonts/NFM.ttf"
-                                      (getenv "USERPROFILE")))))
-    (nerd-icons-install-fonts t)
-    ;; Message bloquant : arrête le chargement d'Emacs tant que
-    ;; l'utilisateur n'a pas lu le message et confirmé.
+
+  ;; ─── Helper multi-plateforme : installer Hack Nerd Font Mono ───
+  (defun metal--install-hack-nerd-font ()
+    "Installe Hack Nerd Font Mono dans le dossier de fontes utilisateur.
+Mapping de codepoints conforme à `nerd-icons.el', contrairement à
+Symbols Nerd Font Mono 3.4.x téléchargée par `nerd-icons-install-fonts'.
+Retourne le chemin du fichier installé, ou nil en cas d'échec."
+    (let* ((url "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/Hack.zip")
+           (font-dir (cond ((eq system-type 'darwin)
+                            (expand-file-name "~/Library/Fonts"))
+                           ((eq system-type 'gnu/linux)
+                            (expand-file-name "~/.local/share/fonts"))
+                           ((eq system-type 'windows-nt)
+                            (expand-file-name "AppData/Local/Microsoft/Windows/Fonts"
+                                              (getenv "USERPROFILE")))))
+           (zip-file (expand-file-name "Hack.zip" temporary-file-directory))
+           (target-font (expand-file-name "HackNerdFontMono-Regular.ttf" font-dir)))
+      (unless (file-directory-p font-dir)
+        (make-directory font-dir t))
+      (message "Téléchargement de Hack Nerd Font Mono...")
+      (url-copy-file url zip-file t)
+      (let ((default-directory temporary-file-directory))
+        (call-process "unzip" nil nil nil "-o" "-j" zip-file
+                      "HackNerdFontMono-Regular.ttf"
+                      "-d" font-dir))
+      (delete-file zip-file)
+      ;; Linux : rafraîchir le cache fontconfig
+      (when (eq system-type 'gnu/linux)
+        (call-process "fc-cache" nil nil nil "-f"))
+      ;; Windows : enregistrer dans HKCU
+      (when (and (eq system-type 'windows-nt) (file-exists-p target-font))
+        (call-process "reg" nil nil nil
+                      "add"
+                      "HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+                      "/v" "Hack Nerd Font Mono (TrueType)"
+                      "/t" "REG_SZ"
+                      "/d" target-font
+                      "/f"))
+      (and (file-exists-p target-font) target-font)))
+
+  ;; ─── Migration : supprimer NFM.ttf (Symbols Nerd Font Mono) si présent ───
+  ;; Cette ancienne fonte 3.4.0 a un mapping incompatible avec nerd-icons.el.
+  (let ((legacy-fonts
+         (cond ((eq system-type 'darwin)
+                (list (expand-file-name "~/Library/Fonts/NFM.ttf")))
+               ((eq system-type 'gnu/linux)
+                (list (expand-file-name "~/.local/share/fonts/NFM.ttf")))
+               ((eq system-type 'windows-nt)
+                (list (expand-file-name "AppData/Local/Microsoft/Windows/Fonts/NFM.ttf"
+                                        (getenv "USERPROFILE")))))))
+    (dolist (f legacy-fonts)
+      (when (file-exists-p f)
+        (delete-file f)
+        (message "Ancienne fonte Symbols Nerd Font Mono supprimée : %s" f))))
+
+  ;; ─── Installer Hack Nerd Font Mono si absente ───
+  (unless (find-font (font-spec :family "Hack Nerd Font Mono"))
+    (metal--install-hack-nerd-font)
     (with-output-to-temp-buffer "*MetalEmacs — Redémarrage requis*"
       (princ "╔══════════════════════════════════════════════════════════════════╗\n")
       (princ "║                                                                  ║\n")
-      (princ "║   📦  Polices Nerd Fonts installées                              ║\n")
+      (princ "║   📦  Hack Nerd Font Mono installée                              ║\n")
       (princ "║                                                                  ║\n")
       (princ "║   Pour que les icônes s'affichent correctement,                  ║\n")
       (princ "║   fermez Emacs et relancez-le.                                   ║\n")
       (princ "║                                                                  ║\n")
       (princ "╚══════════════════════════════════════════════════════════════════╝\n"))
     (read-from-minibuffer
-     "Appuyez sur Entrée pour continuer le démarrage (icônes affichées comme carrés jusqu'au redémarrage)... ")))
+     "Appuyez sur Entrée pour continuer le démarrage (icônes affichées comme carrés jusqu'au redémarrage)... "))
+  (when (find-font (font-spec :family "Hack Nerd Font Mono"))
+  (set-fontset-font t '(#xe000 . #xf8ff)   "Hack Nerd Font Mono" nil 'append)
+  (set-fontset-font t '(#xf0000 . #xfffff) "Hack Nerd Font Mono" nil 'append)))
 
 (use-package treemacs-nerd-icons
   :straight t

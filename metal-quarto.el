@@ -295,15 +295,38 @@ Retourne t si le rendu peut continuer immédiatement, nil s'il faut attendre."
 ;;; ═══════════════════════════════════════════════════════════════════
 
 (defun metal-quarto-ensure-project-at (dir)
-  "Créer _quarto.yml dans DIR si absent."
-  (let* ((dir   (file-name-as-directory dir))
-         (qfile (expand-file-name "_quarto.yml" dir)))
-    (unless (file-exists-p qfile)
-      (let ((coding-system-for-write 'utf-8-unix))
-        (with-temp-file qfile
-          (insert "project:\n  type: default\n\n")
-          (insert "metadata:\n  mediabag-output: true\n")))
-      (message "_quarto.yml créé dans %s" dir))))
+  "Créer un fichier _metadata.yml minimal et correct dans DIR si nécessaire.
+Le fichier `_metadata.yml' applique des options communes à tous les .qmd du
+dossier sans transformer celui-ci en projet Quarto (ce qui forcerait la
+validation YAML de tous les .qmd voisins, y compris les brouillons).
+
+La police de caractères n'est pas précisée : le moteur LaTeX par défaut
+\(pdflatex\) utilisera Latin Modern, garanti présent sur toute distribution.
+Pour une autre police, ajouter `pdf-engine: xelatex' et `mainfont:' dans
+la front matter du `.qmd' concerné."
+  (let ((file (expand-file-name "_metadata.yml" dir)))
+    (unless (file-exists-p file)
+      (with-temp-file file
+        (insert
+         "lang: fr\n"
+         "\n"
+         "format:\n"
+         "  pdf:\n"
+         "    documentclass: scrartcl\n"
+         "    papersize: letter\n"
+         "    geometry:\n"
+         "      - margin=2cm\n"
+         "    number-sections: true\n"
+         "    toc: false\n"
+         "    fig-pos: \"H\"\n"
+         "    code-block-bg: true\n"
+         "    highlight-style: github\n"
+         "\n"
+         "execute:\n"
+         "  enabled: false\n"
+         "  echo: true\n"
+         "  warning: false\n"
+         "  message: false\n")))))
 
 (defun metal-quarto-rendre-fichier ()
   "Rendre le fichier Quarto courant avec 'quarto render'.
@@ -624,7 +647,7 @@ Si xwidget-webkit est disponible, l'ouvrir dans Emacs, sinon navigateur externe.
 (defun metal-quarto-open-cheatsheet ()
   "Ouvre la feuille de référence quarto-aide-memoire.pdf dans Emacs."
   (interactive)
-  (let ((pdf-file (expand-file-name "Quarto_Cheat_Sheet.pdf" user-emacs-directory)))
+  (let ((pdf-file (expand-file-name "aide-memoire-qmd.pdf" user-emacs-directory)))
     (if (file-exists-p pdf-file)
         (find-file pdf-file)
       (user-error "Fichier introuvable : %s" pdf-file))))
@@ -651,31 +674,34 @@ Si xwidget-webkit est disponible, l'ouvrir dans Emacs, sinon navigateur externe.
     (metal-toolbar-icon "nf-md-format_underline" :color "#2980b9")
     "Souligné" #'metal-quarto-underline)
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_strikethrough" :color "#c0392b")
+    (metal-toolbar-icon "nf-md-format_strikethrough" :color "#c0392b" :height 2.0 :raise -0.1)
     "Barré" #'metal-quarto-strike)
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-code_tags" :color "#8e44ad")
+    (metal-toolbar-icon "nf-md-code_tags" :color "#8e44ad" :height 2.5 :raise -0.1)
     "Code inline" #'metal-quarto-code)
 
    (metal-toolbar-separator)
 
    ;; ----- Production -----
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-file_pdf_box" :color "#c0392b")
+    (metal-toolbar-icon "nf-md-file_pdf_box" :color "#c0392b" :height 2.0 :raise -0.05)
     "Produire le document (F8)" #'metal-quarto-rendre-fichier)
 
    (metal-toolbar-separator)
 
    ;; ----- Référence -----
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-book_open_page_variant" :color "#1e8449")
+    (metal-toolbar-icon "nf-md-book_open_page_variant" :color "#1e8449" :height 2.0)
     "Wiktionnaire" #'search-wiktionary)
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-wikipedia" :color "#5d6d7e")
+    (metal-toolbar-icon "nf-md-wikipedia" :color "#5d6d7e" :height 2.0)
     "Wikipédia" #'search-wikipedia)
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-book_open_variant" :color "#2980b9")
+    (metal-toolbar-icon "nf-md-book_open_variant" :color "#2980b9" :height 2.0)
     "Documentation Quarto" #'metal-quarto-doc-buffer)
+   (metal-toolbar-button
+    (metal-toolbar-icon "nf-md-clipboard_text_outline" :color "#e67e22" :height 2.0)
+    "Aide-mémoire QMD" #'metal-quarto-open-cheatsheet)
 
    " " (metal-toolbar-vpadding)))
 

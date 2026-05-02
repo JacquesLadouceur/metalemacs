@@ -306,48 +306,283 @@ Si le nouveau fichier existe déjà, ne fait rien (pour éviter d'écraser)."
 ;;           (insert template)))
 ;;       (save-buffer))))
 
+;; (defun metal-dashboard--treemacs-selected-dir ()
+;;   "Retourne le dossier sélectionné dans Treemacs."
+;;   (let* ((buf (and (fboundp 'treemacs-get-local-buffer)
+;;                    (treemacs-get-local-buffer)))
+;;          (win (and (buffer-live-p buf)
+;;                    (get-buffer-window buf t)))
+;;          (pos (and win (window-point win)))
+;;          (path (and pos
+;;                     (with-current-buffer buf
+;;                       (get-text-property pos :path)))))
+;;     (cond
+;;      ((and path (file-directory-p path))
+;;       (file-name-as-directory path))
+;;      ((and path (file-exists-p path))
+;;       (file-name-directory path))
+;;      (t
+;;       nil))))
+
+
+(defun metal-dashboard--treemacs-selected-dir ()
+  "Retourne le dossier sélectionné dans Treemacs.
+Si un fichier est sélectionné, retourne son dossier parent.
+Sinon, affiche un message d'erreur."
+  (let* ((buf (and (fboundp 'treemacs-get-local-buffer)
+                   (treemacs-get-local-buffer)))
+         (win (and (buffer-live-p buf)
+                   (get-buffer-window buf t)))
+         (pos (and win (window-point win)))
+         (path (and pos
+                    (with-current-buffer buf
+                      (get-text-property pos :path)))))
+    (cond
+     ;; Cas 1 : dossier
+     ((and path (file-directory-p path))
+      (file-name-as-directory path))
+
+     ;; Cas 2 : fichier
+     ((and path (file-regular-p path))
+      (file-name-directory path))
+
+     ;; Cas 3 : autre chemin existant
+     ((and path (file-exists-p path))
+      (file-name-directory path))
+
+     ;; Cas 4 : rien → message utilisateur
+     (t
+      (user-error "Veuillez sélectionner un dossier ou un fichier dans Treemacs")))))
 
 (defun metal-dashboard--create-new-file (extension prompt &optional template)
-  "Créer un nouveau fichier avec EXTENSION, PROMPT et TEMPLATE optionnel.
-Utilise le dossier sélectionné dans Treemacs comme dossier par défaut."
+  "Créer un nouveau fichier dans le dossier sélectionné dans Treemacs."
   (cl-block metal-dashboard--create-new-file
-    (let* ((treemacs-dir (ignore-errors
-                           (when (and (fboundp 'treemacs-get-local-buffer)
-                                      (treemacs-get-local-buffer))
-                             (with-current-buffer (treemacs-get-local-buffer)
-                               (let* ((btn (treemacs-current-button))
-                                      (path (when btn (treemacs-button-get btn :path))))
-                                 (when path
-                                   (if (file-directory-p path)
-                                       path
-                                     (file-name-directory path))))))))
-           (default-dir (or treemacs-dir "~/Documents/"))
-           ;; Un seul dialogue graphique pour dossier + nom de fichier
-           (filepath (read-file-name prompt default-dir nil nil
-                                     (concat "nouveau" extension)))
-           ;; Ajouter l'extension si l'utilisateur ne l'a pas tapée
-           (filepath (if (string-suffix-p extension filepath)
-                         filepath
-                       (concat filepath extension)))
+    (let* ((dir (metal-dashboard--treemacs-selected-dir))
+           (name (string-trim (read-string prompt)))
            (replace nil))
-      ;; Si le fichier existe, demander quoi faire
-      (when (file-exists-p filepath)
-        (let ((choice (read-char-choice
-                       (format "« %s » existe déjà : [r]emplacer, [o]uvrir, [a]nnuler ? "
-                               (file-name-nondirectory filepath))
-                       '(?r ?o ?a))))
-          (pcase choice
-            (?r (setq replace t))
-            (?o (find-file filepath)
-                (cl-return-from metal-dashboard--create-new-file))
-            (?a (message "Annulé.")
-                (cl-return-from metal-dashboard--create-new-file)))))
-      (find-file filepath)
-      (when (or (= (buffer-size) 0) replace)
-        (erase-buffer)
-        (when template
-          (insert template)))
-      (save-buffer))))
+
+      (unless dir
+        (user-error "Aucun dossier Treemacs sélectionné"))
+
+      (when (string-empty-p name)
+        (user-error "Nom de fichier vide"))
+
+      (when (string-match-p "[/\\]" name)
+        (user-error "Le nom ne doit pas contenir / ou \\"))
+
+      ;; Évite test.qmd.qmd
+      (when (string-suffix-p extension name t)
+        (setq name (substring name 0 (- (length name) (length extension)))))
+
+      (let ((filepath (expand-file-name (concat name extension) dir)))
+
+        (when (file-exists-p filepath)
+          (let ((choice (read-char-choice
+                         (format "« %s » existe déjà : [r]emplacer, [o]uvrir, [a]nnuler ? "
+                                 (file-name-nondirectory filepath))
+                         '(?r ?o ?a))))
+            (pcase choice
+              (?r (setq replace t))
+              (?o (find-file filepath)
+                  (cl-return-from metal-dashboard--create-new-file))
+              (?a (message "Annulé.")
+                  (cl-return-from metal-dashboard--create-new-file)))))
+
+        ;; Crée seulement le dossier parent, jamais le fichier comme dossier.
+        (make-directory (file-name-directory filepath) t)
+
+        (find-file filepath)
+        (when (or (= (buffer-size) 0) replace)
+          (erase-buffer)
+          (when template
+            (insert template)))
+        (save-buffer)
+        (message "Fichier créé : %s" filepath)))))
+
+;; (defun metal-dashboard--treemacs-selected-dir ()
+;;   "Retourne le dossier sélectionné dans la fenêtre Treemacs visible.
+;; Retourne nil si Treemacs n'est pas visible ou si rien n'est sélectionné.
+;; Le chemin retourné se termine toujours par « / »."
+;;   (when (fboundp 'treemacs-get-local-window)
+;;     (let ((win (treemacs-get-local-window)))
+;;       (when (window-live-p win)
+;;         (with-selected-window win
+;;           (let* ((btn (treemacs-current-button))
+;;                  (path (when btn (treemacs-button-get btn :path))))
+;;             (when (and path (stringp path) (file-exists-p path))
+;;               (file-name-as-directory
+;;                (if (file-directory-p path)
+;;                    path
+;;                  (file-name-directory path))))))))))
+
+;; (defun metal-dashboard--create-new-file (extension prompt-title &optional template)
+;;   "Créer un nouveau fichier avec EXTENSION et TEMPLATE optionnel.
+;; PROMPT-TITLE est le titre court affiché dans le popup
+;; \(ex. \"Présentation Quarto\"\).
+;; Le dossier sélectionné dans Treemacs est utilisé comme destination ;
+;; sinon `~/Documents/' par défaut."
+;;   (let* ((treemacs-dir (metal-dashboard--treemacs-selected-dir))
+;;          (default-dir (or treemacs-dir
+;;                           (file-name-as-directory
+;;                            (expand-file-name "~/Documents/")))))
+;;     (metal-dashboard--new-file-popup extension prompt-title default-dir template)))
+
+;; ;;; ───────────────────────────────────────────────────────────────────
+;; ;;; Popup de saisie pour la création de fichier
+;; ;;; ───────────────────────────────────────────────────────────────────
+
+;; (defvar-local metal-dashboard--new-file-input-start nil
+;;   "Marker du début de la zone d'édition dans le popup.")
+
+;; (defvar-local metal-dashboard--new-file-input-end nil
+;;   "Marker de la fin de la zone d'édition dans le popup.")
+
+;; (defvar-local metal-dashboard--new-file-context nil
+;;   "Plist avec :extension :dir :template :on-create :window-config.")
+
+;; (defvar metal-dashboard-new-file-mode-map
+;;   (let ((map (make-sparse-keymap)))
+;;     (define-key map (kbd "RET")      #'metal-dashboard--new-file-confirm)
+;;     (define-key map (kbd "C-c C-c")  #'metal-dashboard--new-file-confirm)
+;;     (define-key map (kbd "C-g")      #'metal-dashboard--new-file-cancel)
+;;     (define-key map (kbd "C-c C-k")  #'metal-dashboard--new-file-cancel)
+;;     (define-key map (kbd "<escape>") #'metal-dashboard--new-file-cancel)
+;;     map)
+;;   "Keymap du popup de création de fichier.")
+
+;; (define-derived-mode metal-dashboard-new-file-mode fundamental-mode
+;;   "Métal-Nouveau"
+;;   "Mode pour la saisie d'un nom de nouveau fichier dans MetalEmacs."
+;;   (setq-local cursor-type 'bar)
+;;   (setq-local truncate-lines t))
+
+;; (defun metal-dashboard--new-file-popup (extension prompt-title default-dir
+;;                                                   &optional template on-create-fn)
+;;   "Affiche un popup pour saisir le nom d'un nouveau fichier.
+;; EXTENSION : ex. \".qmd\".
+;; PROMPT-TITLE : titre affiché en haut du popup.
+;; DEFAULT-DIR : dossier de destination (avec « / » final).
+;; TEMPLATE : contenu initial optionnel pour le fichier.
+;; ON-CREATE-FN : fonction optionnelle (filepath replace) appelée à la place
+;; du flux standard find-file/insert/save (utile pour draw.io)."
+;;   (let ((buf (get-buffer-create "*Nouveau fichier*"))
+;;         (wconf (current-window-configuration)))
+;;     (with-current-buffer buf
+;;       (metal-dashboard-new-file-mode)
+;;       (let ((inhibit-read-only t))
+;;         (erase-buffer)
+;;         ;; ── Titre ──
+;;         (insert "\n")
+;;         (let ((s (point)))
+;;           (insert (format "    📝   %s\n" prompt-title))
+;;           (add-text-properties s (point) '(face (:height 1.3 :weight bold))))
+;;         (insert "\n")
+;;         ;; ── Métadonnées ──
+;;         (let ((s (point)))
+;;           (insert (format "    Dossier  ▸  %s\n"
+;;                           (abbreviate-file-name default-dir)))
+;;           (insert (format "    Type     ▸  Fichier %s\n" extension))
+;;           (add-text-properties s (point) '(face font-lock-doc-face)))
+;;         (insert "\n")
+;;         ;; ── Étiquette de la zone de saisie ──
+;;         (let ((s (point)))
+;;           (insert "    Nom du fichier (sans extension) :\n")
+;;           (add-text-properties s (point) '(face shadow)))
+;;         (insert "\n    ")
+;;         ;; ── Zone d'édition (entre deux markers) ──
+;;         (setq metal-dashboard--new-file-input-start (point-marker))
+;;         (set-marker-insertion-type metal-dashboard--new-file-input-start nil)
+;;         (setq metal-dashboard--new-file-input-end (point-marker))
+;;         (set-marker-insertion-type metal-dashboard--new-file-input-end t)
+;;         (insert "\n\n")
+;;         ;; ── Pied de page ──
+;;         (let ((s (point)))
+;;           (insert "    ─────────────────────────────────────────\n")
+;;           (insert "    [RET] créer    [C-g / Esc] annuler\n")
+;;           (add-text-properties s (point) '(face shadow)))
+;;         ;; ── Verrouiller en-tête et pied de page ──
+;;         (add-text-properties (point-min)
+;;                              metal-dashboard--new-file-input-start
+;;                              '(read-only t front-nonsticky t rear-nonsticky t))
+;;         (add-text-properties metal-dashboard--new-file-input-end
+;;                              (point-max)
+;;                              '(read-only t front-nonsticky t rear-nonsticky t)))
+;;       (setq metal-dashboard--new-file-context
+;;             (list :extension extension
+;;                   :dir default-dir
+;;                   :template template
+;;                   :on-create on-create-fn
+;;                   :window-config wconf))
+;;       (goto-char metal-dashboard--new-file-input-start))
+;;     ;; Afficher en split bas, hauteur fixe
+;;     (let ((win (display-buffer
+;;                 buf
+;;                 '((display-buffer-below-selected)
+;;                   (window-height . 14)
+;;                   (preserve-size . (nil . t))))))
+;;       (when (window-live-p win)
+;;         (select-window win)
+;;         (with-current-buffer buf
+;;           (goto-char metal-dashboard--new-file-input-start))))))
+
+;; (defun metal-dashboard--new-file-confirm ()
+;;   "Valide la saisie et crée le fichier."
+;;   (interactive)
+;;   (let* ((ctx metal-dashboard--new-file-context)
+;;          (extension     (plist-get ctx :extension))
+;;          (dir           (plist-get ctx :dir))
+;;          (template      (plist-get ctx :template))
+;;          (on-create     (plist-get ctx :on-create))
+;;          (wconf         (plist-get ctx :window-config))
+;;          (name (string-trim
+;;                 (buffer-substring-no-properties
+;;                  metal-dashboard--new-file-input-start
+;;                  metal-dashboard--new-file-input-end))))
+;;     (cond
+;;      ((string-empty-p name)
+;;       (message "Veuillez saisir un nom de fichier.")
+;;       (ding))
+;;      (t
+;;       (let* ((filepath (expand-file-name (concat name extension) dir))
+;;              (replace nil)
+;;              (action :create))
+;;         ;; Vérifier l'existence avant de fermer le popup
+;;         (when (file-exists-p filepath)
+;;           (let ((choice (read-char-choice
+;;                          (format "« %s » existe déjà : [r]emplacer, [o]uvrir, [a]nnuler ? "
+;;                                  (file-name-nondirectory filepath))
+;;                          '(?r ?o ?a))))
+;;             (pcase choice
+;;               (?r (setq replace t))
+;;               (?o (setq action :open))
+;;               (?a (setq action :cancel)))))
+;;         ;; Démonter le popup
+;;         (let ((inhibit-read-only t))
+;;           (kill-buffer (current-buffer)))
+;;         (when wconf (set-window-configuration wconf))
+;;         ;; Exécuter l'action
+;;         (pcase action
+;;           (:cancel (message "Annulé."))
+;;           (:open   (find-file filepath))
+;;           (:create
+;;            (cond
+;;             (on-create
+;;              (funcall on-create filepath replace))
+;;             (t
+;;              (find-file filepath)
+;;              (when (or (= (buffer-size) 0) replace)
+;;                (erase-buffer)
+;;                (when template (insert template)))
+;;              (save-buffer))))))))))
+
+;; (defun metal-dashboard--new-file-cancel ()
+;;   "Annule la création et ferme le popup."
+;;   (interactive)
+;;   (let ((wconf (plist-get metal-dashboard--new-file-context :window-config)))
+;;     (let ((inhibit-read-only t))
+;;       (kill-buffer (current-buffer)))
+;;     (when wconf (set-window-configuration wconf))
+;;     (message "Annulé.")))
 
 ;; (defun metal-dashboard-new-qmd ()
 ;;   "Créer une présentation Quarto."
@@ -378,7 +613,7 @@ Utilise le dossier sélectionné dans Treemacs comme dossier par défaut."
                      "---\ntitle: \"Titre\"\nformat:\n  beamer:\n    theme: metropolis\nlang: fr\n---\n\n")))
     (metal-dashboard--create-new-file
      ".qmd"
-     "Nom de la présentation (sans extension) : "
+     "Présentation Quarto: "
      template)
     ;; Copier les ressources Quarto dans le dossier de la présentation
     (when buffer-file-name
@@ -396,7 +631,7 @@ Utilise le dossier sélectionné dans Treemacs comme dossier par défaut."
                      "---\ntitle: \"Titre\"\nformat:\n  pdf: default\nlang: fr\n---\n\n")))
     (metal-dashboard--create-new-file
      ".qmd"
-     "Nom du document Quarto (sans extension) : "
+     "Document Quarto: "
      template)))
 
 (defun metal-dashboard-new-python ()
@@ -404,7 +639,7 @@ Utilise le dossier sélectionné dans Treemacs comme dossier par défaut."
   (interactive)
   (metal-dashboard--create-new-file
    ".py"
-   "Nom du fichier Python (sans extension) : "
+   "Fichier Python: "
    "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\n"))
 
 (defun metal-dashboard-new-prolog ()
@@ -412,7 +647,7 @@ Utilise le dossier sélectionné dans Treemacs comme dossier par défaut."
   (interactive)
   (metal-dashboard--create-new-file
    ".pl"
-   "Nom du fichier Prolog (sans extension) : "
+   "Fichier Prolog: "
    "% -*- mode: prolog -*-\n\n"))
 
 (defun metal-dashboard-new-org-document ()
@@ -420,7 +655,7 @@ Utilise le dossier sélectionné dans Treemacs comme dossier par défaut."
   (interactive)
   (metal-dashboard--create-new-file
    ".org"
-   "Nom du document Org (sans extension) : "
+   "Document Org-mode: "
    (concat
     "#+TITLE: \n"
     "#+SUBTITLE: \n"
@@ -434,61 +669,87 @@ Utilise le dossier sélectionné dans Treemacs comme dossier par défaut."
     "#+LATEX_HEADER: \\lstset{basicstyle=\\ttfamily\\small, breaklines=true, frame=single, columns=fullflexible, keepspaces=true, showstringspaces=false}\n"
     "\n")))
 
-(defun metal-dashboard-new-drawio ()
-  "Créer un diagramme draw.io et l'ouvrir dans draw.io (Desktop ou web)."
-  (interactive)
-  (cl-block metal-dashboard-new-drawio
-    (let* ((treemacs-dir (ignore-errors
-                           (when (and (fboundp 'treemacs-get-local-buffer)
-                                      (treemacs-get-local-buffer))
-                             (with-current-buffer (treemacs-get-local-buffer)
-                               (let* ((btn (treemacs-current-button))
-                                      (path (when btn (treemacs-button-get btn :path))))
-                                 (when path
-                                   (if (file-directory-p path)
-                                       path
-                                     (file-name-directory path))))))))
-           (default-dir (or treemacs-dir "~/Documents/"))
-           ;; Un seul dialogue graphique pour dossier + nom
-           (filepath (read-file-name "Nouveau diagramme : " default-dir nil nil
-                                     "nouveau.drawio"))
-           ;; S'assurer que l'extension est présente
-           (filepath (if (string-suffix-p ".drawio" filepath)
-                         filepath
-                       (concat filepath ".drawio"))))
-      ;; Vérifier si le fichier existe
-      (when (file-exists-p filepath)
-        (let ((choice (read-char-choice
-                       (format "« %s » existe déjà : [o]uvrir, [r]emplacer, [a]nnuler ? "
-                               (file-name-nondirectory filepath))
-                       '(?o ?r ?a))))
-          (pcase choice
-            (?o (metal-dashboard--open-in-drawio filepath)
-                (cl-return-from metal-dashboard-new-drawio))
-            (?a (message "Annulé.")
-                (cl-return-from metal-dashboard-new-drawio))
-            (?r nil))))
-      ;; Écrire le template draw.io (XML minimal)
-      (with-temp-file filepath
-        (insert "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-                "<mxfile host=\"app.diagrams.net\" modified=\""
-                (format-time-string "%Y-%m-%dT%H:%M:%S")
-                "\" type=\"device\">\n"
-                "  <diagram id=\"diag1\" name=\"Page-1\">\n"
-                "    <mxGraphModel dx=\"1024\" dy=\"768\" grid=\"1\" "
-                "gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" "
-                "arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" "
-                "pageWidth=\"1169\" pageHeight=\"827\" math=\"0\" shadow=\"0\">\n"
-                "      <root>\n"
-                "        <mxCell id=\"0\"/>\n"
-                "        <mxCell id=\"1\" parent=\"0\"/>\n"
-                "      </root>\n"
-                "    </mxGraphModel>\n"
-                "  </diagram>\n"
-                "</mxfile>\n"))
-      (message "📊 Ouverture de %s dans draw.io..." (file-name-nondirectory filepath))
-      (metal-dashboard--open-in-drawio filepath))))
+;; (defun metal-dashboard-new-drawio ()
+;;   "Créer un diagramme draw.io et l'ouvrir dans draw.io (Desktop ou web)."
+;;   (interactive)
+;;   (let* ((treemacs-dir (metal-dashboard--treemacs-selected-dir))
+;;          (default-dir (or treemacs-dir
+;;                           (file-name-as-directory
+;;                            (expand-file-name "~/Documents/")))))
+;;     (metal-dashboard--new-file-popup
+;;      ".drawio"
+;;      "Diagramme draw.io: "
+;;      default-dir
+;;      nil ; pas de template texte standard
+;;      ;; Callback : on écrit le XML minimal puis on ouvre dans draw.io
+;;      (lambda (filepath replace)
+;;        (when (or (not (file-exists-p filepath)) replace)
+;;          (with-temp-file filepath
+;;            (insert "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+;;                    "<mxfile host=\"app.diagrams.net\" modified=\""
+;;                    (format-time-string "%Y-%m-%dT%H:%M:%S")
+;;                    "\" type=\"device\">\n"
+;;                    "  <diagram id=\"diag1\" name=\"Page-1\">\n"
+;;                    "    <mxGraphModel dx=\"1024\" dy=\"768\" grid=\"1\" "
+;;                    "gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" "
+;;                    "arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" "
+;;                    "pageWidth=\"1169\" pageHeight=\"827\" math=\"0\" shadow=\"0\">\n"
+;;                    "      <root>\n"
+;;                    "        <mxCell id=\"0\"/>\n"
+;;                    "        <mxCell id=\"1\" parent=\"0\"/>\n"
+;;                    "      </root>\n"
+;;                    "    </mxGraphModel>\n"
+;;                    "  </diagram>\n"
+;;                    "</mxfile>\n")))
+;;        (message "📊 Ouverture de %s dans draw.io..."
+;;                 (file-name-nondirectory filepath))
+;;        (metal-dashboard--open-in-drawio filepath)))))
 
+(defun metal-dashboard-new-drawio ()
+  "Créer un diagramme draw.io et l'ouvrir dans draw.io."
+  (interactive)
+  (let* ((dir (metal-dashboard--treemacs-selected-dir))
+         (name (string-trim (read-string "Diagramme draw.io: ")))
+         (filepath nil)
+         (replace nil))
+    (when (string-empty-p name)
+      (user-error "Nom de fichier vide"))
+    (when (string-match-p "[/\\]" name)
+      (user-error "Le nom ne doit pas contenir / ou \\"))
+    (when (string-suffix-p ".drawio" name t)
+      (setq name (substring name 0 (- (length name) (length ".drawio")))))
+    (setq filepath (expand-file-name (concat name ".drawio") dir))
+
+    (when (file-exists-p filepath)
+      (let ((choice (read-char-choice
+                     (format "« %s » existe déjà : [r]emplacer, [o]uvrir, [a]nnuler ? "
+                             (file-name-nondirectory filepath))
+                     '(?r ?o ?a))))
+        (pcase choice
+          (?r (setq replace t))
+          (?o (metal-dashboard--open-in-drawio filepath)
+              (cl-return-from metal-dashboard-new-drawio))
+          (?a (message "Annulé.")
+              (cl-return-from metal-dashboard-new-drawio)))))
+
+    (when (or replace (not (file-exists-p filepath)))
+      (with-temp-file filepath
+        (insert
+         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+         "<mxfile host=\"app.diagrams.net\" type=\"device\">\n"
+         "  <diagram id=\"diag1\" name=\"Page-1\">\n"
+         "    <mxGraphModel dx=\"1024\" dy=\"768\" grid=\"1\" gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" pageWidth=\"1169\" pageHeight=\"827\" math=\"0\" shadow=\"0\">\n"
+         "      <root>\n"
+         "        <mxCell id=\"0\"/>\n"
+         "        <mxCell id=\"1\" parent=\"0\"/>\n"
+         "      </root>\n"
+         "    </mxGraphModel>\n"
+         "  </diagram>\n"
+         "</mxfile>\n")))
+
+    (message "Ouverture de %s dans draw.io..."
+             (file-name-nondirectory filepath))
+    (metal-dashboard--open-in-drawio filepath)))
 
 (defun metal-dashboard--open-in-drawio (filepath)
   "Ouvre FILEPATH dans draw.io Desktop ou la version web sur Linux."

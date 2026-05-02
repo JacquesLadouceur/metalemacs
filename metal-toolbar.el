@@ -116,8 +116,25 @@ CHAR peut surcharger le caractère utilisé (défaut : \"|\")."
   (propertize (format " %s " (or char "|"))
               'face 'metal-toolbar-separator-face))
 
+;; (cl-defun metal-toolbar-icon (name &key color
+;;                                    (height metal-toolbar-icon-height)
+;;                                    fallback)
+;;   "Retourne une icône nerd-icons NAME, colorisée.
+;; La famille est détectée automatiquement à partir du préfixe (nf-md-,
+;; nf-fa-, nf-oct-, nf-cod-, etc.).
+
+;; Mots-clés :
+;;   :color    couleur de premier plan (chaîne hex ou nom).
+;;   :height   multiplicateur de taille (défaut `metal-toolbar-icon-height').
+;;   :fallback caractère de repli si nerd-icons est absent."
+;;   (let ((face `(,@(when color `(:foreground ,color)) :height ,height)))
+;;     (if (and (featurep 'nerd-icons) (fboundp 'nerd-icons-mdicon))
+;;         (funcall (metal-toolbar--icon-fn name) name :face face)
+;;       (propertize (or fallback "•") 'face face))))
+
 (cl-defun metal-toolbar-icon (name &key color
                                    (height metal-toolbar-icon-height)
+                                   raise
                                    fallback)
   "Retourne une icône nerd-icons NAME, colorisée.
 La famille est détectée automatiquement à partir du préfixe (nf-md-,
@@ -126,11 +143,15 @@ nf-fa-, nf-oct-, nf-cod-, etc.).
 Mots-clés :
   :color    couleur de premier plan (chaîne hex ou nom).
   :height   multiplicateur de taille (défaut `metal-toolbar-icon-height').
+  :raise    décalage vertical (négatif = vers le bas, défaut nil).
   :fallback caractère de repli si nerd-icons est absent."
-  (let ((face `(,@(when color `(:foreground ,color)) :height ,height)))
-    (if (and (featurep 'nerd-icons) (fboundp 'nerd-icons-mdicon))
-        (funcall (metal-toolbar--icon-fn name) name :face face)
-      (propertize (or fallback "•") 'face face))))
+  (let* ((face `(,@(when color `(:foreground ,color)) :height ,height))
+         (icon (if (and (featurep 'nerd-icons) (fboundp 'nerd-icons-mdicon))
+                   (funcall (metal-toolbar--icon-fn name) name :face face)
+                 (propertize (or fallback "•") 'face face))))
+    (if raise
+        (propertize icon 'display `((raise ,raise)))
+      icon)))
 
 (defun metal-toolbar-button (icon tooltip command)
   "Construit un bouton cliquable pour la header-line.
