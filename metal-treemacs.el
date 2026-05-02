@@ -219,8 +219,8 @@ Retourne le chemin du fichier installé, ou nil en cas d'échec."
   ;; U+E000–U+F8FF et U+F0000–U+FFFFF) même si la fonte est installée :
   ;; il les rend comme des boîtes hexadécimales de secours.
   (when (find-font (font-spec :family "Hack Nerd Font Mono"))
-    (set-fontset-font t '(#xe000 . #xf8ff)   "Hack Nerd Font Mono" nil 'append)
-    (set-fontset-font t '(#xf0000 . #xfffff) "Hack Nerd Font Mono" nil 'append)))
+    (set-fontset-font t '(#xe000 . #xf8ff)   "Hack Nerd Font Mono" nil 'prepend)
+    (set-fontset-font t '(#xf0000 . #xfffff) "Hack Nerd Font Mono" nil 'prepend)))
 
 ;; ─── Garde-fou : appliquer le mapping fontset hors du :config ───
 ;; Le :config de use-package peut être mis en cache par straight.el et ne
@@ -228,8 +228,8 @@ Retourne le chemin du fichier installé, ou nil en cas d'échec."
 ;; pour garantir son application. C'est idempotent — si le :config a déjà
 ;; appliqué le mapping, ce second appel n'a aucun effet visible.
 (when (find-font (font-spec :family "Hack Nerd Font Mono"))
-  (set-fontset-font t '(#xe000 . #xf8ff)   "Hack Nerd Font Mono" nil 'append)
-  (set-fontset-font t '(#xf0000 . #xfffff) "Hack Nerd Font Mono" nil 'append))
+  (set-fontset-font t '(#xe000 . #xf8ff)   "Hack Nerd Font Mono" nil 'prepend)
+  (set-fontset-font t '(#xf0000 . #xfffff) "Hack Nerd Font Mono" nil 'prepend))
 
 (use-package treemacs-nerd-icons
   :straight t
