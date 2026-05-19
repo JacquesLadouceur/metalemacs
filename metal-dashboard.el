@@ -31,30 +31,217 @@
   (expand-file-name "quarto/" user-emacs-directory)
   "Dossier source contenant les ressources Quarto.")
 
-(defcustom metal-dashboard-notes-file
-  (expand-file-name "~/Documents/MetalEmacs/notes.org")
-  "Fichier des notes rapides ouvert par le bouton « Notes » du tableau de bord.
+(defcustom metal-dashboard-notes-dir
+  (expand-file-name "~/Documents/MetalEmacs/Notes/")
+  "Dossier des notes rapides ouvert par le bouton « Notes rapides » du tableau de bord.
 
 Placé dans ~/Documents/MetalEmacs/ plutôt que dans `user-emacs-directory'
 pour survivre aux mises à jour de MetalEmacs (le dossier .emacs.d peut
 être écrasé par la distribution, effaçant son contenu utilisateur)."
-  :type 'file
+  :type 'directory
+  :group 'metal-dashboard)
+
+(defcustom metal-dashboard-notes-tri 'date
+  "Critère de tri par défaut dans le buffer « Notes rapides ».
+Valeurs possibles :
+  - `date' : par date de modification, plus récente en premier
+  - `nom'  : par ordre alphabétique du nom de fichier"
+  :type '(choice (const :tag "Par date" date)
+                 (const :tag "Par nom" nom))
   :group 'metal-dashboard)
 
 (defun metal-dashboard--migrer-notes-si-besoin ()
-  "Déplacer `notes.org' de ~/.emacs.d/ vers `metal-dashboard-notes-file'.
-Migration unique pour les utilisateurs qui avaient l'ancien emplacement.
-Si le nouveau fichier existe déjà, ne fait rien (pour éviter d'écraser)."
-  (let ((ancien (expand-file-name "notes.org" user-emacs-directory))
-        (nouveau metal-dashboard-notes-file))
-    (when (and (file-exists-p ancien)
-               (not (file-exists-p nouveau)))
-      (make-directory (file-name-directory nouveau) t)
-      (rename-file ancien nouveau)
-      (message "📝 notes.org déplacé : %s → %s" ancien nouveau))))
+  "Déplacer l'ancien `notes.org' vers le nouveau dossier `metal-dashboard-notes-dir'.
+Migration unique pour les utilisateurs qui avaient l'ancien emplacement
+(fichier unique). Le fichier est déplacé tel quel comme une note parmi
+d'autres."
+  (let* ((ancien-emacs-d (expand-file-name "notes.org" user-emacs-directory))
+         (ancien-documents (expand-file-name "~/Documents/MetalEmacs/notes.org"))
+         (nouveau-dir metal-dashboard-notes-dir)
+         (cible (expand-file-name "notes.org" nouveau-dir)))
+    ;; Migrer depuis ~/.emacs.d/notes.org
+    (when (and (file-exists-p ancien-emacs-d)
+               (not (file-exists-p cible)))
+      (make-directory nouveau-dir t)
+      (rename-file ancien-emacs-d cible)
+      (message "📝 notes.org déplacé : %s → %s" ancien-emacs-d cible))
+    ;; Migrer depuis ~/Documents/MetalEmacs/notes.org (fichier unique
+    ;; à côté du nouveau dossier)
+    (when (and (file-exists-p ancien-documents)
+               (not (file-equal-p ancien-documents cible))
+               (not (file-exists-p cible)))
+      (make-directory nouveau-dir t)
+      (rename-file ancien-documents cible)
+      (message "📝 notes.org déplacé : %s → %s" ancien-documents cible))))
 
 ;; Exécuter la migration au chargement du module
 (metal-dashboard--migrer-notes-si-besoin)
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Notes rapides : buffer dédié pour gérer plusieurs notes
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defun metal-dashboard--notes-format-date-relative (mtime)
+  "Convertir un temps de modification MTIME en chaîne relative en français.
+Renvoie par exemple « il y a 2 heures », « hier », « il y a 3 jours »."
+  (let* ((maintenant (float-time))
+         (diff (- maintenant (float-time mtime)))
+         (minutes (/ diff 60))
+         (heures (/ minutes 60))
+         (jours (/ heures 24)))
+    (cond
+     ((< diff 60)
+      "à l'instant")
+     ((< minutes 60)
+      (format "il y a %d minute%s"
+              (floor minutes)
+              (if (>= minutes 2) "s" "")))
+     ((< heures 2)
+      "il y a une heure")
+     ((< heures 24)
+      (format "il y a %d heures" (floor heures)))
+     ((< jours 2)
+      "hier")
+     ((< jours 7)
+      (format "il y a %d jours" (floor jours)))
+     ((< jours 30)
+      (format "il y a %d semaines" (floor (/ jours 7))))
+     ((< jours 365)
+      (format "il y a %d mois" (floor (/ jours 30))))
+     (t
+      (format "il y a %d ans" (floor (/ jours 365)))))))
+
+(defun metal-dashboard--notes-creer-template (filepath)
+  "Insérer un en-tête Org standard dans le fichier FILEPATH nouvellement créé.
+Le titre est dérivé du nom de fichier (sans extension)."
+  (let ((titre (file-name-base filepath)))
+    (insert (format "#+TITLE: %s\n" titre)
+            "#+OPTIONS: toc:nil num:nil date:nil author:nil\n"
+            "#+OUTPUT_TYPE: document\n"
+            "#+LATEX_CLASS: article\n"
+            "#+LATEX_HEADER: \\usepackage[margin=1in]{geometry}\n\n")))
+
+(defun metal-dashboard--notes-creer-nouvelle ()
+  "Demander un nom de note et la créer dans `metal-dashboard-notes-dir'.
+Si l'utilisateur n'a pas tapé l'extension .org, elle est ajoutée
+automatiquement. Si le fichier existe déjà, il est simplement ouvert."
+  (interactive)
+  (let* ((nom (read-string "Nom de la nouvelle note : "))
+         (nom-avec-ext (if (string-suffix-p ".org" nom)
+                           nom
+                         (concat nom ".org")))
+         (filepath (expand-file-name nom-avec-ext
+                                     metal-dashboard-notes-dir))
+         (nouveau (not (file-exists-p filepath))))
+    (when (string-empty-p nom)
+      (user-error "Nom de note vide"))
+    (find-file filepath)
+    (when (and nouveau (= (buffer-size) 0))
+      (metal-dashboard--notes-creer-template filepath)
+      (save-buffer))))
+
+(defun metal-dashboard--notes-liste-fichiers ()
+  "Retourner la liste des fichiers .org du dossier des notes rapides.
+Chaque élément est un cons (FILEPATH . MTIME) où MTIME est le
+moment de la dernière modification."
+  (let ((dir metal-dashboard-notes-dir))
+    (when (file-directory-p dir)
+      (mapcar (lambda (f)
+                (cons f (file-attribute-modification-time
+                         (file-attributes f))))
+              (directory-files dir t "\\.org\\'" t)))))
+
+(defun metal-dashboard--notes-trier (fichiers critere)
+  "Trier la liste FICHIERS selon CRITERE (`date' ou `nom').
+Pour `date', les plus récents apparaissent en premier."
+  (cond
+   ((eq critere 'nom)
+    (sort fichiers (lambda (a b)
+                     (string< (file-name-nondirectory (car a))
+                              (file-name-nondirectory (car b))))))
+   (t  ; date par défaut
+    (sort fichiers (lambda (a b)
+                     (time-less-p (cdr b) (cdr a)))))))
+
+(defun metal-dashboard--notes-bouton-ouvrir (filepath)
+  "Construire l'action qui ouvre FILEPATH en remplaçant le buffer courant."
+  (lambda (_button)
+    (let ((buffer-notes (current-buffer)))
+      (find-file filepath)
+      (kill-buffer buffer-notes))))
+
+(defun metal-dashboard--notes-bouton-creer ()
+  "Construire l'action qui crée une nouvelle note et remplace le buffer."
+  (lambda (_button)
+    (let ((buffer-notes (current-buffer)))
+      (call-interactively #'metal-dashboard--notes-creer-nouvelle)
+      (when (buffer-live-p buffer-notes)
+        (kill-buffer buffer-notes)))))
+
+(defun metal-dashboard--notes-changer-tri ()
+  "Basculer le critère de tri entre date et nom, puis rafraîchir le buffer."
+  (interactive)
+  (setq metal-dashboard-notes-tri
+        (if (eq metal-dashboard-notes-tri 'date) 'nom 'date))
+  (metal-dashboard-notes-ouvrir))
+
+(defun metal-dashboard-notes-ouvrir ()
+  "Ouvrir le buffer `*Notes rapides*' listant les notes du dossier.
+Si le dossier n'existe pas, le créer. Si aucune note n'existe,
+demander immédiatement un nom pour créer la première."
+  (interactive)
+  (make-directory metal-dashboard-notes-dir t)
+  (let ((fichiers (metal-dashboard--notes-liste-fichiers)))
+    (if (null fichiers)
+        ;; Aucune note : on demande directement un nom.
+        (call-interactively #'metal-dashboard--notes-creer-nouvelle)
+      ;; Au moins une note : afficher le buffer dédié.
+      (let ((buffer (get-buffer-create "*Notes rapides*"))
+            (fichiers-tries (metal-dashboard--notes-trier
+                             fichiers metal-dashboard-notes-tri)))
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            ;; En-tête
+            (insert (propertize "Notes rapides\n"
+                                'face '(:height 1.5 :weight bold)))
+            (insert "\n")
+            ;; Indication de tri + bouton de bascule
+            (insert (format "Tri : %s  "
+                            (if (eq metal-dashboard-notes-tri 'date)
+                                "par date"
+                              "par nom")))
+            (insert-button "[changer le tri]"
+                           'action (lambda (_b)
+                                     (metal-dashboard--notes-changer-tri))
+                           'follow-link t)
+            (insert "\n\n")
+            (insert "Notes existantes :\n\n")
+            ;; Liste des notes
+            (dolist (entree fichiers-tries)
+              (let* ((filepath (car entree))
+                     (mtime (cdr entree))
+                     (nom (file-name-nondirectory filepath))
+                     (date-relative
+                      (metal-dashboard--notes-format-date-relative mtime)))
+                (insert "  ")
+                (insert-button (format "📝 %s" nom)
+                               'action (metal-dashboard--notes-bouton-ouvrir filepath)
+                               'follow-link t
+                               'help-echo (format "Ouvrir %s" filepath))
+                (insert (format "    %s\n" date-relative))))
+            (insert "\n  ")
+            (insert-button "➕ Créer une nouvelle note..."
+                           'action (metal-dashboard--notes-bouton-creer)
+                           'follow-link t
+                           'help-echo "Demander un nom et créer une note")
+            (insert "\n\n")
+            (insert (format "Dossier : %s\n"
+                            (abbreviate-file-name
+                             metal-dashboard-notes-dir))))
+          (setq buffer-read-only t)
+          (goto-char (point-min)))
+        (switch-to-buffer buffer)))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Fonctions auxiliaires
@@ -84,6 +271,45 @@ Si le nouveau fichier existe déjà, ne fait rien (pour éviter d'écraser)."
                                   (funcall action)))
                       'follow-link t
                       'pointer 'hand)))
+
+(defun metal-dashboard--mdicon (name color &optional height fallback v-adjust)
+  "Retourner une icône Material Design stable pour le dashboard."
+  (if (fboundp 'nerd-icons-mdicon)
+      (nerd-icons-mdicon name
+                         :face `(:foreground ,color)
+                         :height (or height 1.2)
+                         :v-adjust (or v-adjust -0.05))
+    (or fallback "")))
+
+(defun metal-dashboard--insert-to-column (column)
+  "Insérer des espaces jusqu'à COLUMN.
+Cette méthode utilise les colonnes texte Emacs plutôt que des pixels.
+Elle est plus stable entre macOS et Windows pour ce dashboard."
+  (let ((column (max 0 column)))
+    (when (> column (current-column))
+      (insert (make-string (- column (current-column)) ? )))))
+
+(defun metal-dashboard--insert-new-file-entry (key icon label action help key-column)
+  "Insérer une entrée de création de fichier à KEY-COLUMN."
+  (metal-dashboard--insert-to-column key-column)
+  (insert (format "[%s] " key))
+  (insert icon)
+  (insert " ")
+  (metal-dashboard--insert-clickable label action help))
+
+(defun metal-dashboard--insert-new-file-row
+    (left-key left-icon left-label left-action left-help
+              right-key right-icon right-label right-action right-help
+              left-key-column right-key-column)
+  "Insérer une ligne à deux colonnes pour la section Nouveaux fichiers."
+  (metal-dashboard--insert-new-file-entry
+   left-key left-icon left-label left-action left-help
+   left-key-column)
+  (metal-dashboard--insert-to-column right-key-column)
+  (metal-dashboard--insert-new-file-entry
+   right-key right-icon right-label right-action right-help
+   right-key-column)
+  (insert "\n"))
 
 (defun metal-dashboard--separator (&optional width)
   "Retourner un séparateur élégant bordeaux de largeur WIDTH."
@@ -187,65 +413,84 @@ Si le nouveau fichier existe déjà, ne fait rien (pour éviter d'écraser)."
 
 (defun metal-dashboard--header-buttons ()
   "Créer la barre de boutons d'en-tête."
-  (let* ((icon-folder (if (fboundp 'nerd-icons-faicon)
-                          (nerd-icons-faicon "nf-fa-folder_open" :face '(:foreground "#8B4513"))
-                        "📁"))
-         (icon-calendar (if (fboundp 'nerd-icons-faicon)
-                            (nerd-icons-faicon "nf-fa-calendar" :face '(:foreground "#006400"))
-                          "📅"))
-         (icon-notes (if (fboundp 'nerd-icons-faicon)
-                         (nerd-icons-faicon "nf-fa-sticky_note" :face '(:foreground "#DAA520"))
-                       "📝"))
-         (icon-signets (if (fboundp 'nerd-icons-faicon)
-                           (nerd-icons-faicon "nf-fa-bookmark" :face '(:foreground "#B22222"))
-                         "🔖"))
-         (icon-news (if (fboundp 'nerd-icons-faicon)
-                        (nerd-icons-faicon "nf-fa-newspaper_o" :face '(:foreground "#4169E1"))
-                      "📰"))
-         (icon-assistant (if (fboundp 'nerd-icons-faicon)
-                             (nerd-icons-faicon "nf-fa-wrench" :face '(:foreground "#FF6600"))
-                           "🔧"))
+  (let* ((icon-folder
+          (if (fboundp 'nerd-icons-mdicon)
+              (nerd-icons-mdicon "nf-md-folder_open"
+                                 :face '(:foreground "#8B4513")
+                                 :height 2.0
+                                 :v-adjust -0.1)
+            "📁"))
+
+         (icon-calendar
+          (if (fboundp 'nerd-icons-mdicon)
+              (nerd-icons-mdicon "nf-md-calendar"
+                                 :face '(:foreground "#006400")
+                                 :height 1.8
+                                 :v-adjust -0.05)
+            "📅"))
+
+         (icon-notes
+          (if (fboundp 'nerd-icons-mdicon)
+              (nerd-icons-mdicon "nf-md-note_text"
+                                 :face '(:foreground "#DAA520")
+                                 :height 1.8
+                                 :v-adjust -0.05)
+            "📝"))
+
+         (icon-signets
+          (if (fboundp 'nerd-icons-mdicon)
+              (nerd-icons-mdicon "nf-md-bookmark"
+                                 :face '(:foreground "#B22222")
+                                 :height 1.5
+                                 :v-adjust -0.05)
+            "🔖"))
+
+         (icon-news
+          (if (fboundp 'nerd-icons-mdicon)
+              (nerd-icons-mdicon "nf-md-newspaper"
+                                 :face '(:foreground "#4169E1")
+                                 :height 1.8
+                                 :v-adjust -0.05)
+            "📰"))
+
+         (icon-assistant
+          (if (fboundp 'nerd-icons-mdicon)
+              (nerd-icons-mdicon "nf-md-wrench"
+                                 :face '(:foreground "#FF6600")
+                                 :height 1.8
+                                 :v-adjust -0.05)
+            "🔧"))
+
          (text-face '(:foreground "#0066cc" :weight bold)))
     (concat
      (metal-dashboard--make-action-button
       (concat icon-folder " " (propertize "METAL" 'face text-face))
       "Ouvrir le guide METAL (PDF)"
-      (lambda () (interactive) 
+      (lambda ()
+        (interactive)
         (find-file (expand-file-name "Metal.pdf" user-emacs-directory))))
      "  "
      (metal-dashboard--make-action-button
       (concat icon-calendar " " (propertize "Calendrier" 'face text-face))
       "Ouvrir le calendrier"
-      (lambda () (interactive) 
+      (lambda ()
+        (interactive)
         (if (fboundp 'metal-calendrier-ouvrir)
             (metal-calendrier-ouvrir)
           (calendar))))
      "  "
-     ;; (metal-dashboard--make-action-button
-     ;;  (concat icon-notes " " (propertize "Notes" 'face text-face))
-     ;;  "Ouvrir les notes rapides"
-     ;;  (lambda () (interactive) 
-     ;;    (find-file (expand-file-name "notes.org" user-emacs-directory))))
      (metal-dashboard--make-action-button
-      (concat icon-notes " " (propertize "Notes" 'face text-face))
+      (concat icon-notes " " (propertize "Notes rapides" 'face text-face))
       "Ouvrir les notes rapides"
-      (lambda () (interactive)
-       (let ((filepath metal-dashboard-notes-file))
-        ;; S'assurer que le dossier parent existe (créé au premier usage)
-        (make-directory (file-name-directory filepath) t)
-        (find-file filepath)
-       (when (= (buffer-size) 0)
-       (insert "#+TITLE: Notes\n"
-               "#+OPTIONS: toc:nil num:nil date:nil author:nil\n"
-               "#+OUTPUT_TYPE: document\n"
-               "#+LATEX_CLASS: article\n"
-               "#+LATEX_HEADER: \\usepackage[margin=1in]{geometry}\n\n")
-       (save-buffer)))))
+      (lambda ()
+        (interactive)
+        (metal-dashboard-notes-ouvrir)))
      "  "
      (metal-dashboard--make-action-button
       (concat icon-signets " " (propertize "Signets" 'face text-face))
       "Ouvrir les signets web"
-      (lambda () (interactive)
+      (lambda ()
+        (interactive)
         (if (fboundp 'metal-org-ouvrir-signets)
             (metal-org-ouvrir-signets)
           (find-file (expand-file-name "~/Documents/MetalEmacs/Signets.org")))))
@@ -258,73 +503,20 @@ Si le nouveau fichier existe déjà, ne fait rien (pour éviter d'écraser)."
      (metal-dashboard--make-action-button
       (concat icon-assistant " " (propertize "Assistant" 'face text-face))
       "Ouvrir l'assistant d'installation"
-      (lambda () (interactive) 
+      (lambda ()
+        (interactive)
         (require 'metal-deps nil t)
         (if (fboundp 'metal-deps-afficher-etat)
             (metal-deps-afficher-etat)
-          (message "metal-deps non disponible - vérifiez que le fichier existe")))))))
+          (message "metal-deps non disponible - vérifiez que le fichier existe"))))
+     "  "
+     (if (fboundp 'metal-agent-dashboard-buttons)
+          (or (metal-agent-dashboard-buttons) "")
+       ""))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Fonctions de création de fichiers
 ;;; ═══════════════════════════════════════════════════════════════════
-
-;; (defun metal-dashboard--create-new-file (extension prompt &optional template)
-;;   "Créer un nouveau fichier avec EXTENSION, PROMPT et TEMPLATE optionnel.
-;; Utilise le dossier sélectionné dans Treemacs comme dossier par défaut."
-;;   (cl-block metal-dashboard--create-new-file
-;;     (let* ((treemacs-dir (ignore-errors
-;;                            (when (and (fboundp 'treemacs-get-local-buffer)
-;;                                       (treemacs-get-local-buffer))
-;;                              (with-current-buffer (treemacs-get-local-buffer)
-;;                                (let* ((btn (treemacs-current-button))
-;;                                       (path (when btn (treemacs-button-get btn :path))))
-;;                                  (when path
-;;                                    (if (file-directory-p path)
-;;                                        path
-;;                                      (file-name-directory path))))))))
-;;            (default-dir (or treemacs-dir "~/Documents/"))
-;;            (dir (read-directory-name "Dans quel dossier ? " default-dir))
-;;            (name (read-string prompt))
-;;            (filepath (expand-file-name (concat name extension) dir))
-;;            (replace nil))
-;;       ;; Si le fichier existe, demander quoi faire
-;;       (when (file-exists-p filepath)
-;;         (let ((choice (read-char-choice
-;;                        (format "« %s » existe déjà : [r]emplacer, [o]uvrir, [a]nnuler ? "
-;;                                (file-name-nondirectory filepath))
-;;                        '(?r ?o ?a))))
-;;           (pcase choice
-;;             (?r (setq replace t))
-;;             (?o (find-file filepath)
-;;                 (cl-return-from metal-dashboard--create-new-file))
-;;             (?a (message "Annulé.")
-;;                 (cl-return-from metal-dashboard--create-new-file)))))
-;;       (find-file filepath)
-;;       (when (or (= (buffer-size) 0) replace)
-;;         (erase-buffer)
-;;         (when template
-;;           (insert template)))
-;;       (save-buffer))))
-
-;; (defun metal-dashboard--treemacs-selected-dir ()
-;;   "Retourne le dossier sélectionné dans Treemacs."
-;;   (let* ((buf (and (fboundp 'treemacs-get-local-buffer)
-;;                    (treemacs-get-local-buffer)))
-;;          (win (and (buffer-live-p buf)
-;;                    (get-buffer-window buf t)))
-;;          (pos (and win (window-point win)))
-;;          (path (and pos
-;;                     (with-current-buffer buf
-;;                       (get-text-property pos :path)))))
-;;     (cond
-;;      ((and path (file-directory-p path))
-;;       (file-name-as-directory path))
-;;      ((and path (file-exists-p path))
-;;       (file-name-directory path))
-;;      (t
-;;       nil))))
-
-
 (defun metal-dashboard--treemacs-selected-dir ()
   "Retourne le dossier sélectionné dans Treemacs.
 Si un fichier est sélectionné, retourne son dossier parent.
@@ -399,209 +591,6 @@ Sinon, affiche un message d'erreur."
         (save-buffer)
         (message "Fichier créé : %s" filepath)))))
 
-;; (defun metal-dashboard--treemacs-selected-dir ()
-;;   "Retourne le dossier sélectionné dans la fenêtre Treemacs visible.
-;; Retourne nil si Treemacs n'est pas visible ou si rien n'est sélectionné.
-;; Le chemin retourné se termine toujours par « / »."
-;;   (when (fboundp 'treemacs-get-local-window)
-;;     (let ((win (treemacs-get-local-window)))
-;;       (when (window-live-p win)
-;;         (with-selected-window win
-;;           (let* ((btn (treemacs-current-button))
-;;                  (path (when btn (treemacs-button-get btn :path))))
-;;             (when (and path (stringp path) (file-exists-p path))
-;;               (file-name-as-directory
-;;                (if (file-directory-p path)
-;;                    path
-;;                  (file-name-directory path))))))))))
-
-;; (defun metal-dashboard--create-new-file (extension prompt-title &optional template)
-;;   "Créer un nouveau fichier avec EXTENSION et TEMPLATE optionnel.
-;; PROMPT-TITLE est le titre court affiché dans le popup
-;; \(ex. \"Présentation Quarto\"\).
-;; Le dossier sélectionné dans Treemacs est utilisé comme destination ;
-;; sinon `~/Documents/' par défaut."
-;;   (let* ((treemacs-dir (metal-dashboard--treemacs-selected-dir))
-;;          (default-dir (or treemacs-dir
-;;                           (file-name-as-directory
-;;                            (expand-file-name "~/Documents/")))))
-;;     (metal-dashboard--new-file-popup extension prompt-title default-dir template)))
-
-;; ;;; ───────────────────────────────────────────────────────────────────
-;; ;;; Popup de saisie pour la création de fichier
-;; ;;; ───────────────────────────────────────────────────────────────────
-
-;; (defvar-local metal-dashboard--new-file-input-start nil
-;;   "Marker du début de la zone d'édition dans le popup.")
-
-;; (defvar-local metal-dashboard--new-file-input-end nil
-;;   "Marker de la fin de la zone d'édition dans le popup.")
-
-;; (defvar-local metal-dashboard--new-file-context nil
-;;   "Plist avec :extension :dir :template :on-create :window-config.")
-
-;; (defvar metal-dashboard-new-file-mode-map
-;;   (let ((map (make-sparse-keymap)))
-;;     (define-key map (kbd "RET")      #'metal-dashboard--new-file-confirm)
-;;     (define-key map (kbd "C-c C-c")  #'metal-dashboard--new-file-confirm)
-;;     (define-key map (kbd "C-g")      #'metal-dashboard--new-file-cancel)
-;;     (define-key map (kbd "C-c C-k")  #'metal-dashboard--new-file-cancel)
-;;     (define-key map (kbd "<escape>") #'metal-dashboard--new-file-cancel)
-;;     map)
-;;   "Keymap du popup de création de fichier.")
-
-;; (define-derived-mode metal-dashboard-new-file-mode fundamental-mode
-;;   "Métal-Nouveau"
-;;   "Mode pour la saisie d'un nom de nouveau fichier dans MetalEmacs."
-;;   (setq-local cursor-type 'bar)
-;;   (setq-local truncate-lines t))
-
-;; (defun metal-dashboard--new-file-popup (extension prompt-title default-dir
-;;                                                   &optional template on-create-fn)
-;;   "Affiche un popup pour saisir le nom d'un nouveau fichier.
-;; EXTENSION : ex. \".qmd\".
-;; PROMPT-TITLE : titre affiché en haut du popup.
-;; DEFAULT-DIR : dossier de destination (avec « / » final).
-;; TEMPLATE : contenu initial optionnel pour le fichier.
-;; ON-CREATE-FN : fonction optionnelle (filepath replace) appelée à la place
-;; du flux standard find-file/insert/save (utile pour draw.io)."
-;;   (let ((buf (get-buffer-create "*Nouveau fichier*"))
-;;         (wconf (current-window-configuration)))
-;;     (with-current-buffer buf
-;;       (metal-dashboard-new-file-mode)
-;;       (let ((inhibit-read-only t))
-;;         (erase-buffer)
-;;         ;; ── Titre ──
-;;         (insert "\n")
-;;         (let ((s (point)))
-;;           (insert (format "    📝   %s\n" prompt-title))
-;;           (add-text-properties s (point) '(face (:height 1.3 :weight bold))))
-;;         (insert "\n")
-;;         ;; ── Métadonnées ──
-;;         (let ((s (point)))
-;;           (insert (format "    Dossier  ▸  %s\n"
-;;                           (abbreviate-file-name default-dir)))
-;;           (insert (format "    Type     ▸  Fichier %s\n" extension))
-;;           (add-text-properties s (point) '(face font-lock-doc-face)))
-;;         (insert "\n")
-;;         ;; ── Étiquette de la zone de saisie ──
-;;         (let ((s (point)))
-;;           (insert "    Nom du fichier (sans extension) :\n")
-;;           (add-text-properties s (point) '(face shadow)))
-;;         (insert "\n    ")
-;;         ;; ── Zone d'édition (entre deux markers) ──
-;;         (setq metal-dashboard--new-file-input-start (point-marker))
-;;         (set-marker-insertion-type metal-dashboard--new-file-input-start nil)
-;;         (setq metal-dashboard--new-file-input-end (point-marker))
-;;         (set-marker-insertion-type metal-dashboard--new-file-input-end t)
-;;         (insert "\n\n")
-;;         ;; ── Pied de page ──
-;;         (let ((s (point)))
-;;           (insert "    ─────────────────────────────────────────\n")
-;;           (insert "    [RET] créer    [C-g / Esc] annuler\n")
-;;           (add-text-properties s (point) '(face shadow)))
-;;         ;; ── Verrouiller en-tête et pied de page ──
-;;         (add-text-properties (point-min)
-;;                              metal-dashboard--new-file-input-start
-;;                              '(read-only t front-nonsticky t rear-nonsticky t))
-;;         (add-text-properties metal-dashboard--new-file-input-end
-;;                              (point-max)
-;;                              '(read-only t front-nonsticky t rear-nonsticky t)))
-;;       (setq metal-dashboard--new-file-context
-;;             (list :extension extension
-;;                   :dir default-dir
-;;                   :template template
-;;                   :on-create on-create-fn
-;;                   :window-config wconf))
-;;       (goto-char metal-dashboard--new-file-input-start))
-;;     ;; Afficher en split bas, hauteur fixe
-;;     (let ((win (display-buffer
-;;                 buf
-;;                 '((display-buffer-below-selected)
-;;                   (window-height . 14)
-;;                   (preserve-size . (nil . t))))))
-;;       (when (window-live-p win)
-;;         (select-window win)
-;;         (with-current-buffer buf
-;;           (goto-char metal-dashboard--new-file-input-start))))))
-
-;; (defun metal-dashboard--new-file-confirm ()
-;;   "Valide la saisie et crée le fichier."
-;;   (interactive)
-;;   (let* ((ctx metal-dashboard--new-file-context)
-;;          (extension     (plist-get ctx :extension))
-;;          (dir           (plist-get ctx :dir))
-;;          (template      (plist-get ctx :template))
-;;          (on-create     (plist-get ctx :on-create))
-;;          (wconf         (plist-get ctx :window-config))
-;;          (name (string-trim
-;;                 (buffer-substring-no-properties
-;;                  metal-dashboard--new-file-input-start
-;;                  metal-dashboard--new-file-input-end))))
-;;     (cond
-;;      ((string-empty-p name)
-;;       (message "Veuillez saisir un nom de fichier.")
-;;       (ding))
-;;      (t
-;;       (let* ((filepath (expand-file-name (concat name extension) dir))
-;;              (replace nil)
-;;              (action :create))
-;;         ;; Vérifier l'existence avant de fermer le popup
-;;         (when (file-exists-p filepath)
-;;           (let ((choice (read-char-choice
-;;                          (format "« %s » existe déjà : [r]emplacer, [o]uvrir, [a]nnuler ? "
-;;                                  (file-name-nondirectory filepath))
-;;                          '(?r ?o ?a))))
-;;             (pcase choice
-;;               (?r (setq replace t))
-;;               (?o (setq action :open))
-;;               (?a (setq action :cancel)))))
-;;         ;; Démonter le popup
-;;         (let ((inhibit-read-only t))
-;;           (kill-buffer (current-buffer)))
-;;         (when wconf (set-window-configuration wconf))
-;;         ;; Exécuter l'action
-;;         (pcase action
-;;           (:cancel (message "Annulé."))
-;;           (:open   (find-file filepath))
-;;           (:create
-;;            (cond
-;;             (on-create
-;;              (funcall on-create filepath replace))
-;;             (t
-;;              (find-file filepath)
-;;              (when (or (= (buffer-size) 0) replace)
-;;                (erase-buffer)
-;;                (when template (insert template)))
-;;              (save-buffer))))))))))
-
-;; (defun metal-dashboard--new-file-cancel ()
-;;   "Annule la création et ferme le popup."
-;;   (interactive)
-;;   (let ((wconf (plist-get metal-dashboard--new-file-context :window-config)))
-;;     (let ((inhibit-read-only t))
-;;       (kill-buffer (current-buffer)))
-;;     (when wconf (set-window-configuration wconf))
-;;     (message "Annulé.")))
-
-;; (defun metal-dashboard-new-qmd ()
-;;   "Créer une présentation Quarto."
-;;   (interactive)
-;;   (let* ((template-file (expand-file-name "Modèles/Modèle-Présentation.txt" user-emacs-directory))
-;;          (template (if (file-exists-p template-file)
-;;                        (with-temp-buffer
-;;                          (insert-file-contents template-file)
-;;                          (buffer-string))
-;;                      "---\ntitle: \"Titre\"\nformat:\n  beamer: default\nlang: fr\n---\n\n")))
-;;     (metal-dashboard--create-new-file
-;;      ".qmd"
-;;      "Nom de la présentation (sans extension) : "
-;;      template)
-;;     ;; Copier les ressources Quarto dans le dossier de la présentation
-;;     (when buffer-file-name
-;;       (metal-dashboard--copier-ressources-quarto
-;;        (file-name-directory buffer-file-name)))))
-
 (defun metal-dashboard-new-qmd ()
   "Créer une présentation Quarto."
   (interactive)
@@ -668,42 +657,6 @@ Sinon, affiche un message d'erreur."
     "#+LATEX_HEADER: \\usepackage{listings}\n"
     "#+LATEX_HEADER: \\lstset{basicstyle=\\ttfamily\\small, breaklines=true, frame=single, columns=fullflexible, keepspaces=true, showstringspaces=false}\n"
     "\n")))
-
-;; (defun metal-dashboard-new-drawio ()
-;;   "Créer un diagramme draw.io et l'ouvrir dans draw.io (Desktop ou web)."
-;;   (interactive)
-;;   (let* ((treemacs-dir (metal-dashboard--treemacs-selected-dir))
-;;          (default-dir (or treemacs-dir
-;;                           (file-name-as-directory
-;;                            (expand-file-name "~/Documents/")))))
-;;     (metal-dashboard--new-file-popup
-;;      ".drawio"
-;;      "Diagramme draw.io: "
-;;      default-dir
-;;      nil ; pas de template texte standard
-;;      ;; Callback : on écrit le XML minimal puis on ouvre dans draw.io
-;;      (lambda (filepath replace)
-;;        (when (or (not (file-exists-p filepath)) replace)
-;;          (with-temp-file filepath
-;;            (insert "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-;;                    "<mxfile host=\"app.diagrams.net\" modified=\""
-;;                    (format-time-string "%Y-%m-%dT%H:%M:%S")
-;;                    "\" type=\"device\">\n"
-;;                    "  <diagram id=\"diag1\" name=\"Page-1\">\n"
-;;                    "    <mxGraphModel dx=\"1024\" dy=\"768\" grid=\"1\" "
-;;                    "gridSize=\"10\" guides=\"1\" tooltips=\"1\" connect=\"1\" "
-;;                    "arrows=\"1\" fold=\"1\" page=\"1\" pageScale=\"1\" "
-;;                    "pageWidth=\"1169\" pageHeight=\"827\" math=\"0\" shadow=\"0\">\n"
-;;                    "      <root>\n"
-;;                    "        <mxCell id=\"0\"/>\n"
-;;                    "        <mxCell id=\"1\" parent=\"0\"/>\n"
-;;                    "      </root>\n"
-;;                    "    </mxGraphModel>\n"
-;;                    "  </diagram>\n"
-;;                    "</mxfile>\n")))
-;;        (message "📊 Ouverture de %s dans draw.io..."
-;;                 (file-name-nondirectory filepath))
-;;        (metal-dashboard--open-in-drawio filepath)))))
 
 (defun metal-dashboard-new-drawio ()
   "Créer un diagramme draw.io et l'ouvrir dans draw.io."
@@ -846,51 +799,51 @@ Sinon, affiche un message d'erreur."
       ;; --------------------------------------------------
       (insert "◼ Nouveaux fichiers\n")
 
-      (let* ((icon-presentation (if (fboundp 'nerd-icons-faicon)
-                              (nerd-icons-faicon "nf-fa-file_powerpoint_o" :face '(:foreground "#8B0000"))
-                            "📊"))
-       (icon-document (if (fboundp 'nerd-icons-faicon)
-                          (nerd-icons-faicon "nf-fa-file_text_o" :face '(:foreground "#8B0000"))
-                        "📄"))
-       (icon-python (if (fboundp 'nerd-icons-devicon)
-                        (nerd-icons-devicon "nf-dev-python" :face '(:foreground "#3776AB"))
-                      "🐍"))
-       
-       (icon-prolog (propertize "[]" 'face '(:foreground "#000000")))
-       (icon-org (if (fboundp 'nerd-icons-sucicon)
-                     (nerd-icons-sucicon "nf-custom-orgmode" :face '(:foreground "#77AA99"))
-                   "📓"))
-       (icon-drawio (if (fboundp 'nerd-icons-faicon)
-                        (nerd-icons-faicon "nf-fa-sitemap" :face '(:foreground "#F08705"))
-                      "📊"))
-       (col2-start (max 30 (/ avail-width 2))))
-
-        ;; Ligne 1 : Présentation et Document
-        (let ((start (point)))
-          (insert (format "   [p] %s " icon-presentation))
-          (metal-dashboard--insert-clickable "Présentation QMD" #'metal-dashboard-new-qmd "Créer une présentation Quarto Markdown")
-          (insert (make-string (max 1 (- col2-start (- (point) start))) ? )))
-        (insert (format "[d] %s " icon-document))
-        (metal-dashboard--insert-clickable "Document QMD" #'metal-dashboard-new-qmd-document "Créer un document Quarto Markdown")
-        (insert "\n")
-
-        ;; Ligne 2 : Python et Prolog
-        (let ((start (point)))
-          (insert (format "   [y] %s " icon-python))
-          (metal-dashboard--insert-clickable "Python" #'metal-dashboard-new-python "Créer un fichier Python")
-          (insert (make-string (max 1 (- col2-start (- (point) start))) ? )))
-        (insert (format "[r] %s " icon-prolog))
-        (metal-dashboard--insert-clickable "Prolog" #'metal-dashboard-new-prolog "Créer un fichier Prolog")
-        (insert "\n")
-
-        ;; Ligne 3 : Document Org et Diagramme draw.io
-        (let ((start (point)))
-          (insert (format "   [o] %s " icon-org))
-          (metal-dashboard--insert-clickable "Document ORG" #'metal-dashboard-new-org-document "Créer un document Org-mode")
-          (insert (make-string (max 1 (- col2-start (- (point) start))) ? )))
-        (insert (format "[g] %s " icon-drawio))
-        (metal-dashboard--insert-clickable "Diagramme" #'metal-dashboard-new-drawio "Créer un diagramme draw.io")
-        (insert "\n\n"))
+      (let* ((icon-presentation
+              (metal-dashboard--mdicon "nf-md-file_powerpoint"
+                                       "#8B0000" 1.2 "▣"))
+             (icon-document
+              (metal-dashboard--mdicon "nf-md-file_document_outline"
+                                       "#8B0000" 1.2 "□"))
+             (icon-python
+              (metal-dashboard--mdicon "nf-md-language_python"
+                                       "#3776AB" 1.2 "Py"))
+             (icon-prolog
+              (metal-dashboard--mdicon "nf-md-lambda"
+                                       "#000000" 1.2 "λ"))
+             (icon-org
+              (metal-dashboard--mdicon "nf-md-file_document_edit_outline"
+                                       "#77AA99" 1.2 "Org"))
+             (icon-drawio
+              (metal-dashboard--mdicon "nf-md-sitemap"
+                                       "#F08705" 1.2 "▦"))
+             (left-key-column 3)
+             (right-key-column 42))
+        (metal-dashboard--insert-new-file-row
+         "p" icon-presentation "Présentation QMD"
+         #'metal-dashboard-new-qmd
+         "Créer une présentation Quarto Markdown"
+         "d" icon-document "Document QMD"
+         #'metal-dashboard-new-qmd-document
+         "Créer un document Quarto Markdown"
+         left-key-column right-key-column)
+        (metal-dashboard--insert-new-file-row
+         "y" icon-python "Python"
+         #'metal-dashboard-new-python
+         "Créer un fichier Python"
+         "r" icon-prolog "Prolog"
+         #'metal-dashboard-new-prolog
+         "Créer un fichier Prolog"
+         left-key-column right-key-column)
+        (metal-dashboard--insert-new-file-row
+         "o" icon-org "Document ORG"
+         #'metal-dashboard-new-org-document
+         "Créer un document Org-mode"
+         "g" icon-drawio "Diagramme"
+         #'metal-dashboard-new-drawio
+         "Créer un diagramme draw.io"
+         left-key-column right-key-column)
+        (insert "\n"))
       (insert (metal-dashboard--separator avail-width))
 
       (insert "\n")
@@ -993,9 +946,6 @@ Sinon, affiche un message d'erreur."
 ;;; Démarrage automatique
 ;;; ═══════════════════════════════════════════════════════════════════
 
-;; Ne pas utiliser initial-buffer-choice car il cause des problèmes
-;; Utiliser window-setup-hook à la place
-;; (setq initial-buffer-choice t)  ;; Utilise *scratch* temporairement
 
 (setq initial-buffer-choice
       (lambda ()

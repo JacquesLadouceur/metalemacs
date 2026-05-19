@@ -407,8 +407,8 @@ suivi de blancs ou d'un commentaire %). Ceci exclut les points dans
 
    (metal-toolbar-button
     (metal-prolog--icon "nf-fa-bug" "#FF3B30")
-    "Lancer le débogueur graphique"
-    (lambda () (interactive) (prolog-inferior-send-command "gtrace.")))
+    "Lancer le débogueur (trace)"
+    (lambda () (interactive) (metal-prolog-send-command "trace.")))
 
    (metal-toolbar-button
     (metal-prolog--icon "nf-fa-minus_square_o" "#5AC8FA")
@@ -431,10 +431,13 @@ suivi de blancs ou d'un commentaire %). Ceci exclut les points dans
     "Documentation"
     #'documentation-prolog)
 
-   (metal-toolbar-button
-    (metal-prolog--icon "nf-fa-comments" "#AF52DE")
-    "ChatGPT"
-    #'chatgpt)
+   ;; Extension optionnelle Metal-Agent.
+   ;; IMPORTANT : on protege l'appel avec `ignore-errors' pour ne jamais
+   ;; perdre toute la header-line Prolog si metal-agent.el est absent,
+   ;; incomplet ou en cours de developpement.
+   (or (and (fboundp 'metal-agent-toolbar-buttons)
+            (ignore-errors (metal-agent-toolbar-buttons)))
+       "")
 
    " " (metal-toolbar-vpadding)))
 

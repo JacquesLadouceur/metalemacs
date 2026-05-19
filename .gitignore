@@ -15,6 +15,7 @@ eln-cache/
 **/.yas-compiled-snippets.el
 
 # ---- Caches & état runtime ----
+auto-saves/
 auto-save-list/
 backups/
 recentf

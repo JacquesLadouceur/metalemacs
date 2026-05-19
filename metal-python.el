@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Jacques Ladouceur
 ;; Auteur: Jacques Ladouceur
-;; Version: 1.6.1
+;; Version: 1.6.2
 
 ;;; Commentary:
 ;; Configuration Python pour MetalEmacs :
@@ -412,18 +412,48 @@ Retourne le buffer du shell."
     buf))
 
 (defun metal-python-demarre ()
-  "Démarrer le shell Python (ou le rendre visible s'il existe déjà)."
+  "Redémarrer un shell Python (ou le rendre visible s'il existe déjà)."
   (interactive)
   (metal-python--ensure-shell-visible))
 
+;; (defun metal-python-redemarre ()
+;;   "Redémarrer le shell Python sur un environnement propre.
+;; Si un shell Python est actif, son processus est arrêté et son
+;; buffer détruit avant qu'un nouveau shell ne soit démarré. Toutes
+;; les variables et tous les modules importés dans le shell
+;; précédent sont effacés. L'environnement Conda actif est
+;; réactivé sur le nouveau shell."
+;;   (interactive)
+;;   (let ((buf (metal-python--shell-vivant-p)))
+;;     (when buf
+;;       ;; Arrêter explicitement le processus pour éviter la confirmation
+;;       (let ((proc (get-buffer-process buf)))
+;;         (when proc
+;;           (set-process-query-on-exit-flag proc nil)
+;;           (delete-process proc)))
+;;       ;; Détruire le buffer sans questionner
+;;       (let ((kill-buffer-query-functions nil))
+;;         (kill-buffer buf))
+;;       ;; Petite pause pour laisser Emacs nettoyer
+;;       (sit-for 0.1)))
+;;   ;; Réactiver l'environnement Conda et lancer un shell neuf
+;;   (ignore-errors (conda-env-activate-for-buffer))
+;;   (metal-python--ensure-shell-visible)
+;;   (message "Shell Python redémarré sur un environnement propre."))
+
 (defun metal-python-redemarre ()
-  "Redémarrer le shell Python avec l'environnement Conda actif."
+  "Redémarre la console Python et vide le tampon."
   (interactive)
-  (when-let ((buf (metal-python--shell-vivant-p)))
-    (let ((kill-buffer-query-functions nil))
-      (kill-buffer buf)))
-  (ignore-errors (conda-env-activate-for-buffer))
-  (metal-python--ensure-shell-visible))
+  (when-let ((buffer (get-buffer "*Python*"))
+             (process (get-buffer-process buffer)))
+    (delete-process process))
+  (when (get-buffer "*Python*")
+    (with-current-buffer "*Python*"
+      (let ((inhibit-read-only t))
+        (erase-buffer))))
+  (metal-python-demarre))
+
+
 
 (defun metal-python-execute-cd ()
   "Exécuter le script dans le shell Python en ajustant le dossier de travail."
@@ -488,6 +518,47 @@ plus visuelle, voir `metal-python-deboguer-dape'."
     ;; ligne avec `split-string-and-unquote' qui comprend " mais pas \.
     (pdb (format "%s -m pdb \"%s\"" python-exec buffer-file-name))))
 
+(defun metal-python--buffer-a-un-breakpoint-p ()
+  "Retourne non-nil s'il y a au moins un breakpoint dape dans le buffer courant.
+Sert à décider s'il faut en poser un automatiquement avant de lancer dape.
+Sans aucun breakpoint, le programme s'exécuterait jusqu'à la fin sans
+laisser à l'utilisateur la chance d'inspecter quoi que ce soit, et les
+panneaux dape (locals, stack…) resteraient ouverts à l'écran."
+  (and (featurep 'dape)
+       (boundp 'dape--breakpoints)
+       (cl-some (lambda (bp)
+                  (and (overlayp bp)
+                       (eq (overlay-buffer bp) (current-buffer))))
+                dape--breakpoints)))
+
+(defun metal-python--aller-premiere-ligne-code ()
+  "Placer le point sur la première ligne de code Python exécutable.
+Saute lignes vides, commentaires et — quand c'est détectable — la
+docstring de module en triple-quotes au début du fichier."
+  (goto-char (point-min))
+  (while (and (not (eobp))
+              (or (looking-at-p "[[:space:]]*$")
+                  (looking-at-p "[[:space:]]*#")))
+    (forward-line 1))
+  ;; Docstring de module : sauter le bloc en triple-quotes s'il est là.
+  (when (looking-at "[[:space:]]*\\(\"\"\"\\|'''\\)")
+    (let ((delim (match-string 1)))
+      (goto-char (match-end 0))
+      (when (search-forward delim nil t)
+        (forward-line 1)
+        (while (and (not (eobp))
+                    (or (looking-at-p "[[:space:]]*$")
+                        (looking-at-p "[[:space:]]*#")))
+          (forward-line 1))))))
+
+(defun metal-python--assurer-breakpoint-au-besoin ()
+  "OBSOLÈTE — conservée pour rétro-compatibilité.
+Remplacée par l'option `:stopOnEntry' de debugpy dans
+`metal-python-deboguer-dape', qui est non-destructive (ne touche
+pas à la liste des breakpoints de l'utilisateur)."
+  (require 'dape)
+  nil)
+
 (defun metal-python-deboguer-dape ()
   "Lancer le débogueur visuel DAP (dape) sur le fichier courant.
 Panneaux : variables locales, pile d'appels, watches, breakpoints.
@@ -516,6 +587,14 @@ et retombe sur PDB pour cette session."
                         (dape--config-eval 'debugpy (copy-tree raw-config)))))
       (unless config
         (user-error "Config `debugpy' introuvable dans `dape-configs'"))
+      ;; Si aucun breakpoint n'est défini, demander à debugpy de s'arrêter à
+      ;; la première instruction (option `stopOnEntry'). Ça garantit que la
+      ;; barre de boutons reste visible et utilisable, sans toucher à la
+      ;; liste des breakpoints de l'utilisateur (contrairement à un
+      ;; `dape-breakpoint-toggle' qui risquerait d'en effacer un par erreur).
+      (unless (metal-python--buffer-a-un-breakpoint-p)
+        (setq config (plist-put config :stopOnEntry t))
+        (message "🔴 Arrêt automatique à la première instruction (aucun breakpoint défini)"))
       (dape config)
       ;; On active le header-line juste après (sans attendre `dape-start-hook'
       ;; qui ne tire pas toujours de façon fiable). Les hooks de désactivation
@@ -916,6 +995,27 @@ la largeur de l'écran sur les ordinateurs à faible résolution."
           (setq metal-python--dape-header-saved nil))
         (force-mode-line-update)))))
 
+(defun metal-python--dape-fermer-fenetres ()
+  "Fermer les fenêtres affichant des buffers dape (panneaux info, REPL, shell…).
+Les buffers eux-mêmes restent vivants ; on ne fait que libérer la place
+à l'écran pour le shell Python."
+  (dolist (win (window-list nil 'no-mini))
+    (let ((name (buffer-name (window-buffer win))))
+      (when (and (stringp name)
+                 (or (string-prefix-p "*dape-" name)
+                     (string-prefix-p " *dape-" name)))
+        (ignore-errors (delete-window win))))))
+
+(defun metal-python--dape-cleanup ()
+  "Nettoyer la fin d'une session dape : header, fenêtres, shell.
+Appelée par `dape-quit'/`dape-kill' ou quand le programme se termine
+seul (cas typique : aucun autre breakpoint après le breakpoint initial,
+l'utilisateur clique Continue et le programme va jusqu'au bout).
+Idempotente — peut être appelée plusieurs fois sans dommage."
+  (metal-python--dape-header-desactiver)
+  (metal-python--dape-fermer-fenetres)
+  (metal-python--ensure-shell-visible))
+
 (defun metal-python--dape-header-setup ()
   "Installer les hooks dape pour cacher le header-line à la fin de session.
 L'activation est faite directement dans `metal-python-deboguer-dape' (plus
@@ -942,11 +1042,11 @@ ARGS vient de l'advice sur `dape--update-state'. Sa signature varie
 selon les versions : (CONN STATE) ou (CONN STATE ...). On scanne
 ARGS pour trouver un symbole d'état terminal."
   (when (cl-some (lambda (x) (memq x '(exited terminated))) args)
-    (metal-python--dape-header-desactiver)))
+    (metal-python--dape-cleanup)))
 
 (defun metal-python--dape-header-desactiver-advice (&rest _args)
   "Wrapper pour l'advice — ignore les arguments passés à `dape-quit'/`dape-kill'."
-  (metal-python--dape-header-desactiver))
+  (metal-python--dape-cleanup))
 
 ;;; --- Clic dans la marge pour toggle un breakpoint ---
 
@@ -1097,7 +1197,7 @@ Appelé via `python-mode-hook' et `python-ts-mode-hook'."
 
    (metal-toolbar-button
     (metal-python--icon "nf-fa-refresh" "#007AFF")
-    "Démarrer Python"
+    "Redémarrer Python"
     #'metal-python-redemarre)
 
    (metal-toolbar-separator)
@@ -1121,6 +1221,14 @@ Appelé via `python-mode-hook' et `python-ts-mode-hook'."
     "ChatGPT"
     #'chatgpt)
 
+   ;; Extension optionnelle Metal-Agent / Codex.
+   ;; IMPORTANT : on protege l'appel avec `ignore-errors' pour ne jamais
+   ;; perdre toute la header-line Python si metal-agent.el est absent,
+   ;; incomplet ou en cours de developpement.
+   (or (and (fboundp 'metal-agent-toolbar-buttons)
+            (ignore-errors (metal-agent-toolbar-buttons)))
+       "")
+
    " " (metal-toolbar-vpadding)))
 
 (defun metal-python-header-line ()
@@ -1131,7 +1239,7 @@ Appelé via `python-mode-hook' et `python-ts-mode-hook'."
 ;; Active automatiquement dans tous les buffers Python.
 (add-hook 'python-mode-hook #'metal-python-header-line)
 ;; Si tu utilises python-ts-mode (tree-sitter) :
-;; (add-hook 'python-ts-mode-hook #'metal-python-header-line)
+(add-hook 'python-ts-mode-hook #'metal-python-header-line)
 
 (provide 'metal-python-toolbar)
 ;;; metal-python-toolbar-snippet.el ends here

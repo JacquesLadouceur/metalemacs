@@ -425,11 +425,62 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
 (global-hl-line-mode 1)
 (add-hook 'prog-mode-hook #'hl-line-mode)
 (add-hook 'text-mode-hook #'hl-line-mode)
-(setq
- make-backup-files nil
- auto-save-default nil
- create-lockfiles nil)
 
+;; Sauvegardes Emacs propres et centralisees
+
+;; Backups actifs
+(setq make-backup-files t)
+
+;; Gestion des versions
+(setq version-control t)
+(setq kept-old-versions 2)
+(setq kept-new-versions 10)
+(setq delete-old-versions t)
+
+;; Copier plutot que renommer
+(setq backup-by-copying t)
+
+;; Pas de fichiers .# visibles
+(setq create-lockfiles nil)
+
+;; Auto-save actif (recuperation apres plantage)
+(setq auto-save-default t)
+
+;; Dossier unique pour les backups
+(setq backup-directory-alist
+      `(("." . ,(expand-file-name "backups/" user-emacs-directory))))
+
+;; Dossier unique pour les auto-saves
+(setq auto-save-file-name-transforms
+      `((".*"
+         ,(expand-file-name "auto-saves/" user-emacs-directory)
+         t)))
+
+;; Ne pas sauvegarder les fichiers systeme/cache inutiles
+(setq backup-enable-predicate
+      (lambda (filename)
+        (not
+         (or
+          (string-match-p "/\\.cache/" filename)
+          (string-match-p "treemacs-persist" filename)
+          (string-match-p "recentf" filename)
+          (string-match-p "savehist" filename)
+          (string-match-p "places" filename)
+          (string-match-p "bookmarks" filename)
+          (string-match-p "/straight/" filename)
+          (string-match-p "/eln-cache/" filename)
+          (string-match-p "/url/" filename)
+          (string-match-p "/var/" filename)))))
+
+
+;; Creer automatiquement les dossiers si necessaire
+(make-directory
+ (expand-file-name "backups/" user-emacs-directory)
+ t)
+
+(make-directory
+ (expand-file-name "auto-saves/" user-emacs-directory)
+ t)
 
 (setq-default buffer-file-coding-system 'utf-8)
 (set-selection-coding-system 'utf-8)
@@ -758,8 +809,28 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 ;; Reappliquer apres changement de theme
 (add-hook 'after-load-theme-hook #'metal-setup-fonts)
 
+(defun metal-prefs-save-all-safe ()
+  "Sauvegarde securisee des preferences MetalEmacs."
+  (condition-case err
+      (progn
+        (message "MetalEmacs: sauvegarde des preferences...")
+        (metal-prefs-save-all)
+        (message "MetalEmacs: preferences sauvegardees."))
+    (error
+     (message "MetalEmacs: erreur pendant la sauvegarde des preferences: %S" err))))
+
+(defun metal-prefs-save-all-safe ()
+  "Sauvegarde securisee des preferences MetalEmacs."
+  (condition-case err
+      (progn
+        (message "MetalEmacs: sauvegarde des preferences...")
+        (metal-prefs-save-all)
+        (message "MetalEmacs: preferences sauvegardees."))
+    (error
+     (message "MetalEmacs: erreur pendant la sauvegarde des preferences: %S" err))))
+
 ;; Sauver a la sortie (offset + frame)
-(add-hook 'kill-emacs-hook #'metal-prefs-save-all)
+(add-hook 'kill-emacs-hook #'metal-prefs-save-all-safe)
 
 ;; Optionnel: sauvegarder aussi quand Emacs perd le focus
 (add-hook 'focus-out-hook #'metal-prefs-save-all)
@@ -1116,166 +1187,6 @@ Finalement, si c'est le dernier onglet d'une fenêtre,la fenêtre est fermée av
     (replace-string "\n" (concat "\n" indent))
     (widen)))
 
-;; (use-package buffer-move
-;;   :config
-;;      (setq buffer-move-behavior 'move)
-;; )
-
-
-;; (defun metal-buf-move-advice (orig-fn &rest args)
-;;   "Après un `buf-move-*', ferme la fenêtre source si le buffer déplacé
-;; était le seul jamais affiché dans cette fenêtre."
-;;   (let* ((source-window (selected-window))
-;;          (source-buffer (window-buffer source-window))
-;;          (autre-buffer-dans-historique
-;;           (cl-some (lambda (entry)
-;;                      (not (eq (car entry) source-buffer)))
-;;                    (window-prev-buffers source-window))))
-;;     (apply orig-fn args)
-;;     (when (and (window-live-p source-window)
-;;                (not (eq source-window (selected-window)))
-;;                (not (one-window-p))
-;;                (not autre-buffer-dans-historique))
-;;       (delete-window source-window))))
-
-;; (dolist (fn '(buf-move-up buf-move-down buf-move-left buf-move-right))
-;;   (advice-add fn :around #'metal-buf-move-advice))
-
-;; (global-set-key (kbd "<S-up>")     'buf-move-up)
-;; (global-set-key (kbd "<S-down>")   'buf-move-down)
-;; (global-set-key (kbd "<S-left>")   'buf-move-left)
-;; (global-set-key (kbd "<S-right>")  'buf-move-right)
-
-;; Version 2
-
-;; (require 'cl-lib)
-;; (require 'windmove)
-
-;; (defun metal-buf-move--usable-window (direction)
-;;   "Retourne la fenêtre dans DIRECTION, ou nil s'il n'y en a pas
-;; d'exploitable. Exclut minibuffer, fenêtres latérales et dédiées."
-;;   (let ((win (condition-case nil
-;;                  (windmove-find-other-window direction)
-;;                (error nil))))
-;;     (and win
-;;          (window-live-p win)
-;;          (not (window-minibuffer-p win))
-;;          (not (window-parameter win 'window-side))
-;;          (not (window-dedicated-p win))
-;;          win)))
-
-;; (defun metal-buf-move--pick-main-window ()
-;;   "Retourne une fenêtre 'main' (ni side, ni dédiée, ni minibuffer).
-;; À appeler après un `delete-window' pour garantir qu'on ne splitte
-;; pas une side-window comme Treemacs."
-;;   (cl-find-if (lambda (w)
-;;                 (and (not (window-parameter w 'window-side))
-;;                      (not (window-dedicated-p w))
-;;                      (not (window-minibuffer-p w))))
-;;               (window-list nil 'no-minibuf)))
-
-;; (defun metal-buf-move--vacate-source (source-window source-buffer)
-;;   "Affiche un buffer autre que SOURCE-BUFFER dans SOURCE-WINDOW.
-;; Préfère le buffer le plus récemment affiché dans cette fenêtre,
-;; en ignorant les buffers tués."
-;;   (let* ((prev (cl-find-if (lambda (entry)
-;;                              (let ((buf (car entry)))
-;;                                (and (buffer-live-p buf)
-;;                                     (not (eq buf source-buffer)))))
-;;                            (window-prev-buffers source-window)))
-;;          (replacement (or (and prev (car prev))
-;;                           (other-buffer source-buffer t))))
-;;     (when (or (null replacement)
-;;               (not (buffer-live-p replacement))
-;;               (eq replacement source-buffer))
-;;       (setq replacement (get-buffer-create "*scratch*")))
-;;     (set-window-buffer source-window replacement)))
-
-;; (defun metal-buf-move--forget-buffer (window buffer)
-;;   "Retire BUFFER de l'historique (prev et next) de WINDOW."
-;;   (set-window-prev-buffers
-;;    window
-;;    (cl-remove-if (lambda (entry) (eq (car entry) buffer))
-;;                  (window-prev-buffers window)))
-;;   (set-window-next-buffers
-;;    window
-;;    (remq buffer (window-next-buffers window))))
-
-;; (defun metal-buf-move--clear-history (window)
-;;   "Efface complètement l'historique de WINDOW.
-;; À utiliser sur une fenêtre fraîchement créée dont l'historique
-;; hérité de la fenêtre parente ne reflète pas la réalité."
-;;   (set-window-prev-buffers window nil)
-;;   (set-window-next-buffers window nil))
-
-;; (defun metal-buf-move (direction-windmove direction-split)
-;;   "Déplace le buffer courant vers la fenêtre en DIRECTION-WINDMOVE.
-
-;; S'il n'y a pas de fenêtre cible exploitable (side-windows,
-;; minibuffer et fenêtres dédiées sont exclus) :
-;; - si la source ne contient que ce buffer et qu'il y a d'autres
-;;   fenêtres main, on supprime la source puis on splitte une
-;;   fenêtre main dans la direction voulue ;
-;; - sinon on splitte la source dans la direction.
-
-;; S'il y a une cible, on y déplace le buffer et on ferme la source
-;; si ce buffer était le seul jamais affiché dans la source. Le
-;; buffer est retiré de l'historique de la source pour éviter les
-;; onglets fantômes (tab-line, centaur-tabs basés sur
-;; `window-prev-buffers')."
-;;   (let* ((source-window (selected-window))
-;;          (source-buffer (window-buffer source-window))
-;;          (target-window (metal-buf-move--usable-window direction-windmove))
-;;          (autre-buffer-dans-historique
-;;           (cl-some (lambda (entry)
-;;                      (let ((buf (car entry)))
-;;                        (and (buffer-live-p buf)
-;;                             (not (eq buf source-buffer)))))
-;;                    (window-prev-buffers source-window))))
-;;     (cond
-;;      ;; Cas 1 : aucune fenêtre cible -> création
-;;      ((null target-window)
-;;       (cond
-;;        ;; 1a : source a d'autres buffers OU c'est la seule fenêtre
-;;        ((or (one-window-p) autre-buffer-dans-historique)
-;;         (let ((new-window (split-window source-window nil direction-split)))
-;;           (set-window-buffer new-window source-buffer)
-;;           (metal-buf-move--clear-history new-window)
-;;           (metal-buf-move--vacate-source source-window source-buffer)
-;;           (metal-buf-move--forget-buffer source-window source-buffer)
-;;           (select-window new-window)))
-;;        ;; 1b : source n'a que ce buffer et d'autres fenêtres existent
-;;        (t
-;;         (delete-window source-window)
-;;         ;; Après delete-window, Emacs peut sélectionner une side-window
-;;         ;; (Treemacs). On bascule sur une fenêtre main avant de splitter.
-;;         (let ((anchor (or (metal-buf-move--pick-main-window)
-;;                           (selected-window))))
-;;           (select-window anchor)
-;;           (let ((new-window (split-window anchor nil direction-split)))
-;;             (set-window-buffer new-window source-buffer)
-;;             (metal-buf-move--clear-history new-window)
-;;             (select-window new-window))))))
-;;      ;; Cas 2 : fenêtre cible existante
-;;      (t
-;;       (set-window-buffer target-window source-buffer)
-;;       (metal-buf-move--vacate-source source-window source-buffer)
-;;       (metal-buf-move--forget-buffer source-window source-buffer)
-;;       (select-window target-window)
-;;       (when (and (window-live-p source-window)
-;;                  (not (one-window-p))
-;;                  (not autre-buffer-dans-historique))
-;;         (delete-window source-window))))))
-
-;; (defun metal-buf-move-up ()    (interactive) (metal-buf-move 'up    'above))
-;; (defun metal-buf-move-down ()  (interactive) (metal-buf-move 'down  'below))
-;; (defun metal-buf-move-left ()  (interactive) (metal-buf-move 'left  'left))
-;; (defun metal-buf-move-right () (interactive) (metal-buf-move 'right 'right))
-
-;; (global-set-key (kbd "<S-up>")    #'metal-buf-move-up)
-;; (global-set-key (kbd "<S-down>")  #'metal-buf-move-down)
-;; (global-set-key (kbd "<S-left>")  #'metal-buf-move-left)
-;; (global-set-key (kbd "<S-right>") #'metal-buf-move-right)
 
 
 (require 'cl-lib)
@@ -1642,6 +1553,15 @@ Raccourci Treemacs : M (Shift+M)"
   (append mode-line-format
           '((:eval (modeline-bouton-systeme)))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Ouverture des fichiers dired dans la même fenêtre
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(with-eval-after-load 'dired
+  ;; Le clic du milieu (mouse-2) ouvre dans la même fenêtre
+  ;; au lieu d'ouvrir dans une autre fenêtre.
+  (define-key dired-mode-map [mouse-2] #'dired-mouse-find-file)
+  ;; Idem pour le double-clic gauche.
+  (define-key dired-mode-map [double-mouse-1] #'dired-mouse-find-file))
 
 ;; *******************************************
 ;;  Wikitionnaire
@@ -2062,6 +1982,10 @@ Raccourci Treemacs : M (Shift+M)"
 (require 'metal-quarto)
 (require 'metal-pdf)
 (require 'metal-git)
+
+(let ((file (expand-file-name "metal-agent.el" user-emacs-directory)))
+  (when (file-exists-p file)
+    (load file)))
 
 (server-start)
 

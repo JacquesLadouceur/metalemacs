@@ -127,42 +127,6 @@ après un court délai.  Les erreurs sont capturées et affichées."
        (run-with-timer 2 nil #'metal-deps-afficher-etat)))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
-;;; Affichage des buffers d'installation
-;;; ═══════════════════════════════════════════════════════════════════
-
-(defun metal-deps--afficher-buffer-install (buf-name)
-  "Affiche BUF-NAME comme buffer d'installation avec onglet visible.
-- L'onglet apparaît dans la tab-line (avec le × pour fermer).
-- Le buffer s'ouvre dans une nouvelle fenêtre en bas, fermable proprement
-  via `q', `C-x 0', ou `C-x k' (sans laisser de doublon)."
-  (when (buffer-live-p (get-buffer buf-name))
-    (with-current-buffer buf-name
-      ;; Forcer l'inclusion dans la tab-line (par défaut les buffers en
-      ;; *étoiles* sont exclus). Une fois fait, l'onglet apparaît avec son
-      ;; bouton × pour fermer comme les autres onglets.
-      (setq-local tab-line-exclude nil)
-      (when (fboundp 'tab-line-mode)
-        (tab-line-mode 1))))
-  (let ((win (display-buffer
-              buf-name
-              '((display-buffer-in-side-window)
-                (side . bottom)
-                (slot . 0)
-                (window-height . 0.3)
-                (preserve-size . (nil . t))))))
-    (when (and win (buffer-live-p (get-buffer buf-name)))
-      (with-current-buffer buf-name
-        (local-set-key (kbd "q") #'quit-window)
-        (add-hook 'kill-buffer-hook
-                  (lambda ()
-                    (let ((w (get-buffer-window (current-buffer))))
-                      (when (and (window-live-p w)
-                                 (window-parameter w 'window-side))
-                        (delete-window w))))
-                  nil t)))
-    win))
-
-;;; ═══════════════════════════════════════════════════════════════════
 ;;; File d'attente séquentielle pour installations asynchrones
 ;;; ═══════════════════════════════════════════════════════════════════
 
@@ -467,15 +431,6 @@ Cette fonction utilise la même logique que early-init.el."
                               "scoop/apps/miktex/current/texmfs/install/miktex/bin/x64"
                               (or (getenv "HOME") (getenv "USERPROFILE")))))
              (file-exists-p (expand-file-name "xelatex.exe" miktex-bin))))))
-
-(defun metal-deps--sumatrapdf-present-p ()
-  "Retourne t si SumatraPDF est installé (Windows uniquement)."
-  (and (eq system-type 'windows-nt)
-       (or (executable-find "SumatraPDF")
-           (executable-find "sumatrapdf")
-           (file-exists-p (expand-file-name
-                           "scoop/apps/sumatrapdf/current/SumatraPDF.exe"
-                           (or (getenv "HOME") (getenv "USERPROFILE")))))))
 
 (defun metal-deps--drawio-present-p ()
   "Retourne t si draw.io Desktop est installé."
@@ -1020,7 +975,7 @@ Ouvre un sélecteur de fichiers pour choisir le .deb."
                  (message "✅ draw.io installé avec succès")
                  (run-with-timer 1 nil #'metal-deps-afficher-etat))
              (message "❌ Erreur lors de l'installation de draw.io. Voir %s" buf-name)))))
-      (metal-deps--afficher-buffer-install buf-name))))
+      (display-buffer buf-name))))
 
 (defun metal-deps-installer-drawio ()
   "Installe draw.io Desktop."
@@ -1157,7 +1112,7 @@ dans les fichiers de projet."
                  (metal-deps--configurer-chemin-miktex)
                  (message "✅ MiKTeX installé et configuré (auto-installation des paquets activée)"))
              (message "❌ Erreur lors de l'installation de MiKTeX. Voir %s" buf-name)))))
-      (metal-deps--afficher-buffer-install buf-name))))
+      (display-buffer buf-name))))
 
 (defun metal-deps--configurer-chemin-miktex ()
   "Ajoute MiKTeX au PATH d'Emacs si installé via Scoop."
@@ -1181,56 +1136,6 @@ dans les fichiers de projet."
       (if (metal-deps--scoop-present-p)
           (async-shell-command "scoop uninstall miktex" "*MiKTeX Uninstall*")
         (message "MiKTeX installé à l'extérieur de Scoop. Désinstallez manuellement.")))))
-
-;;; ═══════════════════════════════════════════════════════════════════
-;;; Installateurs - SumatraPDF (Windows)
-;;; ═══════════════════════════════════════════════════════════════════
-
-(defun metal-deps-installer-sumatrapdf ()
-  "Installe SumatraPDF via Scoop (Windows uniquement).
-SumatraPDF est utilisé par `metal-pdf' pour afficher le dialogue
-d'impression natif Windows avec fermeture automatique."
-  (interactive)
-  (unless (eq system-type 'windows-nt)
-    (user-error "SumatraPDF est géré uniquement sur Windows dans MetalEmacs"))
-  (if (metal-deps--sumatrapdf-present-p)
-      (message "✓ SumatraPDF déjà installé")
-    (unless (metal-deps--scoop-present-p)
-      (user-error "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop"))
-    (metal-deps--journaliser "Installation de SumatraPDF")
-    (message "📦 Installation de SumatraPDF via Scoop...")
-    (let ((buf-name "*SumatraPDF Install*"))
-      (set-process-sentinel
-       (start-process-shell-command "sumatrapdf-install" buf-name
-                                    "scoop install sumatrapdf")
-       (lambda (proc _event)
-         (when (eq (process-status proc) 'exit)
-           (if (= (process-exit-status proc) 0)
-               (progn
-                 ;; Ajouter le dossier Scoop au PATH d'Emacs pour que
-                 ;; `executable-find' le trouve immédiatement.
-                 (let ((sumatra-bin (expand-file-name
-                                     "scoop/apps/sumatrapdf/current"
-                                     (or (getenv "HOME") (getenv "USERPROFILE")))))
-                   (when (file-directory-p sumatra-bin)
-                     (add-to-list 'exec-path sumatra-bin)
-                     (setenv "PATH" (concat sumatra-bin ";" (getenv "PATH")))))
-                 (message "✅ SumatraPDF installé (impression PDF native disponible)"))
-             (message "❌ Erreur lors de l'installation de SumatraPDF. Voir %s" buf-name)))))
-      (metal-deps--afficher-buffer-install buf-name))))
-
-(defun metal-deps-desinstaller-sumatrapdf ()
-  "Désinstalle SumatraPDF via Scoop."
-  (interactive)
-  (unless (eq system-type 'windows-nt)
-    (user-error "SumatraPDF est géré uniquement sur Windows dans MetalEmacs"))
-  (if (not (metal-deps--sumatrapdf-present-p))
-      (message "SumatraPDF n'est pas installé")
-    (when (yes-or-no-p "Voulez-vous vraiment désinstaller SumatraPDF ? ")
-      (metal-deps--journaliser "Désinstallation de SumatraPDF")
-      (if (metal-deps--scoop-present-p)
-          (async-shell-command "scoop uninstall sumatrapdf" "*SumatraPDF Uninstall*")
-        (message "SumatraPDF installé à l'extérieur de Scoop. Désinstallez manuellement.")))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Liste des outils
@@ -1300,13 +1205,6 @@ d'impression natif Windows avec fermeture automatique."
      :desinstaller metal-deps-desinstaller-miktex
      :categorie logiciels 
      :windows-seulement t)
-    (:nom "SumatraPDF"
-     :verifier metal-deps--sumatrapdf-present-p
-     :installer metal-deps-installer-sumatrapdf
-     :desinstaller metal-deps-desinstaller-sumatrapdf
-     :categorie logiciels
-     :windows-seulement t
-     :description "Visionneuse PDF (impression native depuis MetalEmacs)")
     (:nom "draw.io" 
      :verifier metal-deps--drawio-present-p
      :installer metal-deps-installer-drawio 

@@ -40,6 +40,11 @@
   :type 'boolean
   :group 'metal-pdf)
 
+(defcustom metal-pdf-icon-height 1.8
+  "Hauteur des icônes de la barre PDF."
+  :type 'number
+  :group 'metal-pdf)
+
 (defcustom metal-pdf-colors
   '((highlight . "#d4a017")    ; jaune surligneur
     (underline . "#2980b9")    ; bleu
@@ -59,11 +64,13 @@
 
 ;;; --- Helpers --------------------------------------------------------------
 
-(defun metal-pdf--icon (name color-key &optional fallback)
+(defun metal-pdf--icon (name color-key &optional fallback raise)
   "Icône nerd-icons NAME colorée selon COLOR-KEY (clé de `metal-pdf-colors')."
   (metal-toolbar-icon name
                       :color (or (alist-get color-key metal-pdf-colors)
                                  "gray40")
+                      :height metal-pdf-icon-height
+                      :raise -0.1
                       :fallback fallback))
 
 ;;; --- Impression -----------------------------------------------------------
@@ -231,25 +238,25 @@ Installer SumatraPDF (~12 Mo) pour résoudre le problème ? "))
    (metal-toolbar-separator)
 
    ;; ----- Note collante -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-note_edit_outline" 'note "✉")
+   (metal-toolbar-button (metal-pdf--icon "nf-md-note_edit_outline" 'note "✉" -0.1)
                          "Ajouter une note"
                          'pdf-annot-add-text-annotation)
    (metal-toolbar-separator)
 
    ;; ----- Gestion des annotations -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-format_list_bulleted" 'list "≡")
+   (metal-toolbar-button (metal-pdf--icon "nf-md-format_list_bulleted" 'list "≡" -0.1)
                          "Lister toutes les annotations"
                          'pdf-annot-list-annotations)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-delete_outline" 'delete "✗")
+   (metal-toolbar-button (metal-pdf--icon "nf-md-delete_outline" 'delete "✗" -0.1)
                          "Supprimer une annotation (cliquer dessus)"
                          'pdf-annot-delete)
    (metal-toolbar-separator)
 
    ;; ----- Navigation -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-page_first" 'nav "⏮")
+   (metal-toolbar-button (metal-pdf--icon "nf-md-page_first" 'nav "⏮" -0.1)
                          "Première page"
                          'pdf-view-first-page)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-arrow_left" 'nav "◀")
+   (metal-toolbar-button (metal-pdf--icon "nf-md-arrow_left" 'nav "◀" -0.1)
                          "Page précédente"
                          'pdf-view-previous-page-command)
    (metal-toolbar-button (metal-pdf--icon "nf-md-arrow_right" 'nav "▶")

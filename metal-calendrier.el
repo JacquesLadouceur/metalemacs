@@ -108,19 +108,22 @@
    '(calfw-face-toolbar-button-off ((t :weight bold :inherit default)))
    '(calfw-face-toolbar-button-on ((t :weight bold :inherit default)))))
 
-;; Configuration des holidays français
+;; Configuration des holidays canadiens et québécois
 (setq calendar-holidays
-      '((holiday-fixed 1 1 "Jour de l'an")
-        (holiday-fixed 5 1 "Fête du travail")
-        (holiday-fixed 5 8 "Victoire 1945")
-        (holiday-fixed 7 14 "Fête nationale")
-        (holiday-fixed 8 15 "Assomption")
-        (holiday-fixed 11 1 "Toussaint")
-        (holiday-fixed 11 11 "Armistice 1918")
+      '(;; Jours fériés canadiens fédéraux
+        (holiday-fixed 1 1 "Jour de l'an")
+        (holiday-easter-etc -2 "Vendredi saint")
+        (holiday-fixed 7 1 "Fête du Canada")
+        (holiday-float 9 1 1 "Fête du Travail")
+        (holiday-float 10 1 2 "Action de grâce")
+        (holiday-fixed 11 11 "Jour du Souvenir")
         (holiday-fixed 12 25 "Noël")
+        (holiday-fixed 12 26 "Lendemain de Noël")
+        ;; Jours fériés spécifiques au Québec
         (holiday-easter-etc 1 "Lundi de Pâques")
-        (holiday-easter-etc 39 "Ascension")
-        (holiday-easter-etc 50 "Lundi de Pentecôte")))
+        (holiday-float 5 1 -1 "Journée nationale des patriotes" 25)
+        (holiday-fixed 6 24 "Fête nationale du Québec")
+        (holiday-fixed 9 30 "Journée de la vérité et de la réconciliation")))
 
 ;; Créer le fichier calendrier.org s'il n'existe pas
 (unless (file-exists-p metal-calendrier-fichier-org)

@@ -703,6 +703,14 @@ Si xwidget-webkit est disponible, l'ouvrir dans Emacs, sinon navigateur externe.
     (metal-toolbar-icon "nf-md-clipboard_text_outline" :color "#e67e22" :height 2.0)
     "Aide-mémoire QMD" #'metal-quarto-open-cheatsheet)
 
+   ;; Extension optionnelle Metal-Agent / Codex / Claude.
+   ;; IMPORTANT : on protège l'appel avec `ignore-errors' pour ne jamais
+   ;; perdre toute la header-line Quarto si metal-agent.el est absent,
+   ;; incomplet ou en cours de développement.
+   (or (and (fboundp 'metal-agent-toolbar-buttons)
+            (ignore-errors (metal-agent-toolbar-buttons)))
+       "")
+
    " " (metal-toolbar-vpadding)))
 
 (defun metal-quarto-header-line ()

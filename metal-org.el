@@ -547,24 +547,107 @@ Si aucun texte mis en forme n'est trouvé, ne sélectionne rien."
 ;;  7. CONVERSION LISTE → TABLE ORG
 ;; ============================================================
 
+
+(defun metal-liste-a-table-sep--decouper-cellule (texte largeur)
+  "Découpe TEXTE en une liste de chaînes, chacune ≤ LARGEUR caractères.
+La coupure se fait à la frontière des mots (après un espace).
+Si un mot seul dépasse LARGEUR, il est laissé tel quel sur sa
+propre ligne."
+  (let ((mots (split-string (string-trim texte) "\\s-+" t))
+        (lignes nil)
+        (ligne ""))
+    (dolist (mot mots)
+      (cond
+       ;; Premier mot de la ligne : on le pose.
+       ((string-empty-p ligne)
+        (setq ligne mot))
+       ;; Le mot rentre encore dans la ligne courante.
+       ((<= (+ (length ligne) 1 (length mot)) largeur)
+        (setq ligne (concat ligne " " mot)))
+       ;; Le mot ne rentre plus : on ferme la ligne et on
+       ;; recommence avec le mot courant.
+       (t
+        (push ligne lignes)
+        (setq ligne mot))))
+    (unless (string-empty-p ligne)
+      (push ligne lignes))
+    (nreverse lignes)))
+
 (defun metal-liste-a-table-sep (beg end separator)
-  "Convert the region into an Org table and align it automatically.
-Asks for a SEPARATOR (e.g., \",\" \";\" \"\\t\")."
-  (interactive "r\nsSeparator: ")
+  "Convertit la région en table Org multilignes.
+
+Demande un SEPARATOR (par exemple « , », « ; » ou « \\t »).
+
+Chaque ligne de la région est découpée selon SEPARATOR pour
+produire une rangée de la table. La largeur de chaque colonne
+est calculée automatiquement à partir de la largeur de la
+fenêtre divisée par le nombre de colonnes. Les cellules trop
+longues sont **éclatées sur plusieurs lignes physiques** en
+respectant la frontière des mots. Les autres cellules de la
+même rangée restent vides sur les lignes supplémentaires. Un
+séparateur horizontal `|---|` est inséré entre chaque rangée
+originale pour distinguer visuellement les rangées.
+
+Si le buffer courant n'est pas en `org-mode` (par exemple un
+buffer d'extraction comme `*ITALIQUES*`), la fonction y active
+`org-mode` pour que la table soit alignée correctement."
+  (interactive "r\nsSéparateur : ")
   (let* ((sep (if (string= separator "\\t") "\t" separator))
          (text  (buffer-substring-no-properties beg end))
-         (lines (split-string text "\n" t)))
+         (lignes-source (split-string text "\n" t))
+         (ncols (when lignes-source
+                  (length (split-string (car lignes-source) sep))))
+         ;; Largeur disponible : largeur de la fenêtre moins les
+         ;; caractères de séparation entre cellules.
+         (window-width (window-body-width))
+         (overhead (+ (1+ ncols) (* 2 ncols)))
+         (col-width (max 6 (ceiling (- window-width overhead) ncols))))
     (delete-region beg end)
     (goto-char beg)
-    (dolist (line lines)
-      (let ((cells (split-string line sep)))
-        (insert "|" (mapconcat (lambda (c) (concat " " c " "))
-                               cells "|") "|\n")))
-    (when (or (derived-mode-p 'org-mode)
-              (bound-and-true-p orgtbl-mode))
-      (save-excursion
-        (goto-char beg)
+    (when (and ncols (> ncols 0))
+      ;; Séparateur horizontal initial.
+      (insert "|" (mapconcat (lambda (_) "--") (number-sequence 1 ncols) "+") "|\n")
+      ;; Traiter chaque ligne source : la découper en cellules,
+      ;; éclater chaque cellule longue, puis composer les lignes
+      ;; physiques de la table.
+      (dolist (ligne-source lignes-source)
+        (let* ((cellules (split-string ligne-source sep))
+               ;; Pour chaque cellule, calculer la liste de ses
+               ;; lignes éclatées (1 ou plusieurs selon la
+               ;; longueur).
+               (cellules-eclatees
+                (mapcar (lambda (c)
+                          (metal-liste-a-table-sep--decouper-cellule
+                           c col-width))
+                        cellules))
+               ;; Nombre de lignes physiques nécessaires pour
+               ;; cette rangée (= max sur toutes les cellules).
+               (nb-lignes (apply #'max
+                                 (mapcar #'length cellules-eclatees))))
+          ;; Émettre les nb-lignes lignes physiques.
+          (dotimes (i nb-lignes)
+            (insert "|"
+                    (mapconcat
+                     (lambda (cell-lignes)
+                       (let ((contenu (or (nth i cell-lignes) "")))
+                         (concat " " contenu " ")))
+                     cellules-eclatees
+                     "|")
+                    "|\n"))
+          ;; Séparateur horizontal entre rangées originales.
+          (insert "|" (mapconcat (lambda (_) "--") (number-sequence 1 ncols) "+") "|\n"))))
+    ;; Si le buffer n'est pas en org-mode (typiquement un buffer
+    ;; d'extraction comme *ITALIQUES*), l'activer pour permettre
+    ;; l'alignement de la table.
+    (unless (derived-mode-p 'org-mode)
+      (org-mode))
+    ;; Réaligner la table : se positionner DANS la table.
+    (save-excursion
+      (goto-char beg)
+      (forward-line 1)  ; sauter le premier séparateur horizontal
+      (when (looking-at "|")
         (org-table-align)))))
+
 
 (defun metal-liste-a-table-ncol (beg end n)
   "Convert a plain list (one item per line) in region to an N-column Org table."
@@ -627,20 +710,20 @@ Asks for a SEPARATOR (e.g., \",\" \";\" \"\\t\")."
     (metal-toolbar-icon "nf-md-format_underline" :color "#2980b9")
     "Souligné" #'souligne)
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_strikethrough" :color "#c0392b")
+    (metal-toolbar-icon "nf-md-format_strikethrough" :color "#c0392b" :height 2.0 :raise -0.1)
     "Barré" #'barre)
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-code_tags" :color "#8e44ad")
+    (metal-toolbar-icon "nf-md-code_tags" :color "#8e44ad" :height 2.0 :raise -0.1)
     "Code inline" #'code)
 
    (metal-toolbar-separator)
 
    ;; ----- Production / extraction -----
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-file_pdf_box" :color "#c0392b")
+    (metal-toolbar-icon "nf-md-file_pdf_box" :color "#c0392b" :height 2.0 :raise -0.1)
     "Produire le PDF" #'my/org-compile)
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-text_search" :color "#2980b9")
+    (metal-toolbar-icon "nf-md-text_search" :color "#2980b9" :height 2.0 :raise -0.1)
     "Extraire (gras / italique / souligné / barré)"
     #'my-header-line-menu)
 
@@ -648,14 +731,22 @@ Asks for a SEPARATOR (e.g., \",\" \";\" \"\\t\")."
 
    ;; ----- Référence -----
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-book_open_page_variant" :color "#1e8449")
+    (metal-toolbar-icon "nf-md-book_open_page_variant" :color "#1e8449" :height 2.0 :raise -0.1)
     "Wiktionnaire" #'search-wiktionary)
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-wikipedia" :color "#5d6d7e")
+    (metal-toolbar-icon "nf-md-wikipedia" :color "#5d6d7e" :height 2.0 :raise -0.1)
     "Wikipédia" #'search-wikipedia)
    (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-help_circle_outline" :color "#d68910")
+    (metal-toolbar-icon "nf-md-help_circle_outline" :color "#d68910" :height 2.0 :raise -0.1)
     "Aide-mémoire (orgcard)" #'aide-memoire-org)
+
+   ;; Extension optionnelle Metal-Agent / Codex / Claude.
+   ;; IMPORTANT : on protège l'appel avec `ignore-errors' pour ne jamais
+   ;; perdre toute la header-line Org si metal-agent.el est absent,
+   ;; incomplet ou en cours de développement.
+   (or (and (fboundp 'metal-agent-toolbar-buttons)
+            (ignore-errors (metal-agent-toolbar-buttons)))
+       "")
 
    " " (metal-toolbar-vpadding)))
 

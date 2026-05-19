@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: SwiArrow
+# key: swiarrow
+# --
+\\swiarrow{`yas-selected-text`}
