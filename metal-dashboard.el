@@ -240,6 +240,8 @@ demander immédiatement un nom pour créer la première."
                             (abbreviate-file-name
                              metal-dashboard-notes-dir))))
           (setq buffer-read-only t)
+          (setq-local tab-line-exclude nil)
+          (tab-line-mode 1)
           (goto-char (point-min)))
         (switch-to-buffer buffer)))))
 
