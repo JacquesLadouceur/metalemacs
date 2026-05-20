@@ -100,24 +100,43 @@ Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'
 
 > **Note** : sur Linux/ChromeOS, la touche `Alt` correspond à `M` dans Emacs (par exemple `M-x` = `Alt-x`).
 
-1. Sur Chromebook : activer l'environnement Linux dans **Paramètres → À propos de ChromeOS → Développeurs**
-2. Ouvrir le Terminal et installer les prérequis (un seul copier-coller) :
-   ```bash
-   sudo apt update && sudo apt upgrade -y
-   echo "deb http://deb.debian.org/debian bookworm-backports main" \
-       | sudo tee /etc/apt/sources.list.d/backports.list
-   sudo apt update
-   sudo apt install -y -t bookworm-backports emacs
-   sudo apt install -y git curl fonts-noto fonts-firacode fonts-hack \
-       build-essential libpng-dev zlib1g-dev \
-       libpoppler-glib-dev libpoppler-private-dev
-   ```
+1. **Sur Chromebook seulement** :
+   - Activer Linux dans **Paramètres → À propos de ChromeOS → Développeurs**
+   - Configurer le clavier dans **Paramètres → Appareil → Clavier** :
+     - cocher *Traiter les touches de la rangée supérieure comme touches de fonction* (sinon F1–F12 nécessitent la touche Lanceur)
+     - remapper *Lanceur* sur *Ctrl* (recommandé pour Emacs)
+
+2. Ouvrir le Terminal et installer les prérequis. **Choisir la commande selon la distribution** :
+
+   - **Chromebook / Debian** (Crostini repose sur Debian Bookworm, qui nécessite les *backports*) :
+     ```bash
+     sudo apt update && sudo apt upgrade -y
+     echo "deb http://deb.debian.org/debian bookworm-backports main" \
+         | sudo tee /etc/apt/sources.list.d/backports.list
+     sudo apt update
+     sudo apt install -y -t bookworm-backports emacs
+     sudo apt install -y git curl fonts-noto fonts-firacode fonts-hack \
+         build-essential libpng-dev zlib1g-dev \
+         libpoppler-glib-dev libpoppler-private-dev
+     ```
+
+   - **Ubuntu 24.04+** :
+     ```bash
+     sudo apt update && sudo apt upgrade -y
+     sudo apt install -y emacs git curl fonts-noto fonts-firacode fonts-hack \
+         build-essential libpng-dev zlib1g-dev \
+         libpoppler-glib-dev libpoppler-private-dev
+     ```
+
 3. Cloner MetalEmacs :
    ```bash
    git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
    ```
+
 4. Lancer Emacs depuis le lanceur d'applications
+
 5. **À la question sur la compilation de `pdfinfo`, répondre non.**
+
 6. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :
    - Poppler (si disponible)
    - pdf-tools
