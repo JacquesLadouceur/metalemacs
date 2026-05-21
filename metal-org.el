@@ -869,7 +869,9 @@ Diffère l'affichage du menu via `run-at-time' pour ne pas bloquer le DnD."
                  (list '(300 300) (selected-frame))
                  (list "📎 Classer le signet" (cons "" menu-items)))))
     (when choix
-      (let* ((section (if (equal choix "__new__")
+      (let* ((section (if (eq choix '__new__)   ; symbole, pas chaîne : la
+                                                ; valeur de menu dans la liste
+                                                ; citée reste un symbole
                           (read-string "Nom de la nouvelle section : ")
                         choix))
              (title (read-string "Titre du lien : "
