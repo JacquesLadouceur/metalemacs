@@ -876,12 +876,17 @@ L'argument FRAME est ignore (garde pour compatibilite)."
       :custom
       (pdf-info-epdfinfo-program "~/.emacs.d/pdf-tools/epdfinfo.exe")
       :config
-      (pdf-tools-install)
+      (when (file-executable-p pdf-info-epdfinfo-program)
+        (pdf-tools-install t nil t))
       (setq-default pdf-view-display-size 'fit-width))
   (use-package pdf-tools
     :defer t
     :config
-    (pdf-tools-install)
+    (when (or (executable-find "epdfinfo")
+              (file-executable-p
+               (expand-file-name "straight/build/pdf-tools/epdfinfo"
+                                 user-emacs-directory)))
+      (pdf-tools-install t nil t))
     (setq-default pdf-view-display-size 'fit-width)))
 
 
