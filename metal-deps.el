@@ -859,10 +859,32 @@ Note: Cette fonction est un backup - early-init.el installe Git automatiquement.
       (message "🧹 Nettoyage du dossier de build existant...")
       (delete-directory build-dir t)))
   
+  ;; ;; Configurer les variables d'environnement pour la compilation sur macOS
+  ;; (when (eq system-type 'darwin)
+  ;;   (setenv "PKG_CONFIG_PATH" "/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig")
+  ;;   (setenv "ACLOCAL_PATH" "/opt/homebrew/share/aclocal"))
+
   ;; Configurer les variables d'environnement pour la compilation sur macOS
   (when (eq system-type 'darwin)
-    (setenv "PKG_CONFIG_PATH" "/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig")
-    (setenv "ACLOCAL_PATH" "/opt/homebrew/share/aclocal"))
+    (let* ((brew (metal-deps--chemin-brew))
+           (prefix (cond
+                    ((and brew (string-prefix-p "/opt/" brew)) "/opt/homebrew")
+                    (brew "/usr/local")
+                    (t "/opt/homebrew")))
+           ;; Sur macOS Tahoe arm64, poppler 26+ tire gpgmepp qui dépend
+           ;; transitivement de libgpg-error. Or libgpg-error est keg-only
+           ;; chez brew : son gpg-error.pc n'est PAS dans le PKG_CONFIG_PATH
+           ;; par défaut. Sans ce chemin, autoconf échoue avec
+           ;; « Package 'gpg-error', required by 'gpgmepp', not found ».
+           (pkg-paths (list (format "%s/opt/libgpg-error/lib/pkgconfig" prefix)
+                            (format "%s/lib/pkgconfig" prefix)
+                            (format "%s/share/pkgconfig" prefix)
+                            (getenv "PKG_CONFIG_PATH"))))
+      (setenv "PKG_CONFIG_PATH"
+              (mapconcat #'identity
+                         (delq nil (delete "" pkg-paths))
+                         ":"))
+      (setenv "ACLOCAL_PATH" (format "%s/share/aclocal" prefix))))
   
   ;; Installer pdf-tools
   (message "📦 Installation de pdf-tools...")

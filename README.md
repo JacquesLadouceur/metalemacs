@@ -55,8 +55,7 @@ Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'
    ```
    Si Git n'est pas installé, macOS proposera d'installer les **outils de ligne de commande Xcode** — accepter.
 3. Lancer Emacs (premier démarrage : 5 à 15 minutes pour le téléchargement des paquets)
-4. **À la question sur la compilation de `pdfinfo`, répondre non.**
-5. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer dans l'ordre :
+4. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer dans l'ordre :
    - Homebrew
    - Poppler
    - pdf-tools
@@ -135,9 +134,7 @@ Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'
 
 4. Lancer Emacs depuis le lanceur d'applications
 
-5. **À la question sur la compilation de `pdfinfo`, répondre non.**
-
-6. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :
+5. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer :
    - Poppler (si disponible)
    - pdf-tools
 
