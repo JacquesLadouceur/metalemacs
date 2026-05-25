@@ -137,6 +137,47 @@ Chaque élément est de la forme (NOM . FONCTION).")
 (defvar metal-deps--installation-en-cours nil
   "Non-nil si une installation séquentielle est en cours.")
 
+(defvar metal-deps--sudo-amorce nil
+  "Non-nil si sudo a été amorcé pour la session d'installation en cours.
+Réinitialisé à nil à la fin de chaque installation séquentielle.")
+
+(defun metal-deps--amorcer-sudo ()
+  "Amorce sudo en demandant le mot de passe une seule fois (Linux).
+Le mot de passe est saisi via `read-passwd' qui masque les caractères
+dans le minibuffer, puis envoyé à `sudo -S -v' qui valide l'authen-
+tification et met à jour le timestamp sudo.  Les commandes `sudo apt
+...' suivantes héritent du cache sudo (~15 min par défaut) et ne
+demandent plus rien.
+
+Ne fait rien sur macOS ou Windows.  Ne redemande pas si sudo est déjà
+amorcé pour cette session ou si le timestamp sudo système est encore
+valide."
+  (when (and (eq system-type 'gnu/linux)
+             (executable-find "sudo")
+             (not metal-deps--sudo-amorce))
+    (cond
+     ;; sudo déjà actif au niveau système : pas besoin du mot de passe
+     ((zerop (call-process "sudo" nil nil nil "-n" "-v"))
+      (setq metal-deps--sudo-amorce t)
+      (metal-deps--journaliser "sudo déjà actif (timestamp système valide)"))
+     (t
+      ;; Demander le mot de passe (saisie masquée par read-passwd)
+      (let ((pw (read-passwd
+                 "Mot de passe sudo (saisi une seule fois pour toute l'installation) : ")))
+        (unwind-protect
+            (with-temp-buffer
+              (insert pw "\n")
+              (let ((res (call-process-region
+                          (point-min) (point-max)
+                          "sudo" nil t nil "-S" "-v")))
+                (if (zerop res)
+                    (progn
+                      (setq metal-deps--sudo-amorce t)
+                      (metal-deps--journaliser "sudo amorcé avec succès"))
+                  (user-error "Échec d'authentification sudo"))))
+          ;; Effacer le mot de passe de la mémoire dans tous les cas
+          (clear-string pw)))))))
+
 (defun metal-deps--lancer-file-attente (outils &optional callback)
   "Lance l'installation séquentielle des OUTILS.
 OUTILS est une liste de paires (NOM . FONCTION).
@@ -144,6 +185,9 @@ Chaque installation attend la fin de la précédente avant de démarrer.
 CALLBACK est appelé quand toutes les installations sont terminées."
   (when metal-deps--installation-en-cours
     (user-error "Une installation séquentielle est déjà en cours"))
+  ;; Amorcer sudo sur Linux pour éviter mot de passe affiché en clair
+  ;; dans les buffers async-shell-command (un seul prompt pour toute la file)
+  (metal-deps--amorcer-sudo)
   (setq metal-deps--file-attente (copy-sequence outils))
   (setq metal-deps--installation-en-cours t)
   (metal-deps--journaliser "Début de l'installation séquentielle (%d éléments)"
@@ -163,6 +207,7 @@ la sentinelle du processus en cours appelle cette fonction mais
    ;; File vide — terminé normalement
    ((null metal-deps--file-attente)
     (setq metal-deps--installation-en-cours nil)
+    (setq metal-deps--sudo-amorce nil)
     (metal-deps--journaliser "Installation séquentielle terminée")
     (when callback (funcall callback)))
    ;; Continuer — extraire le prochain élément

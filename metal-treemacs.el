@@ -344,7 +344,15 @@ Retourne le chemin du fichier installé si succès, nil si échec."
         (read-from-minibuffer
          "Appuyez sur Entree pour continuer le demarrage... "))
        (t
-        (message "MetalEmacs : installation de Hack Nerd Font Mono echouee. Consultez *MetalEmacs Journal* pour les details."))))))
+        (message "MetalEmacs : installation de Hack Nerd Font Mono echouee. Consultez *MetalEmacs Journal* pour les details.")))))
+
+  ;; Ajustement de la taille des icones nerd-icons sur Linux et Windows.
+  ;; Sur macOS, la metrique de Hack Nerd Font Mono produit deja la bonne
+  ;; taille.  Sur Linux/Windows, les icones apparaissent plus petites —
+  ;; on compense via le facteur d'echelle officiel du package nerd-icons.
+  ;; Ajuste cette valeur (1.0 = taille naturelle) si necessaire.
+  (when (memq system-type '(gnu/linux windows-nt))
+    (setq nerd-icons-scale-factor 1.3)))
 
 (defun metal-nerd-icons-appliquer-fontset ()
   "Mapper les glyphes Nerd Icons vers Hack Nerd Font Mono."
