@@ -1168,42 +1168,35 @@ Appelé via `python-mode-hook' et `python-ts-mode-hook'."
 
 (require 'metal-toolbar)
 
-;; Ajustement de hauteur d'icône spécifique à Python (Windows compense
-;; un rendu plus gros des nerd-icons sur cette plateforme).
-(defcustom metal-python-icon-height
-  (if (eq system-type 'windows-nt) 0.8 1.2)
-  "Hauteur des icônes de la barre Python."
-  :type 'number
-  :group 'metal-python)
-
-(defun metal-python--icon (name color)
-  "Icône NAME (FontAwesome) colorée avec COLOR pour la barre Python."
-  (metal-toolbar-icon name :color color :height metal-python-icon-height))
+;; Toolbar Python : on utilise les emojis Unicode (via metal-toolbar-emoji)
+;; au lieu des nerd-icons, pour avoir la même mécanique de rendu que la
+;; toolbar Agent/Codex.  Les emojis ont leurs couleurs natives, donc la
+;; signature change : plus de paramètre `color'.
 
 (defun metal-python-toolbar-format ()
-  "Construit la barre d'outils Python."
+  "Construit la barre d'outils Python (emojis Unicode)."
   (concat
    (metal-toolbar-vpadding) " "
 
    (metal-toolbar-button
-    (metal-python--icon "nf-fa-play" "#34C759")
+    (metal-toolbar-emoji "▶️")
     "Exécuter le script"
     #'metal-python-sauvegarde-execute)
 
    (metal-toolbar-button
-    (metal-python--icon "nf-fa-bug" "#FF3B30")
+    (metal-toolbar-emoji "🐛")
     "Lancer le débogueur"
     #'metal-python-deboguer)
 
    (metal-toolbar-button
-    (metal-python--icon "nf-fa-refresh" "#007AFF")
+    (metal-toolbar-emoji "🔄")
     "Redémarrer Python"
     #'metal-python-redemarre)
 
    (metal-toolbar-separator)
 
    (metal-toolbar-button
-    (metal-python--icon "nf-fa-arrows" "#8E8E93")
+    (metal-toolbar-emoji "⬇️➡️")
     (format "Basculer la position du shell Python (actuel : %s)"
             (if (eq metal-python-shell-position-defaut 'bottom)
                 "en bas" "à droite"))
@@ -1212,12 +1205,12 @@ Appelé via `python-mode-hook' et `python-ts-mode-hook'."
    (metal-toolbar-separator)
 
    (metal-toolbar-button
-    (metal-python--icon "nf-fa-list_alt" "#FF9500")
+    (metal-toolbar-emoji "📋")
     "Aide-mémoire"
     #'aide-memoire-python)
 
    (metal-toolbar-button
-    (metal-python--icon "nf-fa-comments" "#AF52DE")
+    (metal-toolbar-emoji "💬")
     "ChatGPT"
     #'chatgpt)
 

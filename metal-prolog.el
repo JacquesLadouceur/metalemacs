@@ -385,40 +385,34 @@ suivi de blancs ou d'un commentaire %). Ceci exclut les points dans
 
 (require 'metal-toolbar)
 
-(defcustom metal-prolog-icon-height
-  (if (eq system-type 'windows-nt) 0.8 1.2)
-  "Hauteur des icônes de la barre Prolog."
-  :type 'number
-  :group 'metal-prolog)
-
-(defun metal-prolog--icon (name color)
-  "Icône NAME (FontAwesome) colorée avec COLOR pour la barre Prolog."
-  (metal-toolbar-icon name :color color :height metal-prolog-icon-height))
+;; Toolbar Prolog : on utilise les emojis Unicode (via metal-toolbar-emoji)
+;; au lieu des nerd-icons, pour avoir la même mécanique de rendu que les
+;; toolbars Python et Agent/Codex.
 
 (defun metal-prolog-toolbar-format ()
-  "Construit la barre d'outils Prolog."
+  "Construit la barre d'outils Prolog (emojis Unicode)."
   (concat
    (metal-toolbar-vpadding) " "
 
    (metal-toolbar-button
-    (metal-prolog--icon "nf-fa-play" "#34C759")
+    (metal-toolbar-emoji "▶️")
     "Consulter le programme"
     #'prolog-save-consult)
 
    (metal-toolbar-button
-    (metal-prolog--icon "nf-fa-bug" "#FF3B30")
+    (metal-toolbar-emoji "🐛")
     "Lancer le débogueur (trace)"
     (lambda () (interactive) (metal-prolog-send-command "trace.")))
 
    (metal-toolbar-button
-    (metal-prolog--icon "nf-fa-minus_square_o" "#5AC8FA")
+    (metal-toolbar-emoji "🪗")
     "Plier / déplier tout"
     #'metal-prolog-basculer-tout)
 
    (metal-toolbar-separator)
 
    (metal-toolbar-button
-    (metal-prolog--icon "nf-fa-arrows" "#8E8E93")
+    (metal-toolbar-emoji "⬇️➡️")
     (format "Basculer la position du shell Prolog (actuel : %s)"
             (if (eq metal-prolog-shell-position-defaut 'bottom)
                 "en bas" "à droite"))
@@ -427,7 +421,7 @@ suivi de blancs ou d'un commentaire %). Ceci exclut les points dans
    (metal-toolbar-separator)
 
    (metal-toolbar-button
-    (metal-prolog--icon "nf-fa-book" "#FF9500")
+    (metal-toolbar-emoji "📖")
     "Documentation"
     #'documentation-prolog)
 

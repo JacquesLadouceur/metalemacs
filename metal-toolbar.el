@@ -56,6 +56,14 @@
   :type 'number
   :group 'metal-toolbar)
 
+(defcustom metal-toolbar-emoji-height 1.6
+  "Hauteur des emojis Unicode dans les barres d'outils.
+Le réglage par défaut (1.6) correspond à celui de la toolbar Agent/Codex.
+Sur Linux, les emojis Noto Color Emoji rendent légèrement plus gros que
+les Apple Color Emoji ; baisser cette valeur (par ex. 1.3) si nécessaire."
+  :type 'number
+  :group 'metal-toolbar)
+
 (defcustom metal-toolbar-vpadding-height 1.7
   "Hauteur du caractère de padding vertical (multiplicateur)."
   :type 'number
@@ -152,6 +160,28 @@ Mots-clés :
     (if raise
         (propertize icon 'display `((raise ,raise)))
       icon)))
+
+(cl-defun metal-toolbar-emoji (emoji &key (height metal-toolbar-emoji-height)
+                                          color raise)
+  "Retourne un EMOJI Unicode propertize pour la header-line.
+Convient aux emojis colorés natifs (▶️ 🐛 🔄 📋 💬 🪄 ✅ ❌ etc.).
+
+Contrairement à `metal-toolbar-icon' qui passe par la famille nerd-icons
+(rendu via Hack Nerd Font Mono à taille fixe en pixels), cette fonction
+utilise le mécanisme `:height' standard d'Emacs, identique à celui de la
+toolbar Agent/Codex.  Tous les modules qui l'utilisent ont donc des
+icônes de taille cohérente sur chaque plateforme.
+
+Mots-clés :
+  :height   multiplicateur de taille (défaut `metal-toolbar-emoji-height').
+  :color    couleur :foreground (souvent ignorée par les emojis colorés
+            natifs, mais utile pour les symboles monochromes).
+  :raise    décalage vertical (négatif = vers le bas)."
+  (let* ((face `(:height ,height ,@(when color `(:foreground ,color))))
+         (s (propertize emoji 'face face)))
+    (if raise
+        (propertize s 'display `((raise ,raise)))
+      s)))
 
 (defun metal-toolbar-button (icon tooltip command)
   "Construit un bouton cliquable pour la header-line.
