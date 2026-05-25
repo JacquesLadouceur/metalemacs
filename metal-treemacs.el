@@ -35,7 +35,7 @@ Modifiée automatiquement quand l'utilisateur redimensionne manuellement.")
         treemacs-indentation-string " "
         treemacs-width metal-treemacs-width
         treemacs-width-is-initially-locked t
-        treemacs-text-scale 0
+        treemacs-text-scale (if (memq system-type '(gnu/linux windows-nt)) 1 0)
         treemacs-collapse-dirs 0
         treemacs-display-in-side-window t
         treemacs-position 'left
@@ -346,13 +346,12 @@ Retourne le chemin du fichier installé si succès, nil si échec."
        (t
         (message "MetalEmacs : installation de Hack Nerd Font Mono echouee. Consultez *MetalEmacs Journal* pour les details.")))))
 
-  ;; Ajustement de la taille des icones nerd-icons sur Linux et Windows.
-  ;; Sur macOS, la metrique de Hack Nerd Font Mono produit deja la bonne
-  ;; taille.  Sur Linux/Windows, les icones apparaissent plus petites —
-  ;; on compense via le facteur d'echelle officiel du package nerd-icons.
-  ;; Ajuste cette valeur (1.0 = taille naturelle) si necessaire.
-  (when (memq system-type '(gnu/linux windows-nt))
-    (setq nerd-icons-scale-factor 1.3)))
+  ;; nerd-icons-scale-factor reste a sa valeur par defaut (1.0) car
+  ;; il affecte TOUTES les icones nerd-icons globalement, ce qui
+  ;; deformerait les barres d'outils mixtes (ex : Python toolbar).
+  ;; La taille des icones Treemacs est ajustee via treemacs-text-scale
+  ;; (voir le bloc use-package treemacs au debut du fichier).
+  )
 
 (defun metal-nerd-icons-appliquer-fontset ()
   "Mapper les glyphes Nerd Icons vers Hack Nerd Font Mono."
