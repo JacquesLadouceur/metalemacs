@@ -236,8 +236,34 @@ Modifiée automatiquement quand l'utilisateur redimensionne manuellement.")
   :straight t
   :config
 
+  (defun metal--extraire-zip (zip-file fichier-cible dest-dir)
+    "Extrait FICHIER-CIBLE de ZIP-FILE vers DEST-DIR, à plat.
+Essaie unzip, puis bsdtar, puis python3.  Retourne t si succès, nil sinon."
+    (let ((default-directory dest-dir)
+          (journal (get-buffer-create "*MetalEmacs Journal*")))
+      (cond
+       ;; unzip : standard sur Linux et macOS.  -o écrase, -j ignore les sous-dossiers
+       ((executable-find "unzip")
+        (zerop (call-process "unzip" nil journal nil
+                             "-o" "-j" zip-file fichier-cible)))
+       ;; bsdtar : présent sur macOS, lit les zips via libarchive
+       ((executable-find "bsdtar")
+        (zerop (call-process "bsdtar" nil journal nil
+                             "-xf" zip-file fichier-cible)))
+       ;; python3 : fallback universel (toujours présent sur Ubuntu/Debian moderne)
+       ((executable-find "python3")
+        (zerop (call-process
+                "python3" nil journal nil "-c"
+                (format
+                 "import zipfile; zipfile.ZipFile(r'%s').extract(r'%s', r'%s')"
+                 zip-file fichier-cible dest-dir))))
+       (t
+        (message "MetalEmacs : aucun outil d'extraction zip trouve (unzip, bsdtar, python3)")
+        nil))))
+
   (defun metal--install-hack-nerd-font ()
-    "Installe Hack Nerd Font Mono dans le dossier de fontes utilisateur."
+    "Installe Hack Nerd Font Mono dans le dossier de fontes utilisateur.
+Retourne le chemin du fichier installé si succès, nil si échec."
     (let* ((url "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/Hack.zip")
            (font-dir (cond ((eq system-type 'darwin)
                             (expand-file-name "~/Library/Fonts"))
@@ -248,28 +274,47 @@ Modifiée automatiquement quand l'utilisateur redimensionne manuellement.")
                              "AppData/Local/Microsoft/Windows/Fonts"
                              (getenv "USERPROFILE")))))
            (zip-file (expand-file-name "Hack.zip" temporary-file-directory))
-           (target-font (expand-file-name "HackNerdFontMono-Regular.ttf" font-dir)))
+           (target-font (expand-file-name "HackNerdFontMono-Regular.ttf" font-dir))
+           (journal (get-buffer-create "*MetalEmacs Journal*")))
       (unless (file-directory-p font-dir)
         (make-directory font-dir t))
       (message "Telechargement de Hack Nerd Font Mono...")
-      (url-copy-file url zip-file t)
-      (let ((default-directory font-dir))
-        (call-process "tar" nil nil nil "-xf" zip-file
-                      "HackNerdFontMono-Regular.ttf"))
-      (delete-file zip-file)
-      (when (eq system-type 'gnu/linux)
-        (call-process "fc-cache" nil nil nil "-f"))
-      (when (and (eq system-type 'windows-nt)
-                 (file-exists-p target-font))
-        (call-process
-         "reg" nil nil nil
-         "add"
-         "HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
-         "/v" "Hack Nerd Font Mono (TrueType)"
-         "/t" "REG_SZ"
-         "/d" target-font
-         "/f"))
-      (and (file-exists-p target-font) target-font)))
+      ;; Téléchargement avec gestion d'erreur
+      (let ((telechargement-ok
+             (condition-case err
+                 (progn (url-copy-file url zip-file t) t)
+               (error
+                (message "MetalEmacs : echec du telechargement : %s"
+                         (error-message-string err))
+                nil))))
+        (when telechargement-ok
+          ;; Extraction (remplace l'ancien `tar -xf` qui échoue sur Linux)
+          (let ((extraction-ok
+                 (metal--extraire-zip zip-file
+                                      "HackNerdFontMono-Regular.ttf"
+                                      font-dir)))
+            (when (file-exists-p zip-file)
+              (delete-file zip-file))
+            (cond
+             ((not extraction-ok)
+              (message "MetalEmacs : echec de l'extraction du zip — voir *MetalEmacs Journal*")
+              nil)
+             ((not (file-exists-p target-font))
+              (message "MetalEmacs : extraction signalee OK mais %s introuvable"
+                       target-font)
+              nil)
+             (t
+              ;; Linux : rafraîchir le cache fontconfig explicitement
+              (when (eq system-type 'gnu/linux)
+                (call-process "fc-cache" nil journal nil "-f" font-dir))
+              ;; Windows : enregistrement registre comme avant
+              (when (eq system-type 'windows-nt)
+                (call-process
+                 "reg" nil nil nil "add"
+                 "HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
+                 "/v" "Hack Nerd Font Mono (TrueType)"
+                 "/t" "REG_SZ" "/d" target-font "/f"))
+              target-font)))))))
 
   ;; Supprimer l'ancienne fonte incompatible si elle existe.
   (let ((legacy-fonts
@@ -288,13 +333,18 @@ Modifiée automatiquement quand l'utilisateur redimensionne manuellement.")
         (message "Ancienne fonte Symbols Nerd Font Mono supprimee : %s" f))))
 
   ;; Installer Hack Nerd Font Mono si elle est absente.
+  ;; N'affiche « Redemarrage requis » QUE si l'installation a vraiment reussi.
   (unless (find-font (font-spec :family "Hack Nerd Font Mono"))
-    (metal--install-hack-nerd-font)
-    (with-output-to-temp-buffer "*MetalEmacs - Redemarrage requis*"
-      (princ "Hack Nerd Font Mono installee.\n\n")
-      (princ "Fermez Emacs et relancez-le pour que les icones s'affichent correctement.\n"))
-    (read-from-minibuffer
-     "Appuyez sur Entree pour continuer le demarrage... ")))
+    (let ((resultat (metal--install-hack-nerd-font)))
+      (cond
+       (resultat
+        (with-output-to-temp-buffer "*MetalEmacs - Redemarrage requis*"
+          (princ "Hack Nerd Font Mono installee.\n\n")
+          (princ "Fermez Emacs et relancez-le pour que les icones s'affichent correctement.\n"))
+        (read-from-minibuffer
+         "Appuyez sur Entree pour continuer le demarrage... "))
+       (t
+        (message "MetalEmacs : installation de Hack Nerd Font Mono echouee. Consultez *MetalEmacs Journal* pour les details."))))))
 
 (defun metal-nerd-icons-appliquer-fontset ()
   "Mapper les glyphes Nerd Icons vers Hack Nerd Font Mono."
