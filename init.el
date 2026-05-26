@@ -645,6 +645,10 @@ Ne sauvegarde la position/taille que si les valeurs sont numeriques
   (with-temp-file metal-prefs-file
     (insert ";; Preferences MetalEmacs - genere automatiquement\n")
     (insert (format "(setq metal-font-size-offset %d)\n" metal-font-size-offset))
+    ;; Taille des icônes (parallèle à metal-font-size-offset)
+    (when (boundp 'metal-toolbar-emoji-size-offset)
+      (insert (format "(setq metal-toolbar-emoji-size-offset %d)\n"
+                      metal-toolbar-emoji-size-offset)))
     ;; Largeur Treemacs
     (insert (format "(setq metal-treemacs-width %d)\n" metal-treemacs-width))
     ;; Position: seulement si numerique (pas de symboles comme +)

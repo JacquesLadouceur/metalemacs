@@ -921,6 +921,51 @@ Sinon, affiche un message d'erreur."
                           'follow-link t
                           'pointer 'hand)
       (insert "\n\n")
+
+      ;; --------------------------------------------------
+      ;;  Section : Taille des icônes
+      ;; --------------------------------------------------
+      (insert "◼ Taille des icônes\n")
+      (insert "   ")
+      (insert-text-button "[ - ]"
+                          'face '(:foreground "#cc0000" :weight bold)
+                          'mouse-face 'highlight
+                          'help-echo "Diminuer la taille des icônes des barres d'outils"
+                          'action (lambda (_btn)
+                                    (when (fboundp 'metal-toolbar-emoji-decrease)
+                                      (metal-toolbar-emoji-decrease)
+                                      (metal-dashboard-open)))
+                          'follow-link t
+                          'pointer 'hand)
+      (insert "  ")
+      (let ((current (if (fboundp 'metal-toolbar-emoji-size)
+                         (metal-toolbar-emoji-size)
+                       160)))
+        (insert (propertize (format " %d " current)
+                            'face '(:foreground "#333333" :weight bold))))
+      (insert "  ")
+      (insert-text-button "[ + ]"
+                          'face '(:foreground "#006600" :weight bold)
+                          'mouse-face 'highlight
+                          'help-echo "Augmenter la taille des icônes des barres d'outils"
+                          'action (lambda (_btn)
+                                    (when (fboundp 'metal-toolbar-emoji-increase)
+                                      (metal-toolbar-emoji-increase)
+                                      (metal-dashboard-open)))
+                          'follow-link t
+                          'pointer 'hand)
+      (insert "   ")
+      (insert-text-button "[Réinitialiser]"
+                          'face '(:foreground "#666666")
+                          'mouse-face 'highlight
+                          'help-echo "Réinitialiser la taille des icônes"
+                          'action (lambda (_btn)
+                                    (when (fboundp 'metal-toolbar-emoji-reset)
+                                      (metal-toolbar-emoji-reset)
+                                      (metal-dashboard-open)))
+                          'follow-link t
+                          'pointer 'hand)
+      (insert "\n\n")
       (insert (metal-dashboard--separator avail-width))
 
       ;; Raccourcis clavier locaux

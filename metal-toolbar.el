@@ -56,13 +56,55 @@
   :type 'number
   :group 'metal-toolbar)
 
-(defcustom metal-toolbar-emoji-height 1.6
-  "Hauteur des emojis Unicode dans les barres d'outils.
-Le réglage par défaut (1.6) correspond à celui de la toolbar Agent/Codex.
-Sur Linux, les emojis Noto Color Emoji rendent légèrement plus gros que
-les Apple Color Emoji ; baisser cette valeur (par ex. 1.3) si nécessaire."
-  :type 'number
+;;; --- Emojis Unicode (parallèle au pattern metal-font) ---
+
+(defconst metal-toolbar-emoji-base 160
+  "Hauteur de base des emojis (× 100).  160 = multiplicateur 1.60.
+Cohérent avec `metal-font-base' : on travaille en entiers, et la fonction
+`metal-toolbar-emoji-size' divise par 100 pour produire le multiplicateur
+`:height' attendu par Emacs.")
+
+(defcustom metal-toolbar-emoji-size-offset 0
+  "Correction utilisateur ajoutée à `metal-toolbar-emoji-base'.
+Incréments de 10, parallèle à `metal-font-size-offset'.  La valeur est
+persistée dans `metal-prefs.el' via `metal-prefs-save'."
+  :type 'integer
   :group 'metal-toolbar)
+
+(defun metal-toolbar-emoji-size ()
+  "Retourne la taille effective des emojis : base + offset (entier × 100).
+160 par défaut ; modifiable via `metal-toolbar-emoji-increase' et amis."
+  (+ metal-toolbar-emoji-base metal-toolbar-emoji-size-offset))
+
+(defun metal-toolbar-emoji-increase ()
+  "Augmente la taille des emojis de 10 (= +0.1 du multiplicateur).
+Le changement prend effet immédiatement dans toutes les header-lines
+qui utilisent `metal-toolbar-emoji' (Python, Prolog, Agent/Codex, ...)
+et est persisté via `metal-prefs-save-all'."
+  (interactive)
+  (setq metal-toolbar-emoji-size-offset (+ metal-toolbar-emoji-size-offset 10))
+  (force-mode-line-update t)
+  (when (fboundp 'metal-prefs-save-all)
+    (metal-prefs-save-all))
+  (message "Taille icônes : %d" (metal-toolbar-emoji-size)))
+
+(defun metal-toolbar-emoji-decrease ()
+  "Diminue la taille des emojis de 10 (= -0.1 du multiplicateur)."
+  (interactive)
+  (setq metal-toolbar-emoji-size-offset (- metal-toolbar-emoji-size-offset 10))
+  (force-mode-line-update t)
+  (when (fboundp 'metal-prefs-save-all)
+    (metal-prefs-save-all))
+  (message "Taille icônes : %d" (metal-toolbar-emoji-size)))
+
+(defun metal-toolbar-emoji-reset ()
+  "Réinitialise la taille des emojis à la base (`metal-toolbar-emoji-base')."
+  (interactive)
+  (setq metal-toolbar-emoji-size-offset 0)
+  (force-mode-line-update t)
+  (when (fboundp 'metal-prefs-save-all)
+    (metal-prefs-save-all))
+  (message "Taille icônes réinitialisée : %d" (metal-toolbar-emoji-size)))
 
 (defcustom metal-toolbar-vpadding-height 1.7
   "Hauteur du caractère de padding vertical (multiplicateur)."
@@ -161,23 +203,23 @@ Mots-clés :
         (propertize icon 'display `((raise ,raise)))
       icon)))
 
-(cl-defun metal-toolbar-emoji (emoji &key (height metal-toolbar-emoji-height)
-                                          color raise)
+(cl-defun metal-toolbar-emoji (emoji &key height color raise)
   "Retourne un EMOJI Unicode propertize pour la header-line.
 Convient aux emojis colorés natifs (▶️ 🐛 🔄 📋 💬 🪄 ✅ ❌ etc.).
 
-Contrairement à `metal-toolbar-icon' qui passe par la famille nerd-icons
-(rendu via Hack Nerd Font Mono à taille fixe en pixels), cette fonction
-utilise le mécanisme `:height' standard d'Emacs, identique à celui de la
-toolbar Agent/Codex.  Tous les modules qui l'utilisent ont donc des
-icônes de taille cohérente sur chaque plateforme.
+Contrairement à `metal-toolbar-icon' qui passe par nerd-icons (rendu via
+Hack Nerd Font Mono à taille fixe en pixels), cette fonction utilise le
+mécanisme `:height' standard d'Emacs.  Toutes les toolbars qui l'utilisent
+(Python, Prolog, Agent/Codex, ...) partagent donc la même taille, modifiable
+par l'utilisateur via `metal-toolbar-emoji-increase' et amis.
 
 Mots-clés :
-  :height   multiplicateur de taille (défaut `metal-toolbar-emoji-height').
-  :color    couleur :foreground (souvent ignorée par les emojis colorés
-            natifs, mais utile pour les symboles monochromes).
+  :height   multiplicateur de taille (float).  Si nil (défaut), calculé
+            depuis `(metal-toolbar-emoji-size)' divisé par 100.
+  :color    couleur :foreground (souvent ignorée par les emojis colorés).
   :raise    décalage vertical (négatif = vers le bas)."
-  (let* ((face `(:height ,height ,@(when color `(:foreground ,color))))
+  (let* ((h (or height (/ (metal-toolbar-emoji-size) 100.0)))
+         (face `(:height ,h ,@(when color `(:foreground ,color))))
          (s (propertize emoji 'face face)))
     (if raise
         (propertize s 'display `((raise ,raise)))
