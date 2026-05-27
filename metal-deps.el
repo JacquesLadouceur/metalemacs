@@ -41,6 +41,14 @@
   "Tampon pour les journaux d'installation."
   :type 'string)
 
+(defcustom metal-deps--largeur-colonne-nom 22
+  "Largeur cible (en colonnes d'affichage) pour la colonne « nom »
+de l'Assistant.  Les boutons commencent à cette position, donnant un
+alignement vertical propre.  Augmenter si certains noms sont tronqués
+ou que les boutons commencent trop tôt sur des noms longs."
+  :type 'integer
+  :group 'metal-deps)
+
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Détection du système
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -1205,6 +1213,388 @@ dans les fichiers de projet."
         (message "MiKTeX installé à l'extérieur de Scoop. Désinstallez manuellement.")))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
+;;; Agents IA — Catalogue et gestion
+;;; ═══════════════════════════════════════════════════════════════════
+
+;; Déclarations pour satisfaire le byte-compiler (metal-agent.el peut ne
+;; pas être chargé au moment où ce fichier est byte-compilé).
+(defvar metal-agent-providers)
+(defvar metal-agent-provider)
+(declare-function metal-agent-authentifier-cli "metal-agent" (&optional id force))
+
+(defvar metal-deps-agents-catalogue
+  '((gemini
+     :nom         "Gemini"
+     :description "Gratuit avec compte Google"
+     :gratuit     t
+     :paquet-npm  "@google/gemini-cli"
+     :commande    "gemini"
+     :couleur     "#4285F4"
+     :format      claude-style
+     :args        nil
+     :auth-args   nil
+     :auth-aide   "Choisissez la méthode d'authentification dans le menu (1, 2 ou 3), puis appuyez sur Entrée.  Quand l'authentification est terminée, fermez ce buffer (C-x k)."
+     :auth-fichiers ("~/.gemini/oauth_creds.json")
+     :auth-env    ("GEMINI_API_KEY" "GOOGLE_GENAI_USE_VERTEXAI" "GOOGLE_GENAI_USE_GCA"))
+    (codex
+     :nom         "ChatGPT"
+     :description "Gratuit avec ChatGPT Free ou abonnement Plus/Pro"
+     :gratuit     t
+     :paquet-npm  "@openai/codex"
+     :paquet-brew "codex"
+     :commande    "codex"
+     :couleur     "#10A37F"
+     :format      codex-style
+     :args        ("exec" "--sandbox" "read-only" "--skip-git-repo-check")
+     :auth-args   ("login")
+     :auth-aide   "Choisissez « Sign in with ChatGPT » (OAuth via navigateur) — fonctionne avec ChatGPT Free.  Ou « Sign in with API key » pour une clé OpenAI.  Une fois connecté, fermez ce buffer (C-x k)."
+     :auth-fichiers ("~/.codex/auth.json" "~/.codex/config.toml"))
+    (claude
+     :nom         "Claude"
+     :description "Avec abonnement Claude Pro/Max ou clé API"
+     :gratuit     nil
+     :paquet-npm  "@anthropic-ai/claude-code"
+     :paquet-brew "claude-code"
+     :commande    "claude"
+     :couleur     "#D97757"
+     :format      claude-style
+     :args        ("-p" "--permission-mode" "plan" "--output-format" "text")
+     :auth-args   ("auth" "login")
+     :auth-aide   "Le navigateur va s'ouvrir pour l'OAuth Anthropic.  Si rien ne s'ouvre, appuyez sur « c » pour copier l'URL et collez-la dans votre navigateur.  Revenez ici après autorisation, puis fermez le buffer (C-x k)."
+     :auth-fichiers ("~/.claude/.credentials.json")
+     :auth-verifier metal-deps--claude-authentifie-p))
+  "Catalogue des agents IA installables via l'Assistant MetalEmacs.
+Chaque entrée est (ID . PLIST) où PLIST contient :
+  :nom          Nom affiché.
+  :description  Description courte.
+  :gratuit      Indication de coût/conditions :
+                t                → suffixe \"(gratuit)\"
+                \"texte libre\"    → suffixe \"(texte libre)\"
+                nil              → pas de suffixe (abonnement payant requis)
+  :paquet-npm   Nom du paquet npm (ex: \"@google/gemini-cli\").
+  :paquet-brew  Nom du paquet brew (optionnel).
+  :paquet-pipx  Nom du paquet pipx/pip (optionnel).
+  :commande     Commande CLI invoquée.
+  :couleur      Couleur hex de l'icône robot dans la toolbar.
+  :format       `codex-style' (filtre prompt) ou `claude-style' (générique).
+  :args         Arguments par défaut pour proposer sans modifier.
+  :auth-args    Arguments à ajouter à la commande pour lancer l'auth
+                explicite (ex: (\"login\")).  nil = lancer la commande seule.
+  :auth-aide    Instructions affichées en header-line du buffer terminal.
+  :auth-fichiers  Liste de chemins (un seul présent suffit) qui indiquent
+                  que l'agent est authentifié.  Doit inclure les paths
+                  des 3 OS : Linux (~/.config, ~/.local/share),
+                  macOS (~/Library/Application Support),
+                  Windows (~/AppData/Roaming, ~/AppData/Local).
+  :auth-env       Liste de variables d'environnement (une seule définie
+                  suffit) qui indiquent que l'agent est authentifié.
+  :auth-verifier  Fonction custom (sans argument) qui retourne t si
+                  l'agent est authentifié.  Priorité sur :auth-fichiers
+                  et :auth-env.
+  :install-manuelle  Optionnel : alist ((SYSTEM-TYPE . INSTRUCTIONS) …)
+                     d'instructions textuelles à afficher quand aucun
+                     gestionnaire automatique ne peut installer l'agent
+                     sur l'OS courant.  Clés possibles : windows-nt,
+                     darwin, gnu/linux, ou t (fallback générique).")
+
+(defun metal-deps--claude-authentifie-p ()
+  "Détection multi-OS pour Claude : fichier credentials OU keychain natif.
+
+- Linux/Windows : présence de ~/.claude/.credentials.json
+- macOS         : entrée « Claude Code-credentials » dans le Keychain
+- Linux moderne : entrée correspondante dans Secret Service (libsecret)
+- Windows       : entrée dans le Credential Manager (via cmdkey)"
+  (or (file-exists-p (expand-file-name "~/.claude/.credentials.json"))
+      ;; macOS Keychain
+      (and (eq system-type 'darwin)
+           (executable-find "security")
+           (zerop (call-process
+                   "security" nil nil nil
+                   "find-generic-password" "-s" "Claude Code-credentials")))
+      ;; Linux Secret Service (GNOME Keyring, KWallet via libsecret).
+      (and (memq system-type '(gnu/linux gnu))
+           (executable-find "secret-tool")
+           (zerop (call-process
+                   "secret-tool" nil nil nil
+                   "search" "service" "Claude Code-credentials")))
+      ;; Windows Credential Manager.
+      (and (eq system-type 'windows-nt)
+           (executable-find "cmdkey")
+           (with-temp-buffer
+             (call-process "cmdkey" nil t nil "/list")
+             (goto-char (point-min))
+             (re-search-forward "Claude Code-credentials" nil t)))))
+
+(defun metal-deps--agent-authentifie-p (spec)
+  "Retourne t si l'agent défini par SPEC semble authentifié.
+Vérifie dans l'ordre :
+  1. La fonction :auth-verifier (si définie).
+  2. Au moins un des :auth-fichiers existe.
+  3. Au moins une des :auth-env est définie et non vide."
+  (let ((verifier  (plist-get spec :auth-verifier))
+        (fichiers  (plist-get spec :auth-fichiers))
+        (env-vars  (plist-get spec :auth-env)))
+    (or (and verifier
+             (functionp verifier)
+             (ignore-errors (funcall verifier)))
+        (cl-some (lambda (f) (file-exists-p (expand-file-name f))) fichiers)
+        (cl-some (lambda (v) (let ((val (getenv v)))
+                               (and val (not (string-empty-p val)))))
+                 env-vars))))
+
+(defun metal-deps--quote-safe (s)
+  "Quote S pour le shell sans backslasher inutilement (cf. `@google/x')."
+  (if (string-match-p "\\`[A-Za-z0-9@/._+-]+\\'" s)
+      s
+    (shell-quote-argument s)))
+
+(defun metal-deps--agent-cli-installee-p (agent-spec)
+  "Retourne le chemin de la CLI si elle est installée, sinon nil.
+AGENT-SPEC est le PLIST (sans le ID) du catalogue."
+  (executable-find (plist-get agent-spec :commande)))
+
+(defun metal-deps--agent-enregistre-p (id)
+  "Retourne t si l'agent ID est dans `metal-agent-providers'."
+  (and (boundp 'metal-agent-providers)
+       (assq id metal-agent-providers)))
+
+(defun metal-deps--agent-complet-p (id agent-spec)
+  "Retourne t si l'agent ID est enregistré ET sa CLI est installée."
+  (and (metal-deps--agent-enregistre-p id)
+       (metal-deps--agent-cli-installee-p agent-spec)))
+
+(defun metal-deps--agent-spec->provider-entry (id spec)
+  "Convertit une entrée du catalogue en entrée pour `metal-agent-providers'."
+  (cons id
+        (list :label       (plist-get spec :nom)
+              :color       (plist-get spec :couleur)
+              :command     (plist-get spec :commande)
+              :args        (plist-get spec :args)
+              :buffer-name (format "*Metal %s*" (plist-get spec :nom))
+              :format      (plist-get spec :format)
+              :auth-args   (plist-get spec :auth-args)
+              :auth-aide   (plist-get spec :auth-aide))))
+
+(defun metal-deps--commande-installation-cli (agent-spec)
+  "Retourne (PROG ARGS… PAQUET) pour installer la CLI de AGENT-SPEC.
+Priorité : pipx > npm > brew (pipx pour Aider, npm pour la plupart)."
+  (cond
+   ((and (plist-get agent-spec :paquet-pipx) (executable-find "pipx"))
+    (list "pipx" "install" (plist-get agent-spec :paquet-pipx)))
+   ((and (plist-get agent-spec :paquet-pipx) (executable-find "pip"))
+    (list "pip" "install" "--user" (plist-get agent-spec :paquet-pipx)))
+   ((and (plist-get agent-spec :paquet-npm) (executable-find "npm"))
+    (list "npm" "install" "-g" (plist-get agent-spec :paquet-npm)))
+   ((and (plist-get agent-spec :paquet-brew) (executable-find "brew"))
+    (list "brew" "install" (plist-get agent-spec :paquet-brew)))
+   (t nil)))
+
+(defun metal-deps--commande-desinstallation-cli (agent-spec)
+  "Retourne (PROG ARGS… PAQUET) pour désinstaller la CLI de AGENT-SPEC."
+  (cond
+   ((and (plist-get agent-spec :paquet-pipx) (executable-find "pipx"))
+    (list "pipx" "uninstall" (plist-get agent-spec :paquet-pipx)))
+   ((and (plist-get agent-spec :paquet-pipx) (executable-find "pip"))
+    (list "pip" "uninstall" "-y" (plist-get agent-spec :paquet-pipx)))
+   ((and (plist-get agent-spec :paquet-npm) (executable-find "npm"))
+    (list "npm" "uninstall" "-g" (plist-get agent-spec :paquet-npm)))
+   ((and (plist-get agent-spec :paquet-brew) (executable-find "brew"))
+    (list "brew" "uninstall" (plist-get agent-spec :paquet-brew)))
+   (t nil)))
+
+(defun metal-deps--install-manuelle-pour (spec)
+  "Retourne le texte d'instructions d'installation manuelle pour SPEC.
+Cherche d'abord une entrée pour `system-type', sinon une entrée
+fallback `t', sinon nil."
+  (let ((manuelle (plist-get spec :install-manuelle)))
+    (or (cdr (assq system-type manuelle))
+        (cdr (assq t           manuelle)))))
+
+(defun metal-deps--gestionnaires-suggeres (agent-spec)
+  "Retourne une liste textuelle des gestionnaires que AGENT-SPEC pourrait
+utiliser, mais qui ne sont pas installés sur le système.  Ex:
+\\='(\"npm (Node.js)\" \"brew (Homebrew)\")'."
+  (delq nil
+        (list (and (plist-get agent-spec :paquet-npm)
+                   (not (executable-find "npm"))
+                   "npm (installer Node.js)")
+              (and (plist-get agent-spec :paquet-pipx)
+                   (not (executable-find "pipx"))
+                   (not (executable-find "pip"))
+                   "pipx ou pip (installer Python)")
+              (and (plist-get agent-spec :paquet-brew)
+                   (not (executable-find "brew"))
+                   (memq system-type '(darwin gnu/linux))
+                   "brew (Homebrew)"))))
+
+(defun metal-deps--afficher-aide (titre corps)
+  "Affiche un buffer d'aide en help-mode avec TITRE et CORPS.
+Les URL dans CORPS deviennent cliquables via `goto-address-mode'."
+  (let* ((buf-name (format "*MetalEmacs — %s*" titre))
+         (buf (get-buffer-create buf-name)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (propertize (format "%s\n" titre)
+                            'face '(:weight bold :height 1.2)))
+        (insert (make-string 60 ?─) "\n\n")
+        (insert corps)
+        (insert "\n\nFermez ce buffer avec C-x k quand terminé.\n"))
+      (goto-char (point-min))
+      (help-mode)
+      (when (fboundp 'goto-address-mode)
+        (goto-address-mode 1))
+      (setq buffer-read-only t))
+    (display-buffer buf)))
+
+(defun metal-deps--afficher-aide-install (nom corps)
+  "Affiche un buffer d'aide à l'installation manuelle.
+NOM est le nom de l'agent ; CORPS est le texte des instructions."
+  (metal-deps--afficher-aide (format "Installation manuelle — %s" nom) corps))
+
+(defun metal-deps--afficher-procedure-auth (id)
+  "Affiche la procédure d'authentification pour l'agent ID.
+Utilisé quand la CLI n'est pas installée (impossible de lancer l'auth
+en terminal) — pointe l'utilisateur vers l'installation puis détaille
+la procédure d'auth pour référence future."
+  (let* ((spec (cdr (assq id metal-deps-agents-catalogue)))
+         (nom (plist-get spec :nom))
+         (aide (plist-get spec :auth-aide)))
+    (unless spec
+      (user-error "Agent inconnu : %s" id))
+    (metal-deps--afficher-aide
+     (format "Procédure d'authentification — %s" nom)
+     (concat
+      "Pour utiliser cet agent, il faut deux étapes :\n\n"
+      "  1. Installer la CLI\n"
+      "     Cliquez sur le bouton [Installer] de cet agent dans l'Assistant.\n\n"
+      "  2. Authentifier la CLI\n"
+      (or aide "     Suivez les instructions de la documentation de l'agent.")
+      "\n\nUne fois la CLI installée (statut ✓), cliquez sur « authentifier »\n"
+      "dans cette section pour lancer le flux d'authentification dans un terminal."))))
+
+(defun metal-deps--installer-agent-ia (id)
+  "Installe l'agent ID : enregistre dans `metal-agent-providers' + installe CLI.
+
+Si aucun gestionnaire automatique n'est disponible pour l'OS courant,
+affiche un buffer d'aide avec les instructions manuelles (champ
+`:install-manuelle' du catalogue) plutôt que de lever une erreur sèche."
+  (let* ((spec (cdr (assq id metal-deps-agents-catalogue))))
+    (unless spec
+      (user-error "Agent inconnu dans le catalogue : %s" id))
+    ;; 1) Enregistrer dans metal-agent-providers (persisté via Custom).
+    (unless (boundp 'metal-agent-providers)
+      (require 'metal-agent nil t))
+    (unless (metal-deps--agent-enregistre-p id)
+      (customize-save-variable
+       'metal-agent-providers
+       (append (and (boundp 'metal-agent-providers) metal-agent-providers)
+               (list (metal-deps--agent-spec->provider-entry id spec))))
+      (metal-deps--journaliser "Agent « %s » enregistré dans metal-agent-providers"
+                               (plist-get spec :nom)))
+    ;; 2) Installer la CLI si absente.
+    (cond
+     ((metal-deps--agent-cli-installee-p spec)
+      (message "Agent « %s » : déjà configuré et CLI déjà installée."
+               (plist-get spec :nom)))
+     (t
+      (let ((cmd (metal-deps--commande-installation-cli spec)))
+        (cond
+         ;; Cas 1 : un gestionnaire automatique est disponible → lancer compile.
+         (cmd
+          (let* ((cmdline (mapconcat #'metal-deps--quote-safe cmd " "))
+                 (compilation-buffer-name-function
+                  (lambda (_) (format "*Installation %s*" (plist-get spec :nom)))))
+            (when (yes-or-no-p
+                   (format "Installer « %s » via %s ?  Commande : %s "
+                           (plist-get spec :nom) (car cmd) cmdline))
+              (metal-deps--journaliser "Installation CLI : %s" cmdline)
+              (let ((buf (compile cmdline)))
+                (when (buffer-live-p buf)
+                  (with-current-buffer buf
+                    (when (fboundp 'ansi-color-compilation-filter)
+                      (add-hook 'compilation-filter-hook
+                                'ansi-color-compilation-filter nil t)))))
+              (message
+               "Installation lancée.  Une fois terminée, utiliser le bouton « Authentifier » ou « M-x metal-agent-authentifier-cli »."))))
+         ;; Cas 2 : pas de gestionnaire mais des instructions manuelles.
+         ((metal-deps--install-manuelle-pour spec)
+          (metal-deps--afficher-aide-install
+           (plist-get spec :nom)
+           (metal-deps--install-manuelle-pour spec)))
+         ;; Cas 3 : pas de gestionnaire et pas d'instructions — afficher
+         ;; un message générique pointant vers l'Assistant pour les
+         ;; prérequis (npm/pipx/brew) que l'agent supporte.
+         (t
+          (let ((manquants (metal-deps--gestionnaires-suggeres spec)))
+            (metal-deps--afficher-aide-install
+             (plist-get spec :nom)
+             (concat
+              "Aucun gestionnaire de paquets reconnu n'est installé sur ce système.\n\n"
+              "Pour installer « " (plist-get spec :nom) " », vous avez besoin de l'un de :\n"
+              (mapconcat (lambda (g) (concat "  • " g)) manquants "\n")
+              "\n\nInstallez d'abord l'un de ces prérequis depuis la section "
+              "« 📦 Gestionnaires de paquets » de l'Assistant, puis cliquez à "
+              "nouveau sur « Installer » pour cet agent.")))))))))) 
+
+(defun metal-deps--desinstaller-agent-ia (id)
+  "Désinstalle l'agent ID : retire de `metal-agent-providers' + désinstalle CLI."
+  (let* ((spec (cdr (assq id metal-deps-agents-catalogue)))
+         (nom  (plist-get spec :nom)))
+    (unless spec
+      (user-error "Agent inconnu dans le catalogue : %s" id))
+    (when (yes-or-no-p (format "Désinstaller complètement « %s » (registre + CLI) ? " nom))
+      ;; 1) Désenregistrer.
+      (when (metal-deps--agent-enregistre-p id)
+        (customize-save-variable
+         'metal-agent-providers
+         (assq-delete-all id (and (boundp 'metal-agent-providers)
+                                  metal-agent-providers)))
+        ;; Si c'était l'agent actif, on bascule sur un autre disponible (ou nil).
+        (when (and (boundp 'metal-agent-provider)
+                   (eq metal-agent-provider id))
+          (customize-save-variable
+           'metal-agent-provider
+           (car-safe (car-safe metal-agent-providers))))
+        (metal-deps--journaliser "Agent « %s » retiré de metal-agent-providers" nom))
+      ;; 2) Désinstaller la CLI si présente.
+      (when (metal-deps--agent-cli-installee-p spec)
+        (let ((cmd (metal-deps--commande-desinstallation-cli spec)))
+          (when cmd
+            (let* ((cmdline (mapconcat #'metal-deps--quote-safe cmd " "))
+                   (compilation-buffer-name-function
+                    (lambda (_) (format "*Désinstallation %s*" nom))))
+              (metal-deps--journaliser "Désinstallation CLI : %s" cmdline)
+              (compile cmdline)))))
+      (message "« %s » désinstallé." nom))))
+
+(defun metal-deps--authentifier-agent-ia (id)
+  "Lance l'authentification interactive pour l'agent ID."
+  (let ((spec (cdr (assq id metal-deps-agents-catalogue))))
+    (unless (metal-deps--agent-cli-installee-p spec)
+      (user-error "CLI de « %s » introuvable — installer d'abord" (plist-get spec :nom)))
+    (require 'metal-agent nil t)
+    (if (fboundp 'metal-agent-authentifier-cli)
+        (metal-agent-authentifier-cli id)
+      (user-error "metal-agent.el n'est pas chargé"))))
+
+(defun metal-deps--agent-catalogue->outil (entry)
+  "Convertit une entrée du catalogue en outil pour `metal-deps-outils'.
+Le statut « installé » signifie : enregistré dans `metal-agent-providers'
+ET CLI présente sur le système."
+  (let* ((id (car entry))
+         (spec (cdr entry))
+         (nom (plist-get spec :nom))
+         (desc (plist-get spec :description)))
+    (list :nom nom
+          :verifier      (lambda () (metal-deps--agent-complet-p id spec))
+          :installer     (lambda () (metal-deps--installer-agent-ia id))
+          :desinstaller  (lambda () (metal-deps--desinstaller-agent-ia id))
+          :categorie     'agents-ia
+          :description   desc
+          :agent-id      id)))
+
+;;; ═══════════════════════════════════════════════════════════════════
 ;;; Liste des outils
 ;;; ═══════════════════════════════════════════════════════════════════
 
@@ -1301,6 +1691,171 @@ dans les fichiers de projet."
      :condition (lambda () (not (eq system-type 'windows-nt)))))
   "Liste des outils gérés par MetalEmacs.")
 
+;; Les outils-agents sont calculés dynamiquement à chaque accès (et non
+;; figés au chargement) parce que `metal-agent-providers' peut contenir
+;; des agents personnalisés ajoutés par l'utilisateur après le démarrage.
+
+(defun metal-deps--outil-agent-personnalise (provider-entry)
+  "Convertit une entrée perso de `metal-agent-providers' en outil.
+Un agent perso n'est pas dans le catalogue : pas d'installation auto,
+pas de détection d'auth — l'utilisateur a fourni les détails à la main."
+  (let* ((id      (car provider-entry))
+         (spec    (cdr provider-entry))
+         (nom     (or (plist-get spec :label) (symbol-name id)))
+         (commande (plist-get spec :command)))
+    (list :nom nom
+          :verifier      (lambda () (and commande (executable-find commande)))
+          :installer     nil
+          :desinstaller  (lambda () (metal-deps--retirer-agent-personnalise id))
+          :categorie     'agents-ia
+          :description   "Agent personnalisé"
+          :agent-id      id
+          :agent-perso   t)))
+
+(defun metal-deps--definir-agent-defaut (id)
+  "Définit l'agent ID comme défaut persistant (via Custom).
+Aussi appliqué immédiatement à la session courante."
+  (require 'metal-agent nil t)
+  (customize-save-variable 'metal-agent-provider id)
+  (let* ((spec (cdr (assq id metal-deps-agents-catalogue)))
+         (label (or (plist-get spec :nom)
+                    (and (boundp 'metal-agent-providers)
+                         (plist-get (cdr (assq id metal-agent-providers))
+                                    :label))
+                    (symbol-name id))))
+    (metal-deps--journaliser "Agent par défaut défini : %s (%s)" label id)
+    (message "Agent par défaut : %s (sauvegardé)" label))
+  (when (fboundp 'force-mode-line-update)
+    (force-mode-line-update t))
+  (metal-deps-afficher-etat))
+
+(defun metal-deps--retirer-agent-personnalise (id)
+  "Retire l'agent personnalisé ID de `metal-agent-providers'.
+Ne désinstalle PAS la CLI : l'utilisateur l'a installée à la main,
+c'est à lui de la gérer."
+  (let* ((spec (and (boundp 'metal-agent-providers)
+                    (cdr (assq id metal-agent-providers))))
+         (nom (or (plist-get spec :label) (symbol-name id))))
+    (when (yes-or-no-p
+           (format "Retirer l'agent « %s » de la liste ?  (La CLI ne sera pas désinstallée.) "
+                   nom))
+      (customize-save-variable
+       'metal-agent-providers
+       (assq-delete-all id (and (boundp 'metal-agent-providers)
+                                metal-agent-providers)))
+      ;; Si c'était l'agent actif, basculer vers un autre.
+      (when (and (boundp 'metal-agent-provider)
+                 (eq metal-agent-provider id))
+        (customize-save-variable
+         'metal-agent-provider
+         (car-safe (car-safe (and (boundp 'metal-agent-providers)
+                                  metal-agent-providers)))))
+      (metal-deps--journaliser "Agent personnalisé « %s » retiré" nom)
+      (message "Agent « %s » retiré." nom))))
+
+(defun metal-deps--ajouter-agent-personnalise ()
+  "Ajoute un agent CLI personnalisé à `metal-agent-providers'.
+L'utilisateur doit avoir déjà installé la CLI sur son système.
+Demande interactivement les informations nécessaires."
+  (interactive)
+  (require 'metal-agent nil t)
+  (let* ((id-str (string-trim
+                  (read-string "ID unique (symbole sans espaces, ex: mon-agent) : ")))
+         (id (and (not (string-empty-p id-str)) (intern id-str))))
+    (unless id
+      (user-error "ID requis"))
+    (when (assq id metal-deps-agents-catalogue)
+      (user-error "L'ID « %s » est utilisé par le catalogue intégré" id-str))
+    (when (and (boundp 'metal-agent-providers)
+               (assq id metal-agent-providers))
+      (user-error "L'ID « %s » est déjà utilisé" id-str))
+    (let* ((nom (string-trim
+                 (read-string "Nom affiché (ex: Mon Agent) : ")))
+           (commande (string-trim
+                      (read-string "Commande CLI (ex: mon-cli) : ")))
+           (args-str (read-string
+                      "Arguments par défaut (séparés par espaces, vide = aucun) : "))
+           (args (if (string-empty-p (string-trim args-str))
+                     nil
+                   (split-string-and-unquote args-str)))
+           (format-str
+            (completing-read
+             "Format de sortie : "
+             '("claude-style" "codex-style")
+             nil t nil nil "claude-style"))
+           (format-sym (intern format-str)))
+      (when (string-empty-p nom)
+        (user-error "Nom requis"))
+      (when (string-empty-p commande)
+        (user-error "Commande requise"))
+      ;; Avertir si la CLI est introuvable (mais permettre quand même).
+      (unless (executable-find commande)
+        (unless (yes-or-no-p
+                 (format "La commande « %s » est introuvable dans le PATH.  Ajouter quand même ? "
+                         commande))
+          (user-error "Annulé")))
+      (let ((entry (cons id
+                         (list :label nom
+                               :command commande
+                               :args args
+                               :buffer-name (format "*Metal %s*" nom)
+                               :format format-sym))))
+        (customize-save-variable
+         'metal-agent-providers
+         (append (and (boundp 'metal-agent-providers) metal-agent-providers)
+                 (list entry)))
+        (metal-deps--journaliser "Agent personnalisé « %s » ajouté (commande : %s)"
+                                 nom commande)
+        (message "Agent « %s » ajouté." nom)
+        (run-with-timer 0.3 nil #'metal-deps-afficher-etat)))))
+
+(defun metal-deps--migration-nettoyage-agents-legacy ()
+  "Retire de `metal-agent-providers' les anciens IDs d'agents qui ne
+sont plus dans le catalogue intégré (opencode, goose, aider, copilot).
+
+Ces agents existaient dans le catalogue historiquement et peuvent
+encore persister dans la configuration Custom de l'utilisateur.  Cette
+fonction est idempotente — sûre à appeler plusieurs fois.  Pour
+réutiliser un de ces agents, passer par « + Ajouter un autre agent… »."
+  (when (boundp 'metal-agent-providers)
+    (let* ((ids-legacy '(opencode goose aider copilot))
+           (avant metal-agent-providers)
+           (apres (cl-remove-if (lambda (p) (memq (car p) ids-legacy))
+                                avant)))
+      (unless (equal avant apres)
+        (customize-save-variable 'metal-agent-providers apres)
+        ;; Si l'agent actif était un des legacy, basculer vers un autre.
+        (when (and (boundp 'metal-agent-provider)
+                   (memq metal-agent-provider ids-legacy))
+          (customize-save-variable
+           'metal-agent-provider
+           (car-safe (car-safe apres))))
+        (metal-deps--journaliser
+         "Migration : %d ancien(s) agent(s) retiré(s) du registre (%s).  Disponibles via « + Ajouter un autre agent… »."
+         (- (length avant) (length apres))
+         (mapconcat #'symbol-name
+                    (cl-set-difference (mapcar #'car avant)
+                                       (mapcar #'car apres))
+                    ", "))))))
+
+(defun metal-deps--collecter-outils-agents ()
+  "Retourne la liste des outils-agents (catalogue + personnalisés).
+Les agents personnalisés sont ceux présents dans `metal-agent-providers'
+mais absents du catalogue."
+  (let* ((ids-catalogue (mapcar #'car metal-deps-agents-catalogue))
+         (providers (and (boundp 'metal-agent-providers)
+                         metal-agent-providers))
+         (perso (cl-remove-if (lambda (p) (memq (car p) ids-catalogue))
+                              providers)))
+    (append (mapcar #'metal-deps--agent-catalogue->outil
+                    metal-deps-agents-catalogue)
+            (mapcar #'metal-deps--outil-agent-personnalise perso))))
+
+(defun metal-deps--tous-les-outils ()
+  "Retourne la liste complète des outils (statiques + agents dynamiques)."
+  (append metal-deps-outils
+          (metal-deps--collecter-outils-agents)))
+
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Filtrage et vérification des outils
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -1331,7 +1886,7 @@ dans les fichiers de projet."
 Si CATEGORIE est non-nil, filtre par cette catégorie.
 Exclut les outils déjà installés, non applicables, ou sans installeur."
   (let (resultat)
-    (dolist (outil metal-deps-outils)
+    (dolist (outil (metal-deps--tous-les-outils))
       (when (and (metal-deps--outil-applicable-p outil)
                  (not (metal-deps--outil-present-p outil))
                  (or (null categorie)
@@ -1348,77 +1903,210 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
 (defun metal-deps-afficher-etat ()
   "Affiche l'état des dépendances avec interface graphique."
   (interactive)
-  (let ((buf (get-buffer-create "*MetalEmacs Assistant*")))
+  ;; Nettoyer les anciens agents qui ne sont plus dans le catalogue.
+  ;; Idempotent : si déjà nettoyé, ne fait rien.
+  (metal-deps--migration-nettoyage-agents-legacy)
+  (let* ((buf (get-buffer-create "*MetalEmacs Assistant*"))
+         ;; Mémoriser la position d'affichage si le buffer est déjà ouvert,
+         ;; pour la restaurer après le rerendu.  Sans ça, un clic sur ◯
+         ;; (changer agent défaut) ferait remonter l'affichage en haut.
+         (win-existante (get-buffer-window buf))
+         (point-precedent (and win-existante
+                               (with-current-buffer buf (point))))
+         (start-precedent (and win-existante
+                               (window-start win-existante))))
     (with-current-buffer buf
+      ;; Désactiver le read-only pour TOUT le rendu : `widget-insert' a
+      ;; son propre wrap mais `insert-text-button' (pour les liens
+      ;; « authentifier ») n'en a pas, donc faillirait lors d'un
+      ;; rafraîchissement après installation (où read-only-mode est actif).
       (let ((inhibit-read-only t))
-        (erase-buffer))
-      (remove-overlays)
+        (erase-buffer)
+        (remove-overlays)
+        (widget-insert "\n  ")
+        (widget-insert (propertize "Assistant MetalEmacs"
+                                   'face '(:weight bold :height 1.4)))
+      (widget-insert "\n  ")
+      (widget-insert (propertize "Gestion des dépendances et agents IA"
+                                 'face 'shadow))
+      (widget-insert "\n\n  ")
+      (widget-insert (propertize (format "Système : %s"
+                                         (metal-deps--nom-systeme))
+                                 'face 'shadow))
       (widget-insert "\n")
-      (widget-insert "╔═══════════════════════════════════════════════════════════════╗\n")
-      (widget-insert "║              Assistant MetalEmacs - Dépendances               ║\n")
-      (widget-insert "╚═══════════════════════════════════════════════════════════════╝\n\n")
-      (widget-insert (format "Système : %s\n" (metal-deps--nom-systeme)))
       (when metal-deps--installation-en-cours
-        (widget-insert (format "⏳ Installation en cours (%d restant%s)\n"
+        (widget-insert (format "  ⏳ Installation en cours (%d restant%s)\n"
                                (length metal-deps--file-attente)
                                (if (> (length metal-deps--file-attente) 1) "s" ""))))
-      (widget-insert "\n")
       
       (dolist (categorie '((prerequis . "📋 Prérequis système")
                            (gestionnaire . "📦 Gestionnaires de paquets")
                            (logiciels . "🎓 Logiciels")
-                           (pdf . "📄 Support PDF")))
+                           (pdf . "📄 Support PDF")
+                           (agents-ia . "🤖 Agents IA")))
         (let* ((cat-id (car categorie))
                (cat-nom (cdr categorie))
                (outils-cat (cl-remove-if-not
-                            (lambda (o) 
+                            (lambda (o)
                               (and (eq (plist-get o :categorie) cat-id)
                                    (metal-deps--outil-applicable-p o)))
-                            metal-deps-outils)))
+                            (metal-deps--tous-les-outils))))
           (when outils-cat
-            (widget-insert (format "\n%s\n" cat-nom))
-            (widget-insert "────────────────────────────────────────\n")
+            ;; --- En-tête de section ---
+            (widget-insert "\n  ")
+            (widget-insert (propertize cat-nom 'face '(:weight bold :height 1.05)))
+            (widget-insert "\n  ")
+            (widget-insert (propertize (make-string 66 ?─) 'face 'shadow))
+            (widget-insert "\n\n")
+            ;; --- Items ---
             (dolist (outil outils-cat)
               (let* ((nom (plist-get outil :nom))
                      (present (metal-deps--outil-present-p outil))
                      (installeur (plist-get outil :installer))
                      (desinstalleur (plist-get outil :desinstaller))
-                     (statut (if present "✓" "✗")))
-                (widget-insert (format "  %s %s" statut nom))
-                (when (and (not present) 
-                           installeur 
-                           (not (eq installeur 'ignore)))
-                  ;; Bouton Télécharger (si défini, affiché sur Linux seulement)
-                  (let ((telecharger (plist-get outil :telecharger)))
-                    (when (and telecharger (eq system-type 'gnu/linux))
-                      (widget-insert "  ")
+                     (agent-id (plist-get outil :agent-id))
+                     (desc (plist-get outil :description))
+                     ;; Pour les agents : déterminer s'il est authentifié,
+                     ;; et s'il est le défaut courant.  Le radio ●/◯
+                     ;; remplace alors le ✓/✗ habituel.
+                     (spec (and agent-id
+                                (cdr (assq agent-id metal-deps-agents-catalogue))))
+                     (authentifie (and agent-id
+                                       (or (not spec)  ; agent perso : on autorise
+                                           (metal-deps--agent-authentifie-p spec))))
+                     (radio-applicable (and agent-id present authentifie))
+                     (est-defaut (and radio-applicable
+                                      (boundp 'metal-agent-provider)
+                                      (eq metal-agent-provider agent-id)))
+                     ;; Largeur du préfixe « statut + 2 espaces » = 6 cells.
+                     ;; (3 espaces avant + 1 char statut + 2 espaces après)
+                     (largeur-cible (+ 6 metal-deps--largeur-colonne-nom))
+                     (largeur-actuelle (+ 6 (string-width nom)))
+                     (padding (max 2 (- largeur-cible largeur-actuelle))))
+                ;; --- Statut visuel (radio ●/◯ pour agents, sinon ✓/✗) ---
+                (widget-insert "   ")
+                (cond
+                 ;; Agent installé+authentifié + défaut : ● vert (non cliquable)
+                 ((and radio-applicable est-defaut)
+                  (widget-insert
+                   (propertize "●" 'face '(:foreground "#10A37F" :weight bold))))
+                 ;; Agent installé+authentifié non-défaut : ◯ cliquable
+                 (radio-applicable
+                  (let ((id agent-id) (n nom))
+                    (insert-text-button
+                     "◯"
+                     'action (lambda (_)
+                               (metal-deps--definir-agent-defaut id))
+                     'face '(:foreground "#586069" :weight bold)
+                     'follow-link t
+                     'help-echo (format "Définir « %s » comme agent par défaut" n))))
+                 ;; Autres : ✓ vert si présent, ✗ atténué sinon.
+                 (present
+                  (widget-insert
+                   (propertize "✓" 'face '(:foreground "#10A37F" :weight bold))))
+                 (t
+                  (widget-insert (propertize "✗" 'face 'shadow))))
+                (widget-insert "  ")
+                (widget-insert nom)
+                (widget-insert (make-string padding ?\s))
+                ;; --- Bouton principal : Installer ou Désinstaller ---
+                ;; On mémorise la position avant le bouton pour padder ensuite
+                ;; à une largeur fixe (sinon la colonne d'auth est désalignée
+                ;; entre [Installer] et [Désinstaller]).
+                (let ((debut-bouton (point)))
+                  (cond
+                   ;; Installé → Désinstaller (si supporté).
+                   ((and present desinstalleur)
+                    (let ((fn desinstalleur))
                       (widget-create 'push-button
                                      :notify (lambda (&rest _)
-                                               (funcall telecharger))
-                                     "Télécharger")))
-                  (widget-insert "  ")
-                  ;; Bouton Installer — utilise la sentinelle pour rafraîchir
-                  (let ((fn installeur))
-                    (widget-create 'push-button
-                                   :notify (lambda (&rest _)
-                                             (metal-deps--executer-et-rafraichir fn))
-                                   "Installer")))
-                (when (and present desinstalleur)
-                  (widget-insert "  ")
-                  ;; Bouton Désinstaller — même mécanique
-                  (let ((fn desinstalleur))
-                    (widget-create 'push-button
-                                   :notify (lambda (&rest _)
-                                             (metal-deps--executer-et-rafraichir fn))
-                                   "Désinstaller")))
-                ;; Description optionnelle (ex: raccourci clavier)
-                (let ((desc (plist-get outil :description)))
-                  (when desc
-                    (widget-insert (format "  — %s" desc))))
-                (widget-insert "\n"))))))
+                                               (metal-deps--executer-et-rafraichir fn))
+                                     "Désinstaller")))
+                   ;; Non installé → Installer (+ Télécharger sur Linux si défini).
+                   ((and (not present) installeur (not (eq installeur 'ignore)))
+                    (let ((telecharger (plist-get outil :telecharger)))
+                      (when (and telecharger (eq system-type 'gnu/linux))
+                        (widget-create 'push-button
+                                       :notify (lambda (&rest _)
+                                                 (funcall telecharger))
+                                       "Télécharger")
+                        (widget-insert "  ")))
+                    (let ((fn installeur))
+                      (widget-create 'push-button
+                                     :notify (lambda (&rest _)
+                                               (metal-deps--executer-et-rafraichir fn))
+                                     "Installer"))))
+                  ;; Padder le bouton principal à largeur fixe (16 chars)
+                  ;; pour aligner la colonne suivante.
+                  (let* ((largeur-bouton (string-width
+                                          (buffer-substring-no-properties
+                                           debut-bouton (point))))
+                         (pad-suite (max 2 (- 16 largeur-bouton))))
+                    (widget-insert (make-string pad-suite ?\s))))
+                ;; --- Statut / description ---
+                (cond
+                 ;; Cas agent : "🔑 statut : description"
+                 (agent-id
+                  (let* ((spec (cdr (assq agent-id metal-deps-agents-catalogue)))
+                         (authentifie (and spec
+                                           (metal-deps--agent-authentifie-p spec))))
+                    (widget-insert
+                     (propertize "🔑 " 'face '(:foreground "#10A37F")))
+                    (cond
+                     ;; Installé + authentifié : texte vert (non cliquable).
+                     (authentifie
+                      (widget-insert
+                       (propertize "authentifié"
+                                   'face '(:foreground "#10A37F" :weight bold))))
+                     ;; Installé non authentifié : « authentifier » cliquable
+                     ;; lance l'auth en terminal (comportement habituel).
+                     (present
+                      (let ((id agent-id))
+                        (insert-text-button
+                         "authentifier"
+                         'action (lambda (_)
+                                   (metal-deps--authentifier-agent-ia id))
+                         'face '(:foreground "#0366d6" :underline t :weight bold)
+                         'follow-link t
+                         'help-echo "Lancer l'authentification dans un terminal")))
+                     ;; Pas installé : « authentifier » cliquable affiche
+                     ;; la procédure dans un buffer d'aide.
+                     (t
+                      (let ((id agent-id))
+                        (insert-text-button
+                         "authentifier"
+                         'action (lambda (_)
+                                   (metal-deps--afficher-procedure-auth id))
+                         'face '(:foreground "#0366d6" :underline t :weight bold)
+                         'follow-link t
+                         'help-echo "Afficher la procédure d'authentification"))))
+                    (when desc
+                      (widget-insert
+                       (propertize (concat " : " desc) 'face 'shadow)))))
+                 ;; Cas non-agent : "— description" (si description)
+                 (desc
+                  (widget-insert (propertize (concat "— " desc) 'face 'shadow))))
+                (widget-insert "\n")))
+            ;; --- Bouton spécial pour agents-ia : ajouter un agent perso ---
+            (when (eq cat-id 'agents-ia)
+              (widget-insert "\n   ")
+              (widget-create 'push-button
+                             :notify (lambda (&rest _)
+                                       (call-interactively
+                                        #'metal-deps--ajouter-agent-personnalise))
+                             "+ Ajouter un autre agent…")
+              (widget-insert "\n   ")
+              (widget-insert
+               (propertize
+                "● = agent par défaut au démarrage ; cliquer sur ◯ pour le changer"
+                'face 'shadow))
+              (widget-insert "\n"))
+            (widget-insert "\n"))))
       
-      (widget-insert "\n────────────────────────────────────────\n")
-      (widget-insert "Actions rapides : ")
+      (widget-insert "\n  ")
+      (widget-insert (propertize (make-string 66 ?─) 'face 'shadow))
+      (widget-insert "\n\n  ")
+      (widget-insert (propertize "Actions rapides : " 'face 'bold))
       (widget-create 'push-button
                      :notify (lambda (&rest _) (metal-deps-installer-logiciels))
                      "Installer les logiciels")
@@ -1437,15 +2125,25 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                                  (metal-deps--annuler-file-attente)
                                  (run-with-timer 1 nil #'metal-deps-afficher-etat))
                        "Annuler"))
-      (widget-insert "\n\n")
+      (widget-insert "\n\n"))
       
       (use-local-map widget-keymap)
       (widget-setup)
-      (goto-char (point-min))
+      ;; Restaurer la position d'affichage : si on était dans un buffer
+      ;; déjà ouvert, garder le point et le window-start ; sinon aller
+      ;; au début (premier affichage).
+      (if point-precedent
+          (goto-char (min point-precedent (point-max)))
+        (goto-char (point-min)))
       (read-only-mode 1)
       (setq-local tab-line-exclude nil)
       (tab-line-mode 1))
-    (switch-to-buffer buf)))
+    (switch-to-buffer buf)
+    ;; Le switch-to-buffer peut réinitialiser le window-start ; on
+    ;; le restaure explicitement après pour préserver le défilement.
+    (when (and start-precedent (get-buffer-window buf))
+      (set-window-start (get-buffer-window buf)
+                        (min start-precedent (point-max))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Commandes d'installation groupées (séquentielles)

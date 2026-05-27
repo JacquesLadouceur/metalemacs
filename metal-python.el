@@ -210,6 +210,13 @@ channels concernés. L'opération est locale, rapide, et idempotente
 ;;; 5. Sélection de l'interpréteur Python
 ;;; ═══════════════════════════════════════════════════════════════════
 
+(defvar metal-conda-environnement-derniere nil
+  "Chemin du dernier environnement Conda activé dans la session courante.
+Non persisté entre sessions Emacs (contrairement à
+`metal-conda-environnement-defaut').  Sert à conserver l'environnement
+choisi par l'utilisateur quand il ferme un buffer .py et en rouvre un
+autre dans la même session.")
+
 (defun metal-python-pick-interpreter ()
   "Choisir IPython si présent dans l'env actif, sinon Python (ou `py' sous Windows)."
   (let* ((ipy (executable-find "ipython"))
@@ -232,20 +239,34 @@ channels concernés. L'opération est locale, rapide, et idempotente
       "python")))
 
 (defun metal-python--ensure-conda-env ()
-  "Activer l'environnement Conda approprié. Retourne t si actif, nil sinon."
+  "Activer l'environnement Conda approprié. Retourne t si actif, nil sinon.
+Ordre de priorité :
+  1. Un environnement est déjà actif (au niveau Conda)
+  2. Le dernier environnement explicitement activé dans la session courante
+     (`metal-conda-environnement-derniere'), mis à jour par le hook
+     `conda-postactivate-hook'.  Cela évite de retomber sur `base' après
+     avoir fermé puis rouvert un fichier .py.
+  3. L'environnement par défaut sauvegardé entre sessions
+     (`metal-conda-environnement-defaut').
+  4. Sinon, `base' si Conda est disponible."
   (cond
-   ;; 1. Un environnement est déjà actif
+   ;; 1. Un environnement est déjà actif au niveau Conda
    ((and (boundp 'conda-env-current-name) conda-env-current-name) t)
-   ;; 2. Un environnement par défaut est sauvegardé
+   ;; 2. Dernier env activé dans la session (mémoire de session)
+   ((and metal-conda-environnement-derniere
+         (file-directory-p metal-conda-environnement-derniere))
+    (ignore-errors (conda-env-activate-path metal-conda-environnement-derniere))
+    t)
+   ;; 3. Environnement par défaut sauvegardé entre sessions
    ((and metal-conda-environnement-defaut
          (file-directory-p metal-conda-environnement-defaut))
     (ignore-errors (conda-env-activate-path metal-conda-environnement-defaut))
     t)
-   ;; 3. Conda est disponible, activer base
+   ;; 4. Conda est disponible, activer base
    (conda-env-home-directory
     (ignore-errors (conda-env-activate-path conda-env-home-directory))
     t)
-   ;; 4. Conda n'est pas installé
+   ;; 5. Conda n'est pas installé
    (t
     (message "⚠️ Python/Conda non disponible. Utilisez M-x metal-deps-installer-miniconda")
     nil)))
@@ -260,6 +281,12 @@ channels concernés. L'opération est locale, rapide, et idempotente
 (with-eval-after-load 'conda
   (add-hook 'conda-postactivate-hook
             (lambda ()
+              ;; Mémoriser l'env activé pour la session (utilisé par
+              ;; metal-python--ensure-conda-env quand on rouvre un .py).
+              (when (and (boundp 'conda-env-current-path)
+                         conda-env-current-path)
+                (setq metal-conda-environnement-derniere conda-env-current-path))
+              ;; Reconfigurer tous les buffers Python.
               (dolist (buf (buffer-list))
                 (with-current-buffer buf
                   (when (derived-mode-p 'python-mode 'python-ts-mode)

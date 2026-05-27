@@ -12,6 +12,11 @@
 (require 'subr-x)
 (require 'cl-lib)
 (require 'diff)
+(require 'metal-toolbar)
+
+;; Déclarations pour satisfaire le byte-compiler (chargement paresseux).
+(declare-function ansi-color-apply-on-region "ansi-color" (begin end))
+(defvar compilation-filter-start)
 
 (defgroup metal-agent nil
   "Interface MetalEmacs pour Codex."
@@ -19,21 +24,18 @@
 
 ;;; --- Configuration des fournisseurs (providers) -------------------------
 
-(defcustom metal-agent-provider 'codex
-  "Fournisseur d'agent IA actuellement utilisé.
-Doit correspondre à une clé de `metal-agent--providers'."
-  :type '(choice (const :tag "OpenAI Codex CLI" codex)
-                 (const :tag "Anthropic Claude Code" claude))
-  :group 'metal-agent)
+(defcustom metal-agent-provider nil
+  "ID symbolique de l'agent IA actif.
+Doit correspondre à une clé de `metal-agent-providers'.  nil = aucun
+agent sélectionné — utiliser l'Assistant (M-x metal-deps-afficher-etat)
+pour installer et configurer un agent.
 
-(defcustom metal-agent-codex-command "codex"
-  "Commande pour lancer Codex CLI."
-  :type 'string
-  :group 'metal-agent)
-
-(defcustom metal-agent-codex-buffer-name "*Metal Codex*"
-  "Nom du buffer interne contenant la sortie brute de Codex."
-  :type 'string
+Persistance : la valeur Custom est l'agent **par défaut**, restauré
+au démarrage d'Emacs.  Les changements via `metal-agent-choisir-provider'
+(C-c m p, ou depuis les modes Python/Prolog) modifient cette variable
+en mémoire pour la session courante uniquement — le défaut persistant
+n'est modifiable que depuis l'Assistant MetalEmacs."
+  :type 'symbol
   :group 'metal-agent)
 
 (defcustom metal-agent-status-buffer-name "*Metal Agent*"
@@ -41,57 +43,56 @@ Doit correspondre à une clé de `metal-agent--providers'."
   :type 'string
   :group 'metal-agent)
 
-(defcustom metal-agent-codex-propose-args
-  '("exec" "--sandbox" "read-only" "--skip-git-repo-check")
-  "Arguments Codex pour proposer sans modifier les fichiers."
-  :type '(repeat string)
-  :group 'metal-agent)
-
-(defcustom metal-agent-claude-command "claude"
-  "Commande pour lancer Claude Code CLI."
-  :type 'string
-  :group 'metal-agent)
-
-(defcustom metal-agent-claude-buffer-name "*Metal Claude*"
-  "Nom du buffer affichant la sortie Claude Code."
-  :type 'string
-  :group 'metal-agent)
-
-(defcustom metal-agent-claude-propose-args
-  '("-p" "--permission-mode" "plan" "--output-format" "text")
-  "Arguments Claude Code pour proposer sans modifier les fichiers.
-Mode `plan' = lecture seule, équivalent à --sandbox read-only de Codex."
-  :type '(repeat string)
-  :group 'metal-agent)
-
 (defcustom metal-agent-auto-integrate t
   "Si non nil, ajouter automatiquement le bouton Agent aux modes pertinents."
   :type 'boolean
   :group 'metal-agent)
 
-(defvar metal-agent--providers
-  '((codex
-     :label       "Codex"
-     :color       "#10A37F"
-     :command-var metal-agent-codex-command
-     :buffer-var  metal-agent-codex-buffer-name
-     :args-var    metal-agent-codex-propose-args
-     :extract-fn  metal-agent--extract-code-block-codex)
-    (claude
-     :label       "Claude"
-     :color       "#D97757"
-     :command-var metal-agent-claude-command
-     :buffer-var  metal-agent-claude-buffer-name
-     :args-var    metal-agent-claude-propose-args
-     :extract-fn  metal-agent--extract-code-block-claude))
-  "Configuration des fournisseurs d'agent IA.
-Chaque entrée est un plist contenant :
-  :label        Nom affiché dans la toolbar et l'infobulle.
-  :color        Couleur du robot dans la toolbar compacte.
-  :command-var  Symbole de la variable contenant la commande CLI.
-  :buffer-var   Symbole de la variable contenant le nom du buffer.
-  :args-var     Symbole de la variable contenant la liste d'arguments.
-  :extract-fn   Fonction d'extraction du code depuis la sortie brute.")
+;;; --- Registre des providers ---------------------------------------
+
+(defcustom metal-agent-providers nil
+  "Liste des agents IA configurés (persistée via Custom).
+Chaque entrée est (ID . PLIST) où PLIST contient :
+  :label STR        Nom affiché.
+  :color HEXSTR     Couleur de l'icône robot.
+  :command STR      Commande CLI.
+  :args LISTE       Arguments par défaut pour proposer sans modifier.
+  :buffer-name STR  Nom du buffer de sortie.
+  :format SYM       `codex-style' ou `claude-style'.
+
+Géré par l'Assistant MetalEmacs (M-x metal-deps-afficher-etat).
+Ne modifier manuellement que via `customize-variable'."
+  :type '(alist :key-type symbol :value-type plist)
+  :group 'metal-agent
+  :set (lambda (sym val)
+         (set-default sym val)
+         (when (fboundp 'metal-agent--reconstruire-providers)
+           (metal-agent--reconstruire-providers))))
+
+(defvar metal-agent--providers nil
+  "Registre runtime des providers, dérivé de `metal-agent-providers'.
+La différence : `:format' (codex-style/claude-style) est résolu en
+`:extract-fn' (fonction réelle).")
+
+(defun metal-agent--provider-entry->runtime (entry)
+  "Convertit une entrée (ID . PLIST) en entrée runtime avec :extract-fn."
+  (let* ((id (car entry))
+         (spec (cdr entry))
+         (format (plist-get spec :format)))
+    (cons id
+          (plist-put (copy-sequence spec)
+                     :extract-fn
+                     (pcase format
+                       ('codex-style 'metal-agent--extract-code-block-codex)
+                       (_            'metal-agent--extract-code-block-claude))))))
+
+(defun metal-agent--reconstruire-providers ()
+  "Reconstruit `metal-agent--providers' à partir de `metal-agent-providers'."
+  (setq metal-agent--providers
+        (mapcar #'metal-agent--provider-entry->runtime metal-agent-providers)))
+
+;; Initialisation immédiate.
+(metal-agent--reconstruire-providers)
 
 (defun metal-agent--provider-prop (key &optional provider)
   "Récupère KEY pour PROVIDER (par défaut : `metal-agent-provider')."
@@ -101,15 +102,16 @@ Chaque entrée est un plist contenant :
 
 (defun metal-agent--current-command ()
   "Commande CLI du provider courant."
-  (symbol-value (metal-agent--provider-prop :command-var)))
+  (metal-agent--provider-prop :command))
 
 (defun metal-agent--current-buffer-name ()
   "Nom du buffer de sortie du provider courant."
-  (symbol-value (metal-agent--provider-prop :buffer-var)))
+  (or (metal-agent--provider-prop :buffer-name)
+      (format "*Metal %s*" (or (metal-agent--current-label) "Agent"))))
 
 (defun metal-agent--current-propose-args ()
   "Arguments CLI du provider courant pour proposer."
-  (symbol-value (metal-agent--provider-prop :args-var)))
+  (metal-agent--provider-prop :args))
 
 (defun metal-agent--current-extract-fn ()
   "Fonction d'extraction du provider courant."
@@ -302,10 +304,9 @@ Le hook reçoit la fenêtre en argument, qu'on ignore puisqu'on lit
   t)
 
 (defun metal-agent-codex-disponible-p ()
-  "Retourne t si la CLI du provider courant est disponible.
-Conserve son nom historique pour la compatibilité ; vérifie en réalité
-le provider actif (`metal-agent-provider')."
-  (executable-find (metal-agent--current-command)))
+  "Retourne t si la CLI du provider courant est disponible."
+  (when-let ((cmd (metal-agent--current-command)))
+    (executable-find cmd)))
 
 (defalias 'metal-agent-disponible-p 'metal-agent-codex-disponible-p
   "Alias provider-agnostique de `metal-agent-codex-disponible-p'.")
@@ -657,9 +658,20 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
   (cond
    ((/= code 0)
     (message nil)
-    (metal-agent--show-status-message "Erreur de l'agent. Voir *Metal Codex* pour les détails.")
     (display-buffer (metal-agent--codex-buffer))
-    (message "Erreur Codex. Voir *Metal Codex*."))
+    (cond
+     ((metal-agent--erreur-auth-p raw)
+      (let ((label (metal-agent--current-label)))
+        (metal-agent--show-status-message
+         (format "🔐 L'agent %s n'est pas authentifié.  Voir *Metal Codex* pour les détails."
+                 label))
+        (when (yes-or-no-p
+               (format "Agent %s non authentifié.  Lancer l'assistant d'authentification maintenant ? "
+                       label))
+          (metal-agent-authentifier-cli))))
+     (t
+      (metal-agent--show-status-message "Erreur de l'agent. Voir *Metal Codex* pour les détails.")
+      (message "Erreur Codex. Voir *Metal Codex*."))))
    (t
     (let ((proposed (metal-agent--extract-code-block raw)))
       (if (not proposed)
@@ -1402,28 +1414,243 @@ Le nom historique est conservé pour la rétrocompatibilité."
   (redraw-display))
 
 (defun metal-agent-choisir-provider ()
-  "Choisir le fournisseur d'agent IA (Codex ou Claude).
-Met à jour `metal-agent-provider' et raffraîchit l'affichage."
+  "Choisir l'agent IA actif pour la session courante.
+La sélection n'est PAS persistée — au redémarrage d'Emacs, l'agent par
+défaut configuré dans l'Assistant MetalEmacs sera restauré.
+
+Pour modifier l'agent par défaut (persistant), utiliser l'Assistant :
+M-x metal-deps-afficher-etat → section Agents IA → bouton « ◉ Définir
+par défaut » à côté de l'agent désiré.
+
+Si aucun agent n'est configuré, redirige vers l'Assistant."
   (interactive)
-  (let* ((choices (mapcar (lambda (p)
-                            (cons (metal-agent--provider-prop :label (car p))
-                                  (car p)))
-                          metal-agent--providers))
-         (label (completing-read
-                 (format "Agent IA (actuel : %s) : "
-                         (metal-agent--current-label))
-                 (mapcar #'car choices)
-                 nil t))
-         (sym (cdr (assoc label choices))))
-    (when sym
-      (setq metal-agent-provider sym)
-      (force-mode-line-update t)
-      (redraw-display)
-      (message "Agent actif : %s (%s)"
-               (metal-agent--current-label)
-               (if (metal-agent-disponible-p)
-                   "CLI disponible"
-                 (format "CLI introuvable : %s" (metal-agent--current-command)))))))
+  (let ((dispo (cl-remove-if-not
+                (lambda (p)
+                  (executable-find (plist-get (cdr p) :command)))
+                metal-agent--providers)))
+    (cond
+     ((null dispo)
+      (when (yes-or-no-p
+             "Aucun agent IA installé.  Ouvrir l'Assistant MetalEmacs pour en installer un ? ")
+        (when (fboundp 'metal-deps-afficher-etat)
+          (metal-deps-afficher-etat))))
+     (t
+      (let* ((choices (mapcar (lambda (p)
+                                (cons (plist-get (cdr p) :label) (car p)))
+                              dispo))
+             (label (completing-read
+                     (format "Agent IA pour cette session (actuel : %s) : "
+                             (or (metal-agent--current-label) "aucun"))
+                     (mapcar #'car choices)
+                     nil t))
+             (sym (cdr (assoc label choices))))
+        (when sym
+          ;; setq seulement : changement de session, non persisté.
+          ;; Le défaut persistant est géré par l'Assistant MetalEmacs.
+          (setq metal-agent-provider sym)
+          (force-mode-line-update t)
+          (redraw-display)
+          (message "Agent actif pour cette session : %s  (défaut persistant inchangé)"
+                   (metal-agent--current-label))))))))
+
+
+;;; --- Assistant d'authentification de CLI ---------------------------
+
+(defcustom metal-agent-erreur-auth-regexp
+  (concat "\\b\\("
+          "API[ _]?key"
+          "\\|Auth\\(?: method\\| token\\| required\\)?"
+          "\\|authenticate"
+          "\\|Please \\(log\\|sign\\) in"
+          "\\|unauthori[sz]ed"
+          "\\|HTTP 40[13]"
+          "\\|GEMINI_API_KEY\\|ANTHROPIC_API_KEY\\|OPENAI_API_KEY"
+          "\\|GOOGLE_GENAI_USE_VERTEXAI\\|GOOGLE_GENAI_USE_GCA"
+          "\\|Set an Auth"
+          "\\|credentials \\(missing\\|required\\|not found\\|expired\\)"
+          "\\|not authenticated"
+          "\\|run.*\\b\\(login\\|auth\\)\\b"
+          "\\)\\b")
+  "Expression régulière détectant les erreurs d'authentification dans
+la sortie d'une CLI.  Quand `metal-agent--handle-codex-code-response'
+voit un code de retour ≠ 0 et que cette regex matche, il propose
+`metal-agent-authentifier-cli'."
+  :type 'regexp
+  :group 'metal-agent)
+
+(defun metal-agent--erreur-auth-p (raw)
+  "Retourne t si RAW contient un indice d'erreur d'authentification."
+  (and (stringp raw)
+       (string-match-p metal-agent-erreur-auth-regexp raw)))
+
+(declare-function vterm "vterm")
+(declare-function ansi-term "term")
+(declare-function eat "eat")
+(declare-function metal-deps-afficher-etat "metal-deps")
+;; Le catalogue d'agents vit dans metal-deps.el ; on le déclare pour le
+;; byte-compiler (référencé dans `metal-agent--auth-info-pour').
+(defvar metal-deps-agents-catalogue)
+;; Déclarations spéciales pour permettre le binding dynamique sous
+;; `lexical-binding: t' (sinon ces `let' sont lexicaux et les paquets
+;; terminal ne voient pas nos surcharges).
+(defvar vterm-buffer-name)
+(defvar vterm-shell)
+(defvar eat-buffer-name)
+
+(defcustom metal-agent-terminal-externe
+  (cond
+   ((eq system-type 'darwin) 'macos-terminal)
+   ((and (memq system-type '(gnu/linux gnu))
+         (executable-find "x-terminal-emulator"))
+    'x-terminal-emulator)
+   ((eq system-type 'windows-nt)
+    ;; Préférer Windows Terminal s'il est installé (rendu TUI bien meilleur),
+    ;; sinon PowerShell, sinon cmd en dernier recours.
+    (cond ((executable-find "wt")         'windows-terminal)
+          ((executable-find "powershell") 'powershell)
+          (t                              'cmd)))
+   (t nil))
+  "Méthode pour ouvrir un terminal externe (assistant d'authentification).
+Utilisé par `metal-agent-authentifier-cli' quand ni EAT ni vterm ne
+sont disponibles — ansi-term rend mal les TUI Ink/React modernes
+(Gemini CLI, Codex, Claude Code)."
+  :type '(choice
+          (const :tag "macOS Terminal.app (via osascript)" macos-terminal)
+          (const :tag "macOS iTerm2 (via osascript)"       iterm2)
+          (const :tag "Linux x-terminal-emulator"          x-terminal-emulator)
+          (const :tag "Windows Terminal (wt.exe)"          windows-terminal)
+          (const :tag "Windows PowerShell"                 powershell)
+          (const :tag "Windows cmd.exe"                    cmd)
+          (const :tag "Aucun (fallback ansi-term)"         nil))
+  :group 'metal-agent)
+
+(declare-function w32-shell-execute "w32fns.c")
+
+(defun metal-agent--lancer-terminal-externe (command)
+  "Lancer COMMAND dans un terminal externe selon `metal-agent-terminal-externe'."
+  (pcase metal-agent-terminal-externe
+    ('macos-terminal
+     (call-process
+      "osascript" nil 0 nil
+      "-e" (format "tell application \"Terminal\" to do script \"%s\""
+                   (replace-regexp-in-string "\"" "\\\\\"" command))
+      "-e" "tell application \"Terminal\" to activate"))
+    ('iterm2
+     (call-process
+      "osascript" nil 0 nil
+      "-e" (format "tell application \"iTerm\" to create window with default profile command \"%s\""
+                   (replace-regexp-in-string "\"" "\\\\\"" command))))
+    ('x-terminal-emulator
+     (call-process "x-terminal-emulator" nil 0 nil "-e" command))
+    ('windows-terminal
+     ;; wt new-tab cmd /K command — la commande reste affichée après exit.
+     (call-process "wt.exe" nil 0 nil "new-tab" "cmd" "/K" command))
+    ('powershell
+     ;; -NoExit garde la fenêtre ouverte après la fin de la commande.
+     (if (fboundp 'w32-shell-execute)
+         (w32-shell-execute "open" "powershell.exe"
+                            (format "-NoExit -Command \"%s\"" command))
+       (call-process "powershell.exe" nil 0 nil
+                     "-NoExit" "-Command" command)))
+    ('cmd
+     (if (fboundp 'w32-shell-execute)
+         (w32-shell-execute "open" "cmd.exe" (format "/K %s" command))
+       (call-process "cmd.exe" nil 0 nil "/C" "start" "cmd" "/K" command)))
+    (_
+     (user-error "Aucun terminal externe configuré (voir `metal-agent-terminal-externe')"))))
+
+(defun metal-agent--auth-info-pour (id key)
+  "Retourne la valeur de KEY (`:auth-args' ou `:auth-aide') pour l'agent ID.
+
+Lit en priorité dans `metal-deps-agents-catalogue' (la source vivante :
+toute mise à jour du catalogue est visible immédiatement, sans avoir
+à réinstaller l'agent).  Fallback sur le provider enregistré (pour
+les agents hors catalogue)."
+  (or (and (boundp 'metal-deps-agents-catalogue)
+           (plist-get (cdr (assq id metal-deps-agents-catalogue)) key))
+      (metal-agent--provider-prop key id)))
+
+(defun metal-agent--installer-aide-auth (buf aide)
+  "Installer une header-line d'aide dans le buffer terminal BUF.
+AIDE est le texte d'instruction.  La header-line reste visible pendant
+toute la session terminal, sans gêner la CLI."
+  (when (and (buffer-live-p buf) aide)
+    (with-current-buffer buf
+      (setq-local header-line-format
+                  (propertize (concat " 📋 " aide)
+                              'face '(:weight bold))))))
+
+(defun metal-agent-authentifier-cli (&optional provider-id forcer-ansi-term)
+  "Lancer la CLI de PROVIDER-ID en mode interactif pour s'authentifier.
+
+La commande lancée est `command + :auth-args' (ex: `codex login',
+`claude auth login') si :auth-args est défini, sinon la commande nue
+(ex: `gemini' qui ouvre son menu interactif).  Ces métadonnées sont
+lues prioritairement dans `metal-deps-agents-catalogue' (vivant),
+fallback sur le provider enregistré.
+
+Le texte d'aide :auth-aide est affiché en header-line du buffer terminal
+pour guider l'utilisateur (que choisir dans le menu, où aller, etc.).
+
+Ordre de préférence du terminal :
+  1. EAT (si installé) — excellent rendu des TUI Ink/React.
+  2. vterm (si installé) — intégré, très bon rendu.
+  3. Terminal externe (cf. `metal-agent-terminal-externe').
+  4. ansi-term — fallback ; rend mal les TUI modernes.
+
+Avec un préfixe (`C-u', FORCER-ANSI-TERM non nil), force ansi-term."
+  (interactive "i\nP")
+  (let* ((id        (or provider-id metal-agent-provider))
+         (label     (metal-agent--provider-prop :label id))
+         (command   (let ((metal-agent-provider id))
+                      (metal-agent--current-command)))
+         (auth-args (metal-agent--auth-info-pour id :auth-args))
+         (auth-aide (metal-agent--auth-info-pour id :auth-aide))
+         ;; Liste complète d'arguments pour l'auth (vide si pas d'auth-args).
+         (cmd-line  (if auth-args
+                        (mapconcat #'identity (cons command auth-args) " ")
+                      command)))
+    (unless (executable-find command)
+      (user-error
+       "CLI « %s » introuvable.  Installer d'abord via l'Assistant (M-x metal-deps-afficher-etat)"
+       command))
+    (when auth-aide
+      ;; Affichage initial dans l'écho area (sera dupliqué en header-line).
+      (message "🔐 %s : %s" label auth-aide))
+    (let ((buffer-name (format "*Metal Agent — Auth %s*" label)))
+      ;; Si un ancien buffer d'auth existe (avec l'ancienne commande), le
+      ;; tuer pour repartir propre avec la nouvelle commande.
+      (when-let ((old-buf (get-buffer buffer-name)))
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer old-buf)))
+      (cond
+       (forcer-ansi-term
+        (ansi-term cmd-line (format "Metal Agent — Auth %s" label))
+        (metal-agent--installer-aide-auth
+         (get-buffer (format "*Metal Agent — Auth %s*" label)) auth-aide))
+       ((and (require 'eat nil t) (fboundp 'eat))
+        (let ((eat-buffer-name buffer-name))
+          (eat cmd-line))
+        (metal-agent--installer-aide-auth (get-buffer buffer-name) auth-aide))
+       ((and (require 'vterm nil t) (fboundp 'vterm))
+        (let ((vterm-buffer-name buffer-name)
+              (vterm-shell cmd-line))
+          (vterm buffer-name))
+        (metal-agent--installer-aide-auth (get-buffer buffer-name) auth-aide))
+       (metal-agent-terminal-externe
+        (metal-agent--lancer-terminal-externe cmd-line)
+        (when auth-aide
+          (display-message-or-buffer
+           (format "Authentification %s\n\n%s\n\nUne fois terminé, fermez la fenêtre du terminal et relancez la commande dans Emacs."
+                   label auth-aide)
+           "*Metal Agent — Aide auth*")))
+       (t
+        (ansi-term cmd-line (format "Metal Agent — Auth %s" label))
+        (metal-agent--installer-aide-auth
+         (get-buffer (format "*Metal Agent — Auth %s*" label)) auth-aide)
+        (message
+         "ansi-term peut mal rendre l'UI de %s.  Installer `eat' ou `vterm' pour un meilleur rendu."
+         label))))))
 
 ;;; --- Panneau de configuration (transient) --------------------------
 
@@ -1622,11 +1849,14 @@ voie l'état mis à jour des options."
                          (length metal-agent--instructions-libres)))))
      ""]
     ["Configuration"
-     ("a" "Choisir l'agent IA (Codex / Claude)" metal-agent-choisir-provider)
+     ("a" "Choisir l'agent IA actif"            metal-agent-choisir-provider)
+     ("L" "Authentifier la CLI (login)…"        metal-agent-authentifier-cli)
      ("p" "Choisir le profil de travail"        metal-agent-choisir-profil)
      ("o" "Basculer une option du profil"       metal-agent-basculer-options-interactif)
      ("r" "Réinitialiser les options du profil" metal-agent--reinitialiser-options
       :transient t)]
+    ["Assistant MetalEmacs"
+     ("M" "Installer / désinstaller des agents…" metal-deps-afficher-etat)]
     ["Instructions libres"
      ("e" "Éditer les instructions libres"      metal-agent-editer-instructions-libres)
      ("E" "Effacer les instructions libres"     metal-agent--effacer-instructions-libres
@@ -1680,7 +1910,7 @@ interactives classiques."
    (metal-agent--padding)
    "  |  "
    (metal-agent--toolbar-button
-    (propertize "🤖" 'face `(:height 1.4 :foreground ,(metal-agent--current-color)))
+    (metal-toolbar-emoji "🤖" :color (metal-agent--current-color))
     #'metal-agent-toggle-active
     (format "Activer les boutons %s (Agent)" (metal-agent--current-label)))
    (metal-agent--padding)))
@@ -1740,62 +1970,63 @@ interactives classiques."
 
 (defun metal-agent-toolbar-expanded ()
   "Toolbar agent complète (emojis Unicode).
-Le label des infobulles s'adapte au provider courant."
-  (let ((h '(:height 1.6))
-        (label (metal-agent--current-label))
-        (h-robot `(:height 1.6 :foreground ,(metal-agent--current-color))))
+Le label des infobulles s'adapte au provider courant.  Toutes les icônes
+passent par `metal-toolbar-emoji', ce qui les rend cohérentes avec Python
+et Prolog et sensibles à `metal-toolbar-emoji-size-offset'."
+  (let ((label (metal-agent--current-label))
+        (color (metal-agent--current-color)))
     (concat
      (metal-agent--padding)
      "  |  "
      (metal-agent--toolbar-button
-      (propertize "🤖" 'face h-robot)
-      #'metal-agent-afficher-codex
-      (format "Afficher %s" label))
+      (metal-toolbar-emoji "🤖" :color color)
+      #'metal-agent-toggle-active
+      (format "Réduire la toolbar %s (revenir au mode compact)" label))
      "   "
      (metal-agent--toolbar-button
-      (propertize "🪄" 'face h)
+      (metal-toolbar-emoji "🪄")
       #'metal-agent-corriger-selection
       "Corriger la sélection")
      "   "
      (metal-agent--toolbar-button
-      (propertize "📝" 'face h)
+      (metal-toolbar-emoji "📝")
       #'metal-agent-corriger-fichier
       "Corriger le fichier")
      "   "
      (metal-agent--toolbar-button
-      (propertize "💡" 'face h)
+      (metal-toolbar-emoji "💡")
       #'metal-agent-expliquer-selection
       "Expliquer la sélection")
      "   "
      (metal-agent--toolbar-button
-      (propertize (if (metal-agent--prolog-p) "➕" "ƒ") 'face h)
+      (metal-toolbar-emoji (if (metal-agent--prolog-p) "➕" "ƒ"))
       #'metal-agent-ajouter-fonction
       (if (metal-agent--prolog-p) "Ajouter un prédicat" "Ajouter une fonction"))
      "   "
      (metal-agent--toolbar-button
-      (propertize "💬" 'face h)
+      (metal-toolbar-emoji "💬")
       #'metal-agent-demande-libre
       (format "Demande libre à %s" label))
      "   "
      (metal-agent--toolbar-button
-      (propertize "✅" 'face h)
+      (metal-toolbar-emoji "✅")
       #'metal-agent--apply-proposed-code
       "Appliquer la dernière proposition")
      "   "
      (metal-agent--toolbar-button
-      (propertize "👁️" 'face h)
+      (metal-toolbar-emoji "👁️")
       #'metal-agent-toggle-codex-window
       (format "Afficher ou masquer %s" label))
      "  |  "
      (metal-agent--toolbar-button
-      (propertize "⚙️" 'face h)
+      (metal-toolbar-emoji "⚙️")
       #'metal-agent-ouvrir-panneau
       (format "Configurer l'agent (profil + options + agent IA — actuel : %s / %s)"
               label
               (or (metal-agent--profil-prop :nom) "?")))
      "   "
      (metal-agent--toolbar-button
-      (propertize "❌" 'face h)
+      (metal-toolbar-emoji "❌")
       #'metal-agent-toggle-active
       "Réduire la toolbar")
      (metal-agent--padding))))
