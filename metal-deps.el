@@ -1496,15 +1496,69 @@ AGENT-SPEC est le PLIST (sans le ID) du catalogue."
               :auth-args   (plist-get spec :auth-args)
               :auth-aide   (plist-get spec :auth-aide))))
 
+(defun metal-deps--assurer-npm-prefix-user ()
+  "Configure npm pour installer en mode utilisateur (~/.npm-global).
+Évite les erreurs EACCES sur Linux où `npm install -g' essaie sinon
+d'écrire dans /usr/local/lib/node_modules (root requis).
+
+Fonction idempotente — sûre à appeler plusieurs fois.  N'agit que sur
+Linux ; sur macOS (npm via Homebrew) et Windows (Scoop), les permissions
+sont déjà OK par défaut.
+
+Modifications :
+1. Crée ~/.npm-global si nécessaire
+2. Configure « npm config set prefix » vers ce dossier
+3. Ajoute ~/.npm-global/bin à `exec-path' et `PATH' pour la session
+4. Ajoute la ligne export PATH=... à ~/.bashrc et ~/.zshrc si absente"
+  (when (and (eq system-type 'gnu/linux)
+             (executable-find "npm"))
+    (let* ((prefix (expand-file-name "~/.npm-global"))
+           (bin (expand-file-name "bin" prefix))
+           (prefix-actuel
+            (string-trim
+             (shell-command-to-string "npm config get prefix 2>/dev/null"))))
+      ;; 1) Créer le dossier si nécessaire
+      (unless (file-directory-p prefix)
+        (make-directory prefix t))
+      ;; 2) Configurer npm si pas déjà fait
+      (unless (string= prefix-actuel prefix)
+        (call-process "npm" nil nil nil "config" "set" "prefix" prefix)
+        (metal-deps--journaliser
+         "npm configuré pour utiliser ~/.npm-global (évite EACCES sur npm install -g)"))
+      ;; 3) Ajouter bin à exec-path et PATH pour la session courante
+      (add-to-list 'exec-path bin)
+      (let ((path-env (or (getenv "PATH") "")))
+        (unless (string-match-p (regexp-quote bin) path-env)
+          (setenv "PATH" (concat bin path-separator path-env))))
+      ;; 4) Persister dans les shell rc files si présents
+      (dolist (rc '("~/.bashrc" "~/.zshrc" "~/.profile"))
+        (let ((rc-path (expand-file-name rc)))
+          (when (file-exists-p rc-path)
+            (with-temp-buffer
+              (insert-file-contents rc-path)
+              (goto-char (point-min))
+              (unless (search-forward "npm-global/bin" nil t)
+                (goto-char (point-max))
+                (unless (bolp) (insert "\n"))
+                (insert "\n# Added by MetalEmacs Assistant for npm user prefix\n"
+                        "export PATH=\"$HOME/.npm-global/bin:$PATH\"\n")
+                (let ((inhibit-message t))
+                  (write-region (point-min) (point-max) rc-path nil 'quiet))
+                (metal-deps--journaliser
+                 "PATH npm-global ajouté à %s" rc)))))))))
+
 (defun metal-deps--commande-installation-cli (agent-spec)
   "Retourne (PROG ARGS… PAQUET) pour installer la CLI de AGENT-SPEC.
-Priorité : pipx > npm > brew (pipx pour Aider, npm pour la plupart)."
+Priorité : pipx > npm > brew.  Sur Linux, configure aussi le prefix
+npm en mode utilisateur pour éviter les erreurs EACCES."
   (cond
    ((and (plist-get agent-spec :paquet-pipx) (executable-find "pipx"))
     (list "pipx" "install" (plist-get agent-spec :paquet-pipx)))
    ((and (plist-get agent-spec :paquet-pipx) (executable-find "pip"))
     (list "pip" "install" "--user" (plist-get agent-spec :paquet-pipx)))
    ((and (plist-get agent-spec :paquet-npm) (executable-find "npm"))
+    ;; Configurer le prefix user sur Linux avant tout npm install -g.
+    (metal-deps--assurer-npm-prefix-user)
     (list "npm" "install" "-g" (plist-get agent-spec :paquet-npm)))
    ((and (plist-get agent-spec :paquet-brew) (executable-find "brew"))
     (list "brew" "install" (plist-get agent-spec :paquet-brew)))
@@ -1518,6 +1572,8 @@ Priorité : pipx > npm > brew (pipx pour Aider, npm pour la plupart)."
    ((and (plist-get agent-spec :paquet-pipx) (executable-find "pip"))
     (list "pip" "uninstall" "-y" (plist-get agent-spec :paquet-pipx)))
    ((and (plist-get agent-spec :paquet-npm) (executable-find "npm"))
+    ;; Même prefix user qu'à l'install pour que npm trouve le paquet.
+    (metal-deps--assurer-npm-prefix-user)
     (list "npm" "uninstall" "-g" (plist-get agent-spec :paquet-npm)))
    ((and (plist-get agent-spec :paquet-brew) (executable-find "brew"))
     (list "brew" "uninstall" (plist-get agent-spec :paquet-brew)))
