@@ -341,6 +341,10 @@ Retourne t si la commande a été lancée."
       ;; Fallback vers USERPROFILE
       (file-exists-p (expand-file-name "scoop/shims/scoop.ps1" (getenv "USERPROFILE")))))
 
+(defun metal-deps--nodejs-present-p ()
+  "Retourne t si Node.js et npm sont disponibles dans le PATH."
+  (and (executable-find "node") (executable-find "npm")))
+
 (defun metal-deps--scoop-path ()
   "Retourne le chemin vers le dossier Scoop."
   (let ((scoop-home (getenv "SCOOP")))
@@ -566,6 +570,123 @@ Cette fonction utilise la même logique que early-init.el."
         (setenv "PATH" (concat scoop-shims ";" (getenv "PATH")))
         (add-to-list 'exec-path scoop-shims)))
     (message "📦 Installation de Scoop lancée. Redémarrez Emacs après l'installation.")))
+
+(defun metal-deps-installer-nodejs ()
+  "Installe Node.js (et npm) selon l'OS.
+- macOS    : utilise Homebrew si disponible (compile)
+- Linux    : affiche les commandes apt/dnf/pacman (nécessite sudo)
+- Windows  : utilise Scoop si disponible, sinon pointe vers nodejs.org"
+  (interactive)
+  (cond
+   ;; Déjà installé
+   ((metal-deps--nodejs-present-p)
+    (message "✓ Node.js déjà installé (npm version : %s)"
+             (string-trim (shell-command-to-string "npm --version"))))
+   ;; macOS : Homebrew
+   ((eq system-type 'darwin)
+    (if (executable-find "brew")
+        (progn
+          (metal-deps--journaliser "Installation de Node.js via Homebrew")
+          (let ((compilation-buffer-name-function
+                 (lambda (_) "*Installation Node.js*")))
+            (when (yes-or-no-p "Installer Node.js via Homebrew (brew install node) ? ")
+              (compile "brew install node"))))
+      (metal-deps--afficher-aide
+       "Installer Node.js — Homebrew requis"
+       "Homebrew n'est pas installé.\n\nInstallez d'abord Homebrew via la section\n« 📦 Gestionnaires de paquets » de l'Assistant (bouton [Installer] à\ncôté de Homebrew), puis revenez ici pour installer Node.js.")))
+   ;; Linux : instructions manuelles (sudo requis)
+   ((eq system-type 'gnu/linux)
+    (metal-deps--afficher-aide
+     "Installer Node.js sur Linux"
+     (concat
+      "Node.js (qui inclut npm) doit être installé via votre gestionnaire de\n"
+      "paquets système.  Ouvrez un terminal et exécutez selon votre distribution :\n\n"
+      "  Debian / Ubuntu / ChromeOS Linux :\n"
+      "    sudo apt update\n"
+      "    sudo apt install -y nodejs npm\n\n"
+      "  Fedora / RHEL :\n"
+      "    sudo dnf install -y nodejs npm\n\n"
+      "  Arch Linux :\n"
+      "    sudo pacman -S nodejs npm\n\n"
+      "Documentation officielle :\n"
+      "  https://nodejs.org/en/download/package-manager\n\n"
+      "Note : si « npm install -g » échoue plus tard avec EACCES,\n"
+      "configurez npm pour installer en mode utilisateur :\n\n"
+      "  mkdir -p ~/.npm-global\n"
+      "  npm config set prefix ~/.npm-global\n"
+      "  echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.bashrc\n"
+      "  source ~/.bashrc\n\n"
+      "Une fois Node.js installé, revenez à l'Assistant et cliquez sur\n"
+      "« Rafraîchir » pour voir les agents IA disponibles à l'installation.")))
+   ;; Windows : Scoop si disponible
+   ((eq system-type 'windows-nt)
+    (if (metal-deps--scoop-present-p)
+        (progn
+          (metal-deps--journaliser "Installation de Node.js via Scoop")
+          (when (yes-or-no-p "Installer Node.js via Scoop (scoop install nodejs) ? ")
+            (compile "scoop install nodejs")))
+      (metal-deps--afficher-aide
+       "Installer Node.js sur Windows"
+       (concat
+        "Deux options pour installer Node.js sur Windows :\n\n"
+        "1. Via Scoop (recommandé, sans admin) :\n"
+        "   Installez d'abord Scoop via la section « 📦 Gestionnaires de paquets »\n"
+        "   de l'Assistant, puis revenez ici cliquer sur Installer.\n\n"
+        "2. Installateur officiel :\n"
+        "   https://nodejs.org/en/download/\n\n"
+        "Une fois Node.js installé, redémarrez Emacs puis revenez à l'Assistant."))))
+   (t (user-error "OS non supporté pour l'installation automatique de Node.js"))))
+
+(defun metal-deps-desinstaller-nodejs ()
+  "Désinstalle Node.js + npm selon l'OS.
+Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
+  (interactive)
+  (cond
+   ((not (metal-deps--nodejs-present-p))
+    (message "Node.js n'est pas installé"))
+   ;; macOS : brew uninstall node
+   ((eq system-type 'darwin)
+    (if (executable-find "brew")
+        (when (yes-or-no-p
+               "Désinstaller Node.js (brew uninstall node) ?  D'autres outils peuvent en dépendre. ")
+          (metal-deps--journaliser "Désinstallation Node.js via Homebrew")
+          (let ((compilation-buffer-name-function
+                 (lambda (_) "*Désinstallation Node.js*")))
+            (compile "brew uninstall node")))
+      (metal-deps--afficher-aide
+       "Désinstaller Node.js"
+       (concat
+        "Homebrew n'est pas installé — Node.js a probablement été installé\n"
+        "autrement (installateur officiel, nvm, etc.).\n\n"
+        "Vérifiez avec :\n"
+        "  which node\n"
+        "  which npm\n\n"
+        "puis désinstallez selon la source d'installation."))))
+   ;; Linux : instructions manuelles
+   ((eq system-type 'gnu/linux)
+    (metal-deps--afficher-aide
+     "Désinstaller Node.js sur Linux"
+     (concat
+      "Selon votre gestionnaire de paquets, ouvrez un terminal et exécutez :\n\n"
+      "  Debian / Ubuntu / ChromeOS Linux :\n"
+      "    sudo apt remove nodejs npm\n\n"
+      "  Fedora / RHEL :\n"
+      "    sudo dnf remove nodejs npm\n\n"
+      "  Arch Linux :\n"
+      "    sudo pacman -R nodejs npm\n\n"
+      "⚠ Attention : d'autres outils sur votre système peuvent dépendre de\n"
+      "Node.js (yarn, certaines applications Electron, etc.).  Vérifiez\n"
+      "avant de désinstaller.")))
+   ;; Windows : Scoop si utilisé
+   ((eq system-type 'windows-nt)
+    (if (metal-deps--scoop-present-p)
+        (when (yes-or-no-p
+               "Désinstaller Node.js (scoop uninstall nodejs) ?  D'autres outils peuvent en dépendre. ")
+          (metal-deps--journaliser "Désinstallation Node.js via Scoop")
+          (compile "scoop uninstall nodejs"))
+      (metal-deps--afficher-aide
+       "Désinstaller Node.js sur Windows"
+       "Désinstaller via :\n  • Panneau de configuration > Programmes\n  • ou la commande Scoop si vous l'avez utilisée à l'install")))))
 
 (defun metal-deps--scoop-add-extras-bucket ()
   "Ajoute le bucket 'extras' à Scoop si nécessaire."
@@ -1639,6 +1760,15 @@ ET CLI présente sur le système."
      :desinstaller nil
      :categorie gestionnaire 
      :linux-seulement t)
+    ;; Node.js / npm : prérequis multi-OS pour les agents IA (Claude,
+    ;; ChatGPT, Gemini installés via npm install -g).  Sur Linux il faut
+    ;; sudo donc on affiche les commandes ; macOS via brew ; Windows via Scoop.
+    (:nom "Node.js (npm)"
+     :verifier metal-deps--nodejs-present-p
+     :installer metal-deps-installer-nodejs
+     :desinstaller metal-deps-desinstaller-nodejs
+     :categorie gestionnaire
+     :description "Requis pour Claude, ChatGPT et Gemini")
     
     ;; Logiciels
     (:nom "Miniconda" 
