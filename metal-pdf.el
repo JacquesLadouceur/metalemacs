@@ -23,11 +23,19 @@
 
 ;;; Code:
 
-(require 'pdf-tools)
-(require 'pdf-view)
-(require 'pdf-annot)
-(require 'pdf-occur)
-(require 'pdf-misc)
+;; pdf-tools (et ses sous-modules) nécessitent le binaire natif `epdfinfo',
+;; compilé via poppler/Homebrew.  Sur une machine où pdf-tools n'est pas
+;; encore installé (ex. macOS sans Homebrew), ces require échoueraient et
+;; interrompraient le chargement de tout le fichier — et donc des modules
+;; chargés après metal-pdf dans init.el.  On les rend donc optionnels
+;; (3e argument NOERROR de `require').  La barre PDF s'activera
+;; automatiquement dès que pdf-tools sera disponible (voir le hook plus bas,
+;; protégé par `featurep').
+(require 'pdf-tools nil t)
+(require 'pdf-view nil t)
+(require 'pdf-annot nil t)
+(require 'pdf-occur nil t)
+(require 'pdf-misc nil t)
 (require 'metal-toolbar)
 
 (defgroup metal-pdf nil

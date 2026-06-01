@@ -1993,10 +1993,18 @@ Raccourci Treemacs : M (Shift+M)"
 (global-set-key (kbd "C--") 'metal-text-scale-decrease-mouse)
 (global-set-key (kbd "C-0") 'metal-text-scale-reset-all)
 
-(require 'metal-toolbar)   ; en premier
-(require 'metal-quarto)
-(require 'metal-pdf)
-(require 'metal-git)
+;; Chargement des modules d'interface.  metal-toolbar doit venir en premier
+;; (les autres en dépendent).  Chaque require est isolé : si un module
+;; échoue (ex. dépendance native absente), on journalise l'erreur mais on
+;; continue à charger les suivants — un seul module défaillant ne doit
+;; jamais empêcher le reste de MetalEmacs (dont metal-git) de se charger.
+(require 'metal-toolbar)   ; en premier — prérequis des autres barres
+(dolist (mod '(metal-quarto metal-pdf metal-git))
+  (condition-case err
+      (require mod)
+    (error
+     (message "MetalEmacs : échec du chargement de %s — %s"
+              mod (error-message-string err)))))
 
 (let ((file (expand-file-name "metal-agent.el" user-emacs-directory)))
   (when (file-exists-p file)
