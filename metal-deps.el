@@ -2377,7 +2377,16 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
       (read-only-mode 1)
       (setq-local tab-line-exclude nil)
       (tab-line-mode 1))
-    (switch-to-buffer buf)
+    ;; Affichage du buffer.  Si l'Assistant a déjà une fenêtre (cas d'un
+    ;; rafraîchissement après installation), on la réutilise au lieu de
+    ;; faire un `switch-to-buffer' aveugle : sinon, quand le rafraîchissement
+    ;; est déclenché depuis la fenêtre de sortie d'`async-shell-command'
+    ;; (ex. *Homebrew Install*), l'Assistant s'empilerait par-dessus,
+    ;; laissant deux vues *MetalEmacs Assistant* côte à côte.
+    (let ((win (get-buffer-window buf)))
+      (if win
+          (select-window win)
+        (switch-to-buffer buf)))
     ;; Le switch-to-buffer peut réinitialiser le window-start ; on
     ;; le restaure explicitement après pour préserver le défilement.
     (when (and start-precedent (get-buffer-window buf))
