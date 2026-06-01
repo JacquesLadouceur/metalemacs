@@ -525,7 +525,7 @@ Après ce premier démarrage, les lancements ultérieurs seront
 quasi-instantanés.
 
 Pour les mises à jour futures :
-   M-x metal-git-mise-a-jour
+   M-x metal-mise-a-jour-github
    puis redémarrez Emacs.
 ")
         (goto-char (point-min))

@@ -10,7 +10,7 @@
 ;; source depuis le dépôt GitHub.
 ;;
 ;; Commandes principales :
-;;   M-x metal-git-mise-a-jour   — récupérer la dernière version
+;;   M-x metal-mise-a-jour-github   — récupérer la dernière version
 ;;   M-x metal-git-statut        — voir l'état actuel sans rien changer
 ;;
 ;; ATTENTION : la mise à jour ÉCRASE toute modification locale faite
@@ -219,10 +219,10 @@ disponible sur GitHub."
               (metal-git--ecrire
                buf "↓ %s nouveau(x) commit(s) disponible(s) sur GitHub" nb)
               (metal-git--ecrire
-               buf "  Lancer M-x metal-git-mise-a-jour pour récupérer."))))))))))
+               buf "  Lancer M-x metal-mise-a-jour-github pour récupérer."))))))))))
 
 ;;;###autoload
-(defun metal-git-mise-a-jour ()
+(defun metal-mise-a-jour-github ()
   "Met à jour MetalEmacs depuis le dépôt GitHub officiel.
 
 ATTENTION : toute modification locale faite aux fichiers du dépôt
