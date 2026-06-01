@@ -1820,8 +1820,7 @@ ET CLI présente sur le système."
      :installer metal-deps-installer-homebrew 
      :desinstaller metal-deps-desinstaller-homebrew
      :categorie gestionnaire 
-     :macos-seulement t
-     :condition metal-deps--macos-13-plus-p)
+     :macos-seulement t)
     (:nom "Scoop" 
      :verifier metal-deps--scoop-present-p
      :installer metal-deps-installer-scoop 
@@ -2457,12 +2456,12 @@ conflits entre gestionnaires de paquets."
         (add-to-list 'exec-path git-bin)
         (setenv "PATH" (concat git-bin ";" (getenv "PATH"))))))
   
-  ;; Homebrew sur macOS Apple Silicon
-  (when (and (eq system-type 'darwin)
-             (metal-deps--apple-silicon-p)
-             (file-exists-p "/opt/homebrew/bin"))
-    (add-to-list 'exec-path "/opt/homebrew/bin")
-    (setenv "PATH" (concat "/opt/homebrew/bin:" (getenv "PATH"))))
+  ;; Homebrew sur macOS : Apple Silicon (/opt/homebrew) ou Intel (/usr/local)
+  (when (eq system-type 'darwin)
+    (dolist (brew-bin '("/opt/homebrew/bin" "/usr/local/bin"))
+      (when (file-exists-p (expand-file-name "brew" brew-bin))
+        (add-to-list 'exec-path brew-bin)
+        (setenv "PATH" (concat brew-bin ":" (getenv "PATH"))))))
   
   ;; Scoop sur Windows
   (when (and (eq system-type 'windows-nt)
