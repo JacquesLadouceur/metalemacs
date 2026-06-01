@@ -220,6 +220,85 @@ puis le défaut du profil."
   (when (called-interactively-p 'any)
     (message "Options réinitialisées aux valeurs par défaut du profil.")))
 
+;; ─────────────────────────────────────────────────────────────────
+;; Sauvegarde de l'état des options dans le fichier .org du profil
+;; ─────────────────────────────────────────────────────────────────
+
+(defun metal-agent--sauvegarder-etat-dans-fichier (chemin options-disponibles)
+  "Écrire l'état actuel des options dans le fichier .org CHEMIN.
+Pour chaque option de OPTIONS-DISPONIBLES, remplace le `:: t' ou
+`:: f' du titre par la valeur active dans la session courante."
+  (with-temp-buffer
+    (insert-file-contents chemin)
+    (dolist (opt options-disponibles)
+      (let* ((nom (plist-get opt :nom))
+             (id (plist-get opt :id))
+             (actif (metal-agent--option-active-p id))
+             (valeur (if actif "t" "f"))
+             ;; Échapper les caractères regex spéciaux dans le nom
+             (nom-regex (regexp-quote nom))
+             ;; Pattern : titre niveau 1 (* Nom :: t-ou-f), tolérant aux
+             ;; espaces variables avant ::
+             (pattern (format "^\\(\\*[ \t]+%s[ \t]*::[ \t]*\\)[a-zA-Z]+\\([ \t]*\\)$"
+                              nom-regex)))
+        (goto-char (point-min))
+        (when (re-search-forward pattern nil t)
+          (replace-match (concat "\\1" valeur "\\2") t nil))))
+    (write-region (point-min) (point-max) chemin nil 'silent)))
+
+(defun metal-agent--profil-est-defaut-p (profil)
+  "Retourne t si PROFIL provient du dossier des profils par défaut."
+  (eq (plist-get profil :origine) 'defaut))
+
+(defun metal-agent--personnaliser-profil-defaut (profil)
+  "Copier le PROFIL par défaut vers le dossier personnel.
+Retourne le nouveau chemin du fichier personnel."
+  (let* ((chemin-defaut (plist-get profil :chemin))
+         (nom-fichier (file-name-nondirectory chemin-defaut))
+         (chemin-perso (expand-file-name nom-fichier
+                                         metal-agent-profils-directory)))
+    (make-directory metal-agent-profils-directory t)
+    (copy-file chemin-defaut chemin-perso t)
+    chemin-perso))
+
+(defun metal-agent-sauvegarder-etat ()
+  "Sauvegarder l'état actuel des options dans le fichier .org du profil.
+Modifie les `:: t' / `:: f' du fichier pour refléter les options
+actuellement cochées.  Si le profil est livré par défaut (origine
+`defaut'), demande confirmation pour créer une copie personnelle
+avant de la modifier — les profils par défaut restent intacts."
+  (interactive)
+  (let* ((profil (metal-agent--profil))
+         (chemin (plist-get profil :chemin))
+         (options (plist-get profil :options-disponibles))
+         (nom (plist-get profil :nom))
+         (est-defaut (metal-agent--profil-est-defaut-p profil)))
+    (cond
+     ((null profil)
+      (user-error "Aucun profil actif"))
+     ((null chemin)
+      (user-error "Le profil « %s » n'a pas de fichier source" nom))
+     (est-defaut
+      (if (yes-or-no-p
+           (format
+            "Le profil « %s » est livré par défaut.\nCréer une copie personnelle dans %s et y sauvegarder l'état ? "
+            nom
+            (abbreviate-file-name metal-agent-profils-directory)))
+          (let ((nouveau-chemin
+                 (metal-agent--personnaliser-profil-defaut profil)))
+            (metal-agent--sauvegarder-etat-dans-fichier nouveau-chemin options)
+            ;; Recharger les profils pour que la copie personnelle
+            ;; éclipse le profil par défaut
+            (when (fboundp 'metal-agent-recharger-profils)
+              (metal-agent-recharger-profils))
+            (message "État sauvegardé dans la copie personnelle : %s"
+                     (abbreviate-file-name nouveau-chemin)))
+        (message "Sauvegarde annulée — le profil par défaut reste intact.")))
+     (t
+      (metal-agent--sauvegarder-etat-dans-fichier chemin options)
+      (message "État sauvegardé dans %s"
+               (abbreviate-file-name chemin))))))
+
 (defun metal-agent--fragments-actifs ()
   "Retourne la liste des fragments de prompt pour les options cochées."
   (let ((options (metal-agent--profil-options metal-agent-profil-actif))
@@ -443,8 +522,30 @@ Le hook reçoit la fenêtre en argument, qu'on ignore puisqu'on lit
     (buffer-substring-no-properties (point-min) (point-max))))
 
 (defun metal-agent--codex-buffer ()
-  "Retourne le buffer interne contenant la sortie brute du provider courant."
-  (get-buffer-create (metal-agent--current-buffer-name)))
+  "Retourne le buffer interne contenant la sortie brute du provider courant.
+Le configure pour un affichage agréable de Markdown : `markdown-mode'
+(ou variantes view/gfm) si disponible, numéros de lignes, word-wrap
+visuel.  Configuration idempotente — n'écrase pas le mode déjà actif."
+  (let ((buf (get-buffer-create (metal-agent--current-buffer-name))))
+    (with-current-buffer buf
+      ;; Choisir un mode de visualisation Markdown si pas déjà fait.
+      ;; gfm-view-mode (GitHub-flavored, lecture seule) est l'idéal,
+      ;; sinon fallback en cascade.
+      (unless (derived-mode-p 'markdown-mode 'gfm-mode 'text-mode)
+        (cond
+         ((fboundp 'gfm-view-mode)      (gfm-view-mode))
+         ((fboundp 'gfm-mode)            (gfm-mode))
+         ((fboundp 'markdown-view-mode) (markdown-view-mode))
+         ((fboundp 'markdown-mode)       (markdown-mode))
+         (t (text-mode))))
+      ;; Numéros de lignes à gauche (pour repérer / citer du code).
+      (when (and (fboundp 'display-line-numbers-mode)
+                 (not (bound-and-true-p display-line-numbers-mode)))
+        (display-line-numbers-mode 1))
+      ;; Word-wrap visuel : pas de horizontal scroll pour les longs paragraphes.
+      (unless (bound-and-true-p visual-line-mode)
+        (visual-line-mode 1)))
+    buf))
 
 (defun metal-agent--status-buffer ()
   "Retourne le buffer d'état utilisateur de Metal Agent."
@@ -661,17 +762,21 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
     (display-buffer (metal-agent--codex-buffer))
     (cond
      ((metal-agent--erreur-auth-p raw)
-      (let ((label (metal-agent--current-label)))
+      (let ((label (metal-agent--current-label))
+            (buf-name (metal-agent--current-buffer-name)))
         (metal-agent--show-status-message
-         (format "🔐 L'agent %s n'est pas authentifié.  Voir *Metal Codex* pour les détails."
-                 label))
+         (format "🔐 L'agent %s n'est pas authentifié.  Voir %s pour les détails."
+                 label buf-name))
         (when (yes-or-no-p
                (format "Agent %s non authentifié.  Lancer l'assistant d'authentification maintenant ? "
                        label))
           (metal-agent-authentifier-cli))))
      (t
-      (metal-agent--show-status-message "Erreur de l'agent. Voir *Metal Codex* pour les détails.")
-      (message "Erreur Codex. Voir *Metal Codex*."))))
+      (let ((buf-name (metal-agent--current-buffer-name))
+            (label (or (metal-agent--current-label) "Agent")))
+        (metal-agent--show-status-message
+         (format "Erreur de l'agent.  Voir %s pour les détails." buf-name))
+        (message "Erreur %s.  Voir %s." label buf-name)))))
    (t
     (let ((proposed (metal-agent--extract-code-block raw)))
       (if (not proposed)
@@ -1319,7 +1424,7 @@ Code actuel :
     (metal-agent--run-codex
      (format
 "%s
-Explique cette sélection en français, clairement, pour un étudiant.
+Explique cette sélection en français, clairement.
 
 ```%s
 %s
@@ -1329,9 +1434,18 @@ Explique cette sélection en français, clairement, pour un étudiant.
       code)
      "explication"
      (lambda (exit-code _raw)
-       (if (= exit-code 0)
-           (message "Explication Codex terminée. Voir *Metal Codex*.")
-         (message "Erreur Codex. Voir *Metal Codex*."))))))
+       (let ((buf-name (metal-agent--current-buffer-name))
+             (label (or (metal-agent--current-label) "Agent")))
+         (if (= exit-code 0)
+             (progn
+               ;; Ouvrir automatiquement le buffer de sortie pour que
+               ;; l'utilisateur n'ait pas à le chercher.
+               (when-let ((buf (get-buffer buf-name)))
+                 (display-buffer buf))
+               (message "Explication %s terminée — voir %s." label buf-name))
+           (when-let ((buf (get-buffer buf-name)))
+             (display-buffer buf))
+           (message "Erreur %s — voir %s." label buf-name)))))))
 
 (defun metal-agent-ajouter-fonction ()
   "Ajouter une fonction/prédicat dans le fichier via code final complet."
@@ -1652,13 +1766,7 @@ Avec un préfixe (`C-u', FORCER-ANSI-TERM non nil), force ansi-term."
          "ansi-term peut mal rendre l'UI de %s.  Installer `eat' ou `vterm' pour un meilleur rendu."
          label))))))
 
-;;; --- Panneau de configuration (transient) --------------------------
-
-(declare-function transient-define-prefix "transient")
-(declare-function transient-define-suffix "transient")
-(declare-function transient-define-infix "transient")
-(declare-function transient-args "transient")
-(declare-function transient-setup "transient")
+;;; --- Panneau de configuration (buffer dédié) -----------------------
 
 (defun metal-agent-choisir-profil (&optional tous)
   "Choisir un profil de travail parmi `metal-agent-profils'.
@@ -1731,31 +1839,66 @@ Le contenu est sauvegardé dans `metal-agent--instructions-libres'."
   (setq metal-agent--instructions-libres "")
   (message "Instructions libres effacées."))
 
-(defun metal-agent-apercu-prompt ()
-  "Affiche dans un buffer le prompt qui serait envoyé pour la sélection courante.
-Utile pour vérifier que les options et instructions libres sont bien
-intégrées avant l'envoi."
+(defvar metal-agent-apercu-buffer-name "*Aperçu de la consigne*"
+  "Nom du buffer d'aperçu de la consigne envoyée à l'agent.")
+
+(defvar metal-agent-apercu-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") #'metal-agent-apercu-fermer)
+    (define-key map (kbd "g") #'metal-agent-apercu-prompt)
+    map)
+  "Keymap du buffer d'aperçu de la consigne.")
+
+(define-derived-mode metal-agent-apercu-mode special-mode "MetalAgent-Apercu"
+  "Mode majeur pour le buffer d'aperçu de la consigne envoyée à l'agent.
+\\{metal-agent-apercu-mode-map}"
+  (setq buffer-read-only t)
+  (setq header-line-format
+        (propertize " Aperçu de la consigne — Appuyer sur q pour fermer, g pour rafraîchir "
+                    'face '(:weight bold))))
+
+(defun metal-agent-apercu-fermer ()
+  "Fermer le buffer d'aperçu de la consigne."
   (interactive)
-  (let* ((code (or (and (use-region-p)
+  (let ((buffer (get-buffer metal-agent-apercu-buffer-name)))
+    (when buffer
+      (kill-buffer buffer))))
+
+(defun metal-agent-apercu-prompt ()
+  "Afficher dans un onglet la consigne qui serait envoyée à l'agent.
+La consigne est construite à partir du profil actif, des options
+activées, des instructions libres et de la sélection courante.  Utile
+pour vérifier le contenu de la requête avant l'envoi."
+  (interactive)
+  (let* ((buffer-source (current-buffer))
+         (code (or (and (use-region-p)
                         (buffer-substring-no-properties
                          (region-beginning) (region-end)))
                    "<sélection ou buffer ici>"))
          (prompt (metal-agent--prompt-final-code
                   "Corrige uniquement cette sélection."
                   code))
-         (buf (get-buffer-create "*Metal Agent — Aperçu du prompt*")))
+         (nom-profil (or (metal-agent--profil-prop :nom) "?"))
+         (nom-agent (metal-agent--current-label))
+         (buf (get-buffer-create metal-agent-apercu-buffer-name)))
     (with-current-buffer buf
+      (unless (derived-mode-p 'metal-agent-apercu-mode)
+        (metal-agent-apercu-mode))
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert "═══════════════════════════════════════════════════════════════\n"
-                (format "  Aperçu du prompt — Profil : %s — Agent : %s\n"
-                        (or (metal-agent--profil-prop :nom) "?")
-                        (metal-agent--current-label))
-                "═══════════════════════════════════════════════════════════════\n\n"
-                prompt))
-      (goto-char (point-min))
-      (view-mode 1))
-    (pop-to-buffer buf)))
+        (insert (propertize
+                 (format "Aperçu de la consigne\n\n")
+                 'face '(:weight bold :height 1.1)))
+        (insert (format "  Profil : %s\n" nom-profil))
+        (insert (format "  Agent  : %s\n" nom-agent))
+        (insert (format "  Source : %s\n\n"
+                        (or (buffer-name buffer-source) "?")))
+        (insert (propertize
+                 "Contenu de la consigne envoyée :\n\n"
+                 'face '(:weight bold)))
+        (insert prompt))
+      (goto-char (point-min)))
+    (switch-to-buffer buf)))
 
 (defun metal-agent--description-options ()
   "Retourne une chaîne décrivant l'état des options du profil actif."
@@ -1823,59 +1966,233 @@ voie l'état mis à jour des options."
            ;; Cas inattendu (ne devrait pas arriver avec require-match)
            (t (setq continuer nil))))))
     ;; Réafficher le panneau avec l'état mis à jour.
-    (when (fboundp 'metal-agent-panneau)
-      (call-interactively #'metal-agent-panneau))))
+    (metal-agent-panneau-rafraichir)))
 
-(when (require 'transient nil t)
-  (transient-define-prefix metal-agent-panneau ()
-    "Panneau de configuration de l'agent (provider, profil, options)."
-    [:description
-     (lambda ()
-       (format "État actuel
-  Agent IA  : %s   (%s)
-  Profil    : %s
-  Options   :
-%s
+;; ─────────────────────────────────────────────────────────────────
+;; Panneau de configuration : buffer dédié avec mode majeur
+;; ─────────────────────────────────────────────────────────────────
 
-  Instructions libres : %s
-"
-               (metal-agent--current-label)
-               (if (metal-agent-disponible-p) "CLI disponible" "CLI introuvable")
-               (or (metal-agent--profil-prop :nom) "?")
-               (metal-agent--description-options)
-               (if (string-empty-p (string-trim metal-agent--instructions-libres))
-                   "(aucune)"
-                 (format "%d caractères"
-                         (length metal-agent--instructions-libres)))))
-     ""]
-    ["Configuration"
-     ("a" "Choisir l'agent IA actif"            metal-agent-choisir-provider)
-     ("L" "Authentifier la CLI (login)…"        metal-agent-authentifier-cli)
-     ("p" "Choisir le profil de travail"        metal-agent-choisir-profil)
-     ("o" "Basculer une option du profil"       metal-agent-basculer-options-interactif)
-     ("r" "Réinitialiser les options du profil" metal-agent--reinitialiser-options
-      :transient t)]
-    ["Assistant MetalEmacs"
-     ("M" "Installer / désinstaller des agents…" metal-deps-afficher-etat)]
-    ["Instructions libres"
-     ("e" "Éditer les instructions libres"      metal-agent-editer-instructions-libres)
-     ("E" "Effacer les instructions libres"     metal-agent--effacer-instructions-libres
-      :transient t)]
-    ["Vérification"
-     ("?" "Aperçu du prompt à envoyer"          metal-agent-apercu-prompt)]
-    ["Quitter"
-     ("q" "Fermer ce panneau"                   transient-quit-one)]))
+(defvar metal-agent-panneau-buffer-name "*Configuration agent*"
+  "Nom du buffer du panneau de configuration de l'agent.")
+
+(defface metal-agent-bouton-face
+  '((t :inherit default :underline nil))
+  "Face des boutons du panneau de configuration de l'agent.
+Hérite de la face par défaut sans soulignement.  Le pointeur souris
+indique déjà le caractère cliquable des éléments."
+  :group 'metal-agent)
+
+(defvar metal-agent-config-mode-map
+  (let ((map (make-sparse-keymap)))
+    ;; Actions principales (reprises du transient)
+    (define-key map (kbd "a") #'metal-agent-choisir-provider)
+    (define-key map (kbd "L") #'metal-agent-authentifier-cli)
+    (define-key map (kbd "p") #'metal-agent-choisir-profil)
+    (define-key map (kbd "o") #'metal-agent-basculer-options-interactif)
+    (define-key map (kbd "r") #'metal-agent--reinitialiser-options)
+    (define-key map (kbd "s") #'metal-agent-sauvegarder-etat)
+    (define-key map (kbd "M") #'metal-deps-afficher-etat)
+    (define-key map (kbd "e") #'metal-agent-editer-instructions-libres)
+    (define-key map (kbd "E") #'metal-agent--effacer-instructions-libres)
+    (define-key map (kbd "?") #'metal-agent-apercu-prompt)
+    ;; Navigation
+    (define-key map (kbd "g") #'metal-agent-panneau-rafraichir)
+    (define-key map (kbd "q") #'metal-agent-panneau-fermer)
+    ;; Interactions souris et clavier sur les boutons
+    (define-key map (kbd "TAB") #'forward-button)
+    (define-key map (kbd "<backtab>") #'backward-button)
+    (define-key map (kbd "RET") #'push-button)
+    (define-key map [mouse-1] #'push-button)
+    map)
+  "Keymap du buffer de configuration de l'agent.")
+
+(define-derived-mode metal-agent-config-mode special-mode "MetalAgent-Config"
+  "Mode majeur pour le panneau de configuration de l'agent.
+\\{metal-agent-config-mode-map}"
+  (setq buffer-read-only t)
+  (setq cursor-type nil)
+  ;; Header-line pour l'apparence d'onglet
+  (setq header-line-format
+        (propertize " Configuration de l'agent — Appuyer sur q pour fermer "
+                    'face '(:weight bold))))
+
+(defun metal-agent-panneau--toggle-option (option-id)
+  "Action de bouton : basculer l'option OPTION-ID puis rafraîchir."
+  (metal-agent--basculer-option option-id)
+  (metal-agent-panneau-rafraichir))
+
+(defun metal-agent-panneau--inserer-options ()
+  "Insérer la liste des options du profil actif avec des boutons cliquables."
+  (let ((options (metal-agent--profil-options metal-agent-profil-actif)))
+    (if (null options)
+        (insert "  (aucune option pour ce profil)\n")
+      (dolist (opt options)
+        (let* ((id (plist-get opt :id))
+               (nom (plist-get opt :nom))
+               (active (metal-agent--option-active-p id))
+               (case-label (if active "[✓]" "[ ]"))
+               (option-id id))  ; capturer pour la closure
+          (insert "  ")
+          (insert-button case-label
+                         'action (lambda (_b)
+                                   (metal-agent-panneau--toggle-option option-id))
+                         'follow-link t
+                         'face 'metal-agent-bouton-face
+                         'help-echo (format "Basculer : %s" nom))
+          (insert " ")
+          (insert-button nom
+                         'action (lambda (_b)
+                                   (metal-agent-panneau--toggle-option option-id))
+                         'follow-link t
+                         'face 'metal-agent-bouton-face
+                         'help-echo (format "Basculer : %s" nom))
+          (insert "\n"))))))
+
+(defun metal-agent-panneau--inserer-bouton (raccourci label action)
+  "Insérer un bouton ligne : « raccourci  label »."
+  (insert (propertize (format "  %s  " raccourci)
+                      'face '(:weight bold)))
+  (insert-button label
+                 'action (lambda (_b)
+                           (call-interactively action))
+                 'follow-link t
+                 'face 'metal-agent-bouton-face
+                 'help-echo (format "Exécuter : %s" label))
+  (insert "\n"))
+
+(defun metal-agent-panneau--render ()
+  "Régénérer entièrement le contenu du panneau de configuration.
+Doit être appelé dans le buffer du panneau, en mode lecture-écriture."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+
+    ;; ÉTAT ACTUEL
+    (insert (propertize "État actuel\n\n" 'face '(:weight bold :height 1.1)))
+    (insert (format "  Agent IA  : %s   (%s)\n"
+                    (metal-agent--current-label)
+                    (if (metal-agent-disponible-p)
+                        "CLI disponible"
+                      "CLI introuvable")))
+    (insert (format "  Profil    : %s\n"
+                    (or (metal-agent--profil-prop :nom) "?")))
+    (insert "  Options   :\n")
+    (metal-agent-panneau--inserer-options)
+    (insert (format "\n  Instructions libres : %s\n"
+                    (if (string-empty-p (string-trim metal-agent--instructions-libres))
+                        "(aucune)"
+                      (format "%d caractères"
+                              (length metal-agent--instructions-libres)))))
+    (insert "\n\n")
+
+    ;; CONFIGURATION
+    (insert (propertize "Configuration\n" 'face '(:weight bold :height 1.1)))
+    (metal-agent-panneau--inserer-bouton
+     "a" "Choisir l'agent IA actif" #'metal-agent-choisir-provider)
+    (metal-agent-panneau--inserer-bouton
+     "L" "Authentifier la CLI (login)…" #'metal-agent-authentifier-cli)
+    (metal-agent-panneau--inserer-bouton
+     "p" "Choisir le profil de travail" #'metal-agent-choisir-profil)
+    (metal-agent-panneau--inserer-bouton
+     "o" "Basculer une option du profil" #'metal-agent-basculer-options-interactif)
+    (metal-agent-panneau--inserer-bouton
+     "r" "Réinitialiser les options du profil" #'metal-agent--reinitialiser-options)
+    (metal-agent-panneau--inserer-bouton
+     "s" "Sauvegarder l'état des options" #'metal-agent-sauvegarder-etat)
+    (insert "\n")
+
+    ;; ASSISTANT METALEMACS
+    (insert (propertize "Assistant MetalEmacs\n" 'face '(:weight bold :height 1.1)))
+    (metal-agent-panneau--inserer-bouton
+     "M" "Installer / désinstaller des agents…" #'metal-deps-afficher-etat)
+    (insert "\n")
+
+    ;; INSTRUCTIONS LIBRES
+    (insert (propertize "Instructions libres\n" 'face '(:weight bold :height 1.1)))
+    (metal-agent-panneau--inserer-bouton
+     "e" "Éditer les instructions libres" #'metal-agent-editer-instructions-libres)
+    (metal-agent-panneau--inserer-bouton
+     "E" "Effacer les instructions libres" #'metal-agent--effacer-instructions-libres)
+    (insert "\n")
+
+    ;; VÉRIFICATION
+    (insert (propertize "Vérification\n" 'face '(:weight bold :height 1.1)))
+    (metal-agent-panneau--inserer-bouton
+     "?" "Aperçu de la consigne à envoyer" #'metal-agent-apercu-prompt)
+    (insert "\n")
+
+    ;; QUITTER
+    (insert (propertize "Quitter\n" 'face '(:weight bold :height 1.1)))
+    (metal-agent-panneau--inserer-bouton
+     "q" "Fermer ce panneau" #'metal-agent-panneau-fermer)
+
+    (goto-char (point-min))))
+
+(defun metal-agent-panneau-rafraichir ()
+  "Rafraîchir le contenu du panneau de configuration s'il est ouvert."
+  (interactive)
+  (let ((buffer (get-buffer metal-agent-panneau-buffer-name)))
+    (when buffer
+      (with-current-buffer buffer
+        (metal-agent-panneau--render)))))
+
+(defun metal-agent-panneau-fermer ()
+  "Fermer le panneau de configuration de l'agent.
+Tue le buffer pour libérer l'onglet et revient au buffer précédent."
+  (interactive)
+  (let ((buffer (get-buffer metal-agent-panneau-buffer-name)))
+    (when buffer
+      (kill-buffer buffer))))
+
+(defun metal-agent-panneau ()
+  "Afficher le panneau de configuration de l'agent dans un buffer dédié.
+Le buffer apparaît comme un onglet à côté du fichier en cours via le
+header-line. Si le panneau est déjà ouvert, bascule vers son onglet.
+
+Avant l'affichage, le profil actif est synchronisé avec le mode majeur
+du buffer source (celui qui était courant au moment de l'appel), afin
+que le panneau reflète bien le profil applicable à ce fichier."
+  (interactive)
+  ;; Sauvegarder le buffer source AVANT de basculer vers le panneau,
+  ;; et y forcer la sélection automatique du profil pour s'assurer que
+  ;; `metal-agent-profil-actif' correspond bien au mode du fichier
+  ;; courant. Cela corrige le cas où le panneau était ouvert avant que
+  ;; la sélection automatique n'ait pu se produire.
+  (let ((buffer-source (current-buffer))
+        (buffer (get-buffer-create metal-agent-panneau-buffer-name)))
+    (when (and metal-agent-auto-selection-profil
+               (buffer-live-p buffer-source)
+               (not (eq buffer-source buffer)))
+      (with-current-buffer buffer-source
+        (metal-agent--auto-selectionner-profil)))
+    (with-current-buffer buffer
+      (unless (derived-mode-p 'metal-agent-config-mode)
+        (metal-agent-config-mode))
+      (metal-agent-panneau--render))
+    (switch-to-buffer buffer)))
 
 (defun metal-agent-ouvrir-panneau ()
-  "Ouvre le panneau de configuration de l'agent.
-Si transient n'est pas disponible, bascule sur des commandes
-interactives classiques."
+  "Alias pour `metal-agent-panneau' (compatibilité historique)."
   (interactive)
-  (cond
-   ((fboundp 'metal-agent-panneau)
-    (metal-agent-panneau))
-   (t
-    (call-interactively #'metal-agent-choisir-profil))))
+  (metal-agent-panneau))
+
+;; ─────────────────────────────────────────────────────────────────
+;; Rafraîchissement automatique du panneau après modification
+;; ─────────────────────────────────────────────────────────────────
+
+(defun metal-agent--rafraichir-panneau-si-ouvert (&rest _)
+  "Rafraîchir le panneau de configuration s'il est ouvert.
+Utilisé comme advice :after sur les commandes qui modifient l'état."
+  (when (get-buffer metal-agent-panneau-buffer-name)
+    (metal-agent-panneau-rafraichir)))
+
+(dolist (cmd '(metal-agent-choisir-provider
+               metal-agent-choisir-profil
+               metal-agent--reinitialiser-options
+               metal-agent-sauvegarder-etat
+               metal-agent-editer-instructions-libres
+               metal-agent--effacer-instructions-libres))
+  (when (fboundp cmd)
+    (advice-add cmd :after #'metal-agent--rafraichir-panneau-si-ouvert)))
 
 (defcustom metal-agent-icon-size 1.0
   "Hauteur des icônes de la toolbar Agent."

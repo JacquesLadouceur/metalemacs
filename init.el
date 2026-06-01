@@ -992,36 +992,42 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 ;; Iedit : édition multiple simultanée
 (use-package iedit)
 
+
+;; --- Bindings intuitifs pour quitter iedit ---
+;; C-g et <escape> sortent d'iedit en annulant les modifications.
+;; RET sort en gardant les modifications.
+
+(with-eval-after-load 'iedit
+  ;; C-g : sortir et annuler les modifications (convention Emacs)
+  (define-key iedit-mode-keymap (kbd "C-g") #'iedit--quit)
+  ;; <escape> : meme comportement que C-g
+  (define-key iedit-mode-keymap (kbd "<escape>") #'iedit--quit)
+  ;; RET : sortir en gardant les modifications
+  (define-key iedit-mode-keymap (kbd "RET") #'iedit-done)
+  ;; C-x C-s : sauvegarder le buffer (sort d'iedit en gardant les modifs)
+  (define-key iedit-mode-keymap (kbd "C-x C-s")
+              (lambda () (interactive) (iedit-done) (save-buffer))))
+
+
 ;; --- Iedit depuis Consult (C-e) ---
 
-(defvar metal-iedit--pending nil
-  "Motif en attente pour demarrer iedit apres sortie du minibuffer.")
-
-(defvar metal-iedit--pending-window nil
-  "Fenetre a re-selectionner apres sortie du minibuffer.")
-
-(defun metal-iedit--start-pending ()
-  "Demarre iedit si un motif est en attente."
-  (when metal-iedit--pending
-    (let ((pattern metal-iedit--pending)
-          (win metal-iedit--pending-window))
-      (setq metal-iedit--pending nil
-            metal-iedit--pending-window nil)
-      (when (window-live-p win)
-        (select-window win))
-      (when (and (stringp pattern) (> (length pattern) 0))
-        (iedit-start pattern (point-min) (point-max))))))
-
 (defun metal-iedit-from-consult ()
-  "Prend le motif saisi dans Consult et lance iedit."
+  "Prend le motif saisi dans Consult et lance iedit.
+Si on est dans le minibuffer, le motif est extrait, le minibuffer est
+ferme, et iedit-start est appele dans la fenetre source.
+Hors minibuffer, demande le motif via read-string."
   (interactive)
   (if (minibufferp)
-      (progn
-        (setq metal-iedit--pending (minibuffer-contents-no-properties)
-              metal-iedit--pending-window (minibuffer-selected-window))
-        (add-hook 'minibuffer-exit-hook #'metal-iedit--start-pending 0 t)
+      (let ((pattern (minibuffer-contents-no-properties))
+            (win (minibuffer-selected-window)))
+        (run-at-time 0 nil
+                     (lambda ()
+                       (when (and (window-live-p win)
+                                  (stringp pattern)
+                                  (> (length pattern) 0))
+                         (with-selected-window win
+                           (iedit-start pattern (point-min) (point-max))))))
         (abort-recursive-edit))
-    ;; Hors minibuffer : demander le motif
     (let ((pattern (read-string "Iedit (motif) : "
                                 (or (thing-at-point 'symbol t)
                                     (thing-at-point 'word t)

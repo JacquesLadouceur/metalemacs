@@ -1699,9 +1699,27 @@ affiche un buffer d'aide avec les instructions manuelles (champ
           (metal-deps--afficher-aide-install
            (plist-get spec :nom)
            (metal-deps--install-manuelle-pour spec)))
-         ;; Cas 3 : pas de gestionnaire et pas d'instructions — afficher
-         ;; un message générique pointant vers l'Assistant pour les
-         ;; prérequis (npm/pipx/brew) que l'agent supporte.
+         ;; Cas 3 : pas de gestionnaire et pas d'instructions.
+         ;; Si l'agent a besoin de npm et que Node.js n'est pas installé,
+         ;; proposer directement de l'installer (au lieu d'un buffer
+         ;; d'aide qui force l'utilisateur à scroller chercher Node.js).
+         ((and (plist-get spec :paquet-npm)
+               (not (metal-deps--nodejs-present-p)))
+          (if (yes-or-no-p
+               (format "« %s » nécessite Node.js (npm), qui n'est pas installé.  L'installer maintenant ? "
+                       (plist-get spec :nom)))
+              (progn
+                (metal-deps--journaliser
+                 "Install agent « %s » bloquée : Node.js manquant — lancement de l'installation Node.js"
+                 (plist-get spec :nom))
+                (metal-deps-installer-nodejs)
+                (message
+                 "Node.js : installation en cours/instructions affichées.  Une fois terminée, cliquez à nouveau sur « Installer » pour %s."
+                 (plist-get spec :nom)))
+            (message "Installation de « %s » annulée."
+                     (plist-get spec :nom))))
+         ;; Sinon : afficher un message générique pointant vers
+         ;; les prérequis manquants (pipx, brew…).
          (t
           (let ((manquants (metal-deps--gestionnaires-suggeres spec)))
             (metal-deps--afficher-aide-install
@@ -1995,6 +2013,38 @@ Demande interactivement les informations nécessaires."
         (message "Agent « %s » ajouté." nom)
         (run-with-timer 0.3 nil #'metal-deps-afficher-etat)))))
 
+(defun metal-deps--sync-providers-avec-catalogue ()
+  "Synchronise les entrées catalogue dans `metal-agent-providers'.
+Quand le catalogue change `:nom' ou d'autres champs (ex: Codex → ChatGPT,
+Gemini CLI → Gemini), les entrées persistées dans Custom gardent
+l'ancien nom — donc le `:buffer-name' reste figé (ex: « *Metal Codex* »
+alors que le buffer attendu serait « *Metal ChatGPT* »).
+
+Cette fonction met à jour les entrées du catalogue dans providers à
+chaque ouverture de l'Assistant.  Idempotent.  Ne touche pas aux
+agents personnalisés (qui ne sont pas dans le catalogue)."
+  (require 'metal-agent nil t)
+  (when (boundp 'metal-agent-providers)
+    (let (modifie)
+      (dolist (entry metal-deps-agents-catalogue)
+        (let* ((id (car entry))
+               (spec (cdr entry))
+               (provider-existant (assq id metal-agent-providers))
+               (nouveau-provider (metal-deps--agent-spec->provider-entry id spec)))
+          ;; Si l'agent est déjà enregistré et ses champs ont changé,
+          ;; mettre à jour l'entrée.
+          (when (and provider-existant
+                     (not (equal (cdr provider-existant)
+                                 (cdr nouveau-provider))))
+            (setq metal-agent-providers
+                  (cons nouveau-provider
+                        (assq-delete-all id metal-agent-providers)))
+            (setq modifie t))))
+      (when modifie
+        (customize-save-variable 'metal-agent-providers metal-agent-providers)
+        (metal-deps--journaliser
+         "Providers synchronisés avec le catalogue (label/buffer-name mis à jour)")))))
+
 (defun metal-deps--migration-nettoyage-agents-legacy ()
   "Retire de `metal-agent-providers' les anciens IDs d'agents qui ne
 sont plus dans le catalogue intégré (opencode, goose, aider, copilot).
@@ -2092,6 +2142,10 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
   ;; Nettoyer les anciens agents qui ne sont plus dans le catalogue.
   ;; Idempotent : si déjà nettoyé, ne fait rien.
   (metal-deps--migration-nettoyage-agents-legacy)
+  ;; Synchroniser les entrées du catalogue avec metal-agent-providers
+  ;; (pour propager les changements de :nom/:buffer-name aux entrées
+  ;; déjà persistées dans Custom).
+  (metal-deps--sync-providers-avec-catalogue)
   (let* ((buf (get-buffer-create "*MetalEmacs Assistant*"))
          ;; Mémoriser la position d'affichage si le buffer est déjà ouvert,
          ;; pour la restaurer après le rerendu.  Sans ça, un clic sur ◯

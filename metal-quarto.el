@@ -300,10 +300,19 @@ Le fichier `_metadata.yml' applique des options communes à tous les .qmd du
 dossier sans transformer celui-ci en projet Quarto (ce qui forcerait la
 validation YAML de tous les .qmd voisins, y compris les brouillons).
 
+Cette fonction n'est plus appelée automatiquement au rendu (où elle créait
+des conflits avec les .qmd Beamer / revealjs / typst). Elle est désormais
+appelée explicitement par le dashboard à la création d'un Document QMD
+\(option [d]\), c'est-à-dire d'un document destiné à devenir un PDF article.
+Les Présentations QMD \(option [p]\) ne déclenchent pas cette création.
+Pour créer manuellement un _metadata.yml dans un dossier existant, appeler
+cette fonction interactivement : `M-x metal-quarto-ensure-project-at'.
+
 La police de caractères n'est pas précisée : le moteur LaTeX par défaut
 \(pdflatex\) utilisera Latin Modern, garanti présent sur toute distribution.
 Pour une autre police, ajouter `pdf-engine: xelatex' et `mainfont:' dans
 la front matter du `.qmd' concerné."
+  (interactive "DDossier où créer _metadata.yml : ")
   (let ((file (expand-file-name "_metadata.yml" dir)))
     (unless (file-exists-p file)
       (with-temp-file file
@@ -330,8 +339,8 @@ la front matter du `.qmd' concerné."
 
 (defun metal-quarto-rendre-fichier ()
   "Rendre le fichier Quarto courant avec 'quarto render'.
-Crée _quarto.yml si nécessaire. Vérifie TinyTeX avant le rendu.
-Si TinyTeX doit être mis à jour, le rendu est relancé automatiquement après."
+Vérifie TinyTeX avant le rendu. Si TinyTeX doit être mis à jour,
+le rendu est relancé automatiquement après."
   (interactive)
   (when buffer-file-name
     (let ((buf (current-buffer)))
@@ -346,7 +355,6 @@ Si TinyTeX doit être mis à jour, le rendu est relancé automatiquement après.
             (let* ((file buffer-file-name)
                    (dir  (file-name-directory file))
                    (name (file-name-nondirectory file)))
-              (metal-quarto-ensure-project-at dir)
               (let ((default-directory dir))
                 (message "Quarto: rendu de %s..." name)
                 (let* ((output-buf (get-buffer-create "*Quarto Render*"))

@@ -21,7 +21,7 @@
 (require 'cl-lib)
 
 (defcustom metal-agent-profils-directory
-  (expand-file-name "~/Documents/MetalEmacs/profils/")
+  (expand-file-name "~/Documents/MetalEmacs/profils-agentiques/")
   "Dossier où sont stockés les profils utilisateur (fichiers .org).
 Survit aux mises à jour de MetalEmacs.  Peut être synchronisé via
 Synology Drive, iCloud, Dropbox..."
@@ -31,8 +31,9 @@ Synology Drive, iCloud, Dropbox..."
 (defcustom metal-agent-profils-defaut-directory
   (expand-file-name "metal-agent-profils-defaut/" user-emacs-directory)
   "Dossier des profils livrés par défaut avec MetalEmacs.
-Au premier démarrage, son contenu est copié dans
-`metal-agent-profils-directory' si celui-ci est vide ou inexistant.
+Les profils de ce dossier sont chargés à chaque démarrage et
+combinés avec ceux du dossier utilisateur.  Pour un profil
+présent dans les deux dossiers, le profil utilisateur l'emporte.
 Ce dossier peut être écrasé aux mises à jour ; les modifications
 utilisateur restent dans `metal-agent-profils-directory'."
   :type 'directory
@@ -137,8 +138,10 @@ Retourne nil si le format n'est pas reconnu."
     (cons (string-trim (match-string 1 titre))
           (metal-agent--parser-bool (match-string 2 titre)))))
 
-(defun metal-agent--parser-fichier-profil (chemin)
+(defun metal-agent--parser-fichier-profil (chemin &optional origine)
   "Lit le fichier .org CHEMIN et retourne un plist de profil.
+ORIGINE est un symbole indiquant la provenance (`defaut' ou
+`personnel'), conservé dans la clé :origine du plist.
 Retourne nil si le fichier ne peut pas être parsé."
   (condition-case err
       (with-temp-buffer
@@ -205,7 +208,9 @@ Retourne nil si le fichier ne peut pas être parsé."
                 :auto-defaut auto-defaut
                 :systeme preambule
                 :options-defaut options-defaut
-                :options-disponibles (nreverse options-disponibles))))
+                :options-disponibles (nreverse options-disponibles)
+                :origine (or origine 'personnel)
+                :chemin chemin)))
     (error
      (message "metal-agent : erreur de lecture de %s : %s"
               (file-name-nondirectory chemin)
@@ -216,57 +221,98 @@ Retourne nil si le fichier ne peut pas être parsé."
 ;; Initialisation : copie des profils par défaut au premier lancement
 ;; ─────────────────────────────────────────────────────────────────
 
+;; ─────────────────────────────────────────────────────────────────
+;; Migration de l'ancien emplacement ~/Documents/MetalEmacs/profils/
+;; ─────────────────────────────────────────────────────────────────
+
+(defun metal-agent--migrer-ancien-dossier ()
+  "Si l'ancien dossier ~/Documents/MetalEmacs/profils/ existe avec
+des profils .org, en déplacer le contenu vers le nouveau dossier
+`metal-agent-profils-directory'.  Migration unique au démarrage."
+  (let ((ancien (expand-file-name "~/Documents/MetalEmacs/profils/"))
+        (nouveau metal-agent-profils-directory))
+    (when (and (file-directory-p ancien)
+               (not (file-equal-p ancien nouveau))
+               (directory-files ancien nil "\\.org\\'"))
+      (make-directory nouveau t)
+      (let ((deplaces 0))
+        (dolist (fichier (directory-files ancien t "\\.org\\'"))
+          (let ((dest (expand-file-name (file-name-nondirectory fichier)
+                                        nouveau)))
+            (unless (file-exists-p dest)
+              (rename-file fichier dest)
+              (cl-incf deplaces))))
+        (when (> deplaces 0)
+          (message "metal-agent : %d profil(s) migré(s) de %s vers %s"
+                   deplaces ancien nouveau))
+        ;; Si l'ancien dossier est désormais vide, le supprimer
+        (when (null (directory-files ancien nil "\\.org\\'"))
+          (ignore-errors (delete-directory ancien)))))))
+
+;; ─────────────────────────────────────────────────────────────────
+;; Initialisation : création du dossier personnel
+;; ─────────────────────────────────────────────────────────────────
+
 (defun metal-agent--initialiser-dossier-utilisateur ()
   "Crée `metal-agent-profils-directory' s'il n'existe pas.
-Si le dossier est créé ou vide, copie les profils par défaut depuis
-`metal-agent-profils-defaut-directory'."
+La copie initiale des profils par défaut n'est plus nécessaire :
+les deux dossiers sont consultés à chaque chargement."
+  (metal-agent--migrer-ancien-dossier)
   (unless (file-directory-p metal-agent-profils-directory)
-    (make-directory metal-agent-profils-directory t))
-  ;; Si le dossier utilisateur est vide et le dossier defaut existe
-  (when (and (file-directory-p metal-agent-profils-defaut-directory)
-             (null (directory-files metal-agent-profils-directory
-                                    nil "\\.org\\'")))
-    (dolist (fichier (directory-files metal-agent-profils-defaut-directory
-                                      t "\\.org\\'"))
-      (let ((dest (expand-file-name (file-name-nondirectory fichier)
-                                    metal-agent-profils-directory)))
-        (copy-file fichier dest t)))
-    (message "metal-agent : %d profil(s) copié(s) dans %s"
-             (length (directory-files metal-agent-profils-directory
-                                      nil "\\.org\\'"))
-             metal-agent-profils-directory)))
+    (make-directory metal-agent-profils-directory t)))
 
 ;; ─────────────────────────────────────────────────────────────────
-;; Chargement de tous les profils
+;; Chargement de tous les profils (fusion défaut + personnel)
 ;; ─────────────────────────────────────────────────────────────────
+
+(defun metal-agent--lister-profils-dossier (dossier origine)
+  "Liste les profils .org du DOSSIER, en marquant leur ORIGINE.
+Retourne une liste de plists.  Ignore les README."
+  (let ((profils nil))
+    (when (file-directory-p dossier)
+      (dolist (fichier (directory-files dossier t "\\.org\\'"))
+        (unless (string-match-p "README" (file-name-nondirectory fichier))
+          (let ((profil (metal-agent--parser-fichier-profil fichier origine)))
+            (when profil
+              (push profil profils))))))
+    (nreverse profils)))
 
 (defun metal-agent--charger-tous-profils ()
-  "Charge tous les fichiers .org du dossier des profils utilisateur.
-Met à jour `metal-agent-profils'.  Si aucun profil n'est chargé,
-utilise le profil de fallback pour ne pas bloquer Emacs."
+  "Charge les profils des deux dossiers et les fusionne.
+Les profils du dossier utilisateur l'emportent sur ceux portant
+le même nom de fichier dans le dossier par défaut.  Met à jour
+`metal-agent-profils'.  Si aucun profil n'est chargé, utilise le
+profil de fallback pour ne pas bloquer Emacs."
   (metal-agent--initialiser-dossier-utilisateur)
-  (let ((fichiers (and (file-directory-p metal-agent-profils-directory)
-                       (directory-files metal-agent-profils-directory
-                                        t "\\.org\\'")))
-        (profils nil))
-    (dolist (fichier fichiers)
-      ;; Ignorer le README
-      (unless (string-match-p "README" (file-name-nondirectory fichier))
-        (let ((profil (metal-agent--parser-fichier-profil fichier)))
-          (when profil
-            (push profil profils)))))
+  (let* ((profils-defaut (metal-agent--lister-profils-dossier
+                          metal-agent-profils-defaut-directory 'defaut))
+         (profils-perso (metal-agent--lister-profils-dossier
+                         metal-agent-profils-directory 'personnel))
+         ;; Index des ids personnels pour détecter les collisions
+         (ids-perso (mapcar (lambda (p) (plist-get p :id)) profils-perso))
+         ;; On garde les profils par défaut dont l'id n'est pas pris
+         ;; par un profil personnel
+         (defaut-non-eclipses
+          (cl-remove-if (lambda (p)
+                          (member (plist-get p :id) ids-perso))
+                        profils-defaut))
+         (profils (append profils-perso defaut-non-eclipses)))
     (setq metal-agent-profils
-          (or (nreverse profils)
-              (list metal-agent--profil-fallback)))
+          (or profils (list metal-agent--profil-fallback)))
     (length metal-agent-profils)))
 
 (defun metal-agent-recharger-profils ()
-  "Recharge les profils depuis le dossier des profils utilisateur.
+  "Recharge les profils depuis les deux dossiers (défaut + personnel).
 À appeler après avoir édité un fichier .org de profil."
   (interactive)
-  (let ((n (metal-agent--charger-tous-profils)))
-    (message "metal-agent : %d profil(s) chargé(s) depuis %s"
-             n metal-agent-profils-directory)))
+  (let* ((n (metal-agent--charger-tous-profils))
+         (n-perso (length (cl-remove-if-not
+                           (lambda (p)
+                             (eq (plist-get p :origine) 'personnel))
+                           metal-agent-profils)))
+         (n-defaut (- n n-perso)))
+    (message "metal-agent : %d profil(s) chargé(s) (%d personnel(s), %d défaut)"
+             n n-perso n-defaut)))
 
 (defun metal-agent-ouvrir-dossier-profils ()
   "Ouvre `metal-agent-profils-directory' dans Dired."
