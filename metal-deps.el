@@ -31,7 +31,18 @@
 (require 'cl-lib)
 (require 'widget)
 (require 'url)
+(require 'ansi-color)
 (eval-when-compile (require 'wid-edit))
+
+;; Les commandes d'installation lancées via `compile' (ex. « brew install
+;; node » sur macOS) émettent de la sortie colorée par séquences ANSI.
+;; Le mode Compilation ne les interprète pas par défaut : sans ce filtre,
+;; le buffer *Installation Node.js* affiche des codes bruts du type
+;; « ^[[32m…^[[0m ».  On colorise donc la sortie de compilation.
+;; `ansi-color-compilation-filter' existe depuis Emacs 28 ; on protège pour
+;; les Emacs plus anciens (ex. sur macOS Catalina).
+(when (fboundp 'ansi-color-compilation-filter)
+  (add-hook 'compilation-filter-hook #'ansi-color-compilation-filter))
 
 (defgroup metal-deps nil
   "Gestion des dépendances MetalEmacs."
