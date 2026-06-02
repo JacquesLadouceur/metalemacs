@@ -582,9 +582,116 @@ Cette fonction utilise la même logique que early-init.el."
         (add-to-list 'exec-path scoop-shims)))
     (message "📦 Installation de Scoop lancée. Redémarrez Emacs après l'installation.")))
 
+(defun metal-deps--ligne-node-pour-macos ()
+  "Retourne la ligne majeure de Node.js compatible avec ce macOS.
+Les binaires Node ont un macOS minimum (deployment target) qui monte
+avec les versions :
+- macOS >= 11 (Big Sur+) : dernière LTS (laisser nil → « latest LTS »)
+- macOS 10.15 (Catalina) : Node 18.x (dernière ligne au minimum 10.15)
+- macOS 10.14 et antérieur : Node 16.x (au-delà, .pkg non installable)
+Retourne une chaîne « latest-vXX.x » identifiant le dossier de release,
+ou nil pour « dernière LTS » (résolue séparément)."
+  (let ((v (metal-deps--version-macos)))
+    (cond
+     ((null v) "latest-v18.x")              ; prudence si version indéterminée
+     ((>= (car v) 11) nil)                  ; Big Sur+ : dernière LTS
+     ((and (= (car v) 10) (= (nth 1 v) 15)) "latest-v18.x")  ; Catalina
+     (t "latest-v16.x"))))                  ; Mojave et antérieur
+
+(defun metal-deps--derniere-lts-node ()
+  "Interroge l'index Node.js et retourne le numéro de la dernière LTS.
+Ex: \"v24.15.0\".  Retourne nil en cas d'échec réseau ou de parsing."
+  (ignore-errors
+    (with-temp-buffer
+      (let ((url-request-method "GET"))
+        (when (= 0 (call-process "curl" nil t nil "-fsSL"
+                                 "https://nodejs.org/dist/index.json"))
+          (goto-char (point-min))
+          (let* ((data (json-parse-buffer :object-type 'alist
+                                          :array-type 'list))
+                 (lts (cl-find-if
+                       (lambda (rel)
+                         (let ((l (alist-get 'lts rel)))
+                           ;; json-parse-buffer rend `false' JSON comme :false
+                           ;; et une string (nom de LTS) sinon.
+                           (and l (stringp l))))
+                       data)))
+            (and lts (alist-get 'version lts))))))))
+
+(defun metal-deps--url-pkg-node ()
+  "Construit l'URL du .pkg Node.js adapté à ce macOS.
+Privilégie la dernière LTS sur macOS récent ; plafonne sur les anciens."
+  (let ((ligne (metal-deps--ligne-node-pour-macos)))
+    (if ligne
+        ;; macOS ancien : dossier de ligne figé (latest-v18.x / latest-v16.x).
+        ;; On lit SHASUMS256.txt pour extraire le numéro de version exact
+        ;; (le .pkg n'y figure pas toujours, mais les .tar.* oui), puis on
+        ;; construit l'URL du .pkg à partir de ce numéro.
+        (let* ((base (format "https://nodejs.org/download/release/%s/" ligne))
+               (ver (ignore-errors
+                      (with-temp-buffer
+                        (when (= 0 (call-process
+                                    "curl" nil t nil "-fsSL"
+                                    (concat base "SHASUMS256.txt")))
+                          (goto-char (point-min))
+                          (when (re-search-forward
+                                 "node-\\(v[0-9]+\\.[0-9]+\\.[0-9]+\\)-darwin"
+                                 nil t)
+                            (match-string 1)))))))
+          (and ver (format "%snode-%s.pkg" base ver)))
+      ;; macOS récent : dernière LTS via l'index JSON.
+      (let ((ver (metal-deps--derniere-lts-node)))
+        (and ver (format "https://nodejs.org/dist/%s/node-%s.pkg" ver ver))))))
+
+(defun metal-deps--installer-nodejs-pkg ()
+  "Télécharge le .pkg Node.js adapté au macOS et l'ouvre pour installation.
+L'étudiant n'a plus qu'à double-cliquer « Continuer » dans l'installeur
+Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
+  (let ((url (metal-deps--url-pkg-node)))
+    (if (not url)
+        (metal-deps--afficher-aide
+         "Installer Node.js — téléchargement impossible"
+         (concat
+          "Impossible de déterminer la version de Node.js à télécharger\n"
+          "(réseau indisponible ?).\n\n"
+          "Téléchargez manuellement l'installeur .pkg depuis :\n"
+          "  https://nodejs.org/en/download\n\n"
+          "Choisissez « macOS Installer (.pkg) », puis double-cliquez\n"
+          "le fichier téléchargé pour l'installer."))
+      (let* ((dest (expand-file-name
+                    (file-name-nondirectory url) "~/Downloads"))
+             (buf "*Installation Node.js*"))
+        (metal-deps--journaliser "Installation de Node.js via .pkg : %s" url)
+        (with-current-buffer (get-buffer-create buf)
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (format "Téléchargement de Node.js…\n  %s\n\n" url))
+            (insert "L'installeur Apple s'ouvrira automatiquement à la fin.\n"
+                    "Suivez les étapes (« Continuer » / « Installer »).\n")))
+        (display-buffer buf)
+        ;; Télécharger puis ouvrir le .pkg (open déclenche l'installeur Apple).
+        (let* ((cmd (format "curl -fSL -o %s %s && open %s"
+                            (shell-quote-argument dest)
+                            (shell-quote-argument url)
+                            (shell-quote-argument dest)))
+               (proc (start-process-shell-command
+                      "metal-node-pkg" buf cmd)))
+          (set-process-sentinel
+           proc
+           (lambda (_p event)
+             (with-current-buffer (get-buffer-create buf)
+               (let ((inhibit-read-only t))
+                 (goto-char (point-max))
+                 (if (string-match-p "finished" event)
+                     (insert "\n✓ Installeur ouvert.  Terminez l'installation,\n"
+                             "  puis cliquez « Rafraîchir » dans l'Assistant.\n")
+                   (insert (format "\n⚠ Problème : %s\n" (string-trim event))))))
+             (run-with-timer 1 nil #'metal-deps-afficher-etat))))))))
+
 (defun metal-deps-installer-nodejs ()
   "Installe Node.js (et npm) selon l'OS.
-- macOS    : utilise Homebrew si disponible (compile)
+- macOS    : installeur .pkg officiel adapté à la version de macOS
+             (pas de compilation ; évite le calvaire Homebrew sur vieux Mac)
 - Linux    : affiche les commandes apt/dnf/pacman (nécessite sudo)
 - Windows  : utilise Scoop si disponible, sinon pointe vers nodejs.org"
   (interactive)
@@ -593,18 +700,11 @@ Cette fonction utilise la même logique que early-init.el."
    ((metal-deps--nodejs-present-p)
     (message "✓ Node.js déjà installé (npm version : %s)"
              (string-trim (shell-command-to-string "npm --version"))))
-   ;; macOS : Homebrew
+   ;; macOS : installeur .pkg officiel (binaire, aucune compilation)
    ((eq system-type 'darwin)
-    (if (executable-find "brew")
-        (progn
-          (metal-deps--journaliser "Installation de Node.js via Homebrew")
-          (let ((compilation-buffer-name-function
-                 (lambda (_) "*Installation Node.js*")))
-            (when (yes-or-no-p "Installer Node.js via Homebrew (brew install node) ? ")
-              (compile "brew install node"))))
-      (metal-deps--afficher-aide
-       "Installer Node.js — Homebrew requis"
-       "Homebrew n'est pas installé.\n\nInstallez d'abord Homebrew via la section\n« 📦 Gestionnaires de paquets » de l'Assistant (bouton [Installer] à\ncôté de Homebrew), puis revenez ici pour installer Node.js.")))
+    (when (yes-or-no-p
+           "Installer Node.js via l'installeur officiel (.pkg) ? ")
+      (metal-deps--installer-nodejs-pkg)))
    ;; Linux : instructions manuelles (sudo requis)
    ((eq system-type 'gnu/linux)
     (metal-deps--afficher-aide
@@ -655,7 +755,7 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
   (cond
    ((not (metal-deps--nodejs-present-p))
     (message "Node.js n'est pas installé"))
-   ;; macOS : brew uninstall node
+   ;; macOS : .pkg → suppression manuelle ; brew si présent
    ((eq system-type 'darwin)
     (if (executable-find "brew")
         (when (yes-or-no-p
@@ -667,12 +767,18 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
       (metal-deps--afficher-aide
        "Désinstaller Node.js"
        (concat
-        "Homebrew n'est pas installé — Node.js a probablement été installé\n"
-        "autrement (installateur officiel, nvm, etc.).\n\n"
-        "Vérifiez avec :\n"
-        "  which node\n"
-        "  which npm\n\n"
-        "puis désinstallez selon la source d'installation."))))
+        "Node.js a été installé via l'installeur officiel (.pkg).\n"
+        "Apple ne fournit pas de désinstalleur ; supprimez les fichiers\n"
+        "installés.  Ouvrez un terminal et exécutez :\n\n"
+        "  sudo rm -rf /usr/local/bin/node /usr/local/bin/npm \\\n"
+        "    /usr/local/bin/npx /usr/local/include/node \\\n"
+        "    /usr/local/lib/node_modules \\\n"
+        "    /usr/local/share/man/man1/node.1 \\\n"
+        "    /usr/local/share/doc/node\n\n"
+        "Vérifiez ensuite que plus rien ne répond :\n"
+        "  which node    (ne doit rien afficher)\n\n"
+        "Note : d'autres outils (yarn, applications Electron) peuvent\n"
+        "dépendre de Node.js."))))
    ;; Linux : instructions manuelles
    ((eq system-type 'gnu/linux)
     (metal-deps--afficher-aide
