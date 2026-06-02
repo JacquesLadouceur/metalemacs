@@ -31,6 +31,9 @@
 ;;               SWI-Prolog : sur Mac < 14, installeur officiel .dmg
 ;;               (universel, macOS 10.15+) au lieu de Homebrew.  ripgrep
 ;;               n'est pas offert sur Mac < 14.
+;;               Ghostscript : proposé sur Mac < 14 comme moteur de rendu
+;;               de doc-view (sans lui, doc-view affiche le PDF en texte
+;;               brut au lieu des pages).
 ;;
 ;; Commandes principales :
 ;;   M-x metal-deps-afficher-etat     - Interface graphique avec boutons
@@ -529,6 +532,13 @@ applicatif officiel (/Applications/SWI-Prolog.app), où l'installeur
   "Retourne t si Poppler est installé."
   (or (executable-find "pdfinfo")
       (executable-find "pdftoppm")))
+
+(defun metal-deps--ghostscript-present-p ()
+  "Retourne t si Ghostscript (gs) est installé.
+Ghostscript est le moteur de rendu par défaut de `doc-view', utilisé
+pour afficher les PDF sur les Mac < 14 où pdf-tools n'est pas proposé.
+Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
+  (not (null (executable-find "gs"))))
 
 (defun metal-deps--miktex-present-p ()
   "Retourne t si MiKTeX est installé (via Scoop)."
@@ -1274,6 +1284,51 @@ open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
        (if (metal-deps--apt-present-p)
            (async-shell-command "sudo apt install -y libpoppler-dev libpoppler-glib-dev poppler-utils autoconf automake" "*Poppler Install*")
          (message "Installez poppler avec votre gestionnaire de paquets"))))))
+
+(defun metal-deps-installer-ghostscript ()
+  "Installe Ghostscript (gs), moteur de rendu de `doc-view'.
+Sur les Mac < 14, MetalEmacs n'offre pas pdf-tools et affiche les PDF
+avec `doc-view', qui a besoin de `gs' pour convertir les pages en
+images.  Sans Ghostscript, doc-view ne montre que le source brut."
+  (interactive)
+  (if (metal-deps--ghostscript-present-p)
+      (message "✓ Ghostscript déjà installé")
+    (metal-deps--journaliser "Installation de Ghostscript")
+    (pcase system-type
+      ('darwin
+       (if (metal-deps--brew-present-p)
+           (async-shell-command "brew install ghostscript" "*Ghostscript Install*")
+         (message "Installez d'abord Homebrew")))
+      ('windows-nt
+       (if (metal-deps--scoop-present-p)
+           (async-shell-command "scoop install ghostscript" "*Ghostscript Install*")
+         (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
+      ('gnu/linux
+       (if (metal-deps--apt-present-p)
+           (async-shell-command "sudo apt install -y ghostscript" "*Ghostscript Install*")
+         (message "Installez ghostscript avec votre gestionnaire de paquets"))))))
+
+(defun metal-deps-desinstaller-ghostscript ()
+  "Désinstalle Ghostscript."
+  (interactive)
+  (if (not (metal-deps--ghostscript-present-p))
+      (message "Ghostscript n'est pas installé")
+    (when (yes-or-no-p "Voulez-vous vraiment désinstaller Ghostscript ? ")
+      (metal-deps--journaliser "Désinstallation de Ghostscript")
+      (pcase system-type
+        ('darwin
+         (if (and (metal-deps--brew-present-p)
+                  (= 0 (call-process "brew" nil nil nil "list" "ghostscript")))
+             (async-shell-command "brew uninstall ghostscript" "*Ghostscript Uninstall*")
+           (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
+        ('windows-nt
+         (if (metal-deps--scoop-present-p)
+             (async-shell-command "scoop uninstall ghostscript" "*Ghostscript Uninstall*")
+           (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
+        ('gnu/linux
+         (if (= 0 (call-process "dpkg" nil nil nil "-s" "ghostscript"))
+             (async-shell-command "sudo apt remove ghostscript -y" "*Ghostscript Uninstall*")
+           (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 (defun metal-deps-installer-pdf-tools ()
   "Installe et compile pdf-tools."
@@ -2161,7 +2216,19 @@ ET CLI présente sur le système."
      :categorie pdf
      :condition (lambda () (and (not (eq system-type 'windows-nt))
                                 (or (not (eq system-type 'darwin))
-                                    (metal-deps--macos-moderne-p))))))
+                                    (metal-deps--macos-moderne-p)))))
+    ;; Ghostscript : moteur de rendu de `doc-view'.  Proposé seulement là où
+    ;; doc-view est le visionneur de repli, c.-à-d. sur les Mac < 14 (où
+    ;; pdf-tools n'est pas offert).  Sans lui, doc-view affiche le PDF en
+    ;; texte brut au lieu de rendre les pages.
+    (:nom "Ghostscript"
+     :verifier metal-deps--ghostscript-present-p
+     :installer metal-deps-installer-ghostscript
+     :desinstaller metal-deps-desinstaller-ghostscript
+     :categorie pdf
+     :description "Rendu PDF pour doc-view (Mac < 14)"
+     :condition (lambda () (and (eq system-type 'darwin)
+                                (not (metal-deps--macos-moderne-p))))))
   "Liste des outils gérés par MetalEmacs.")
 
 ;; Les outils-agents sont calculés dynamiquement à chaque accès (et non
