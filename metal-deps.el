@@ -28,6 +28,9 @@
 ;;               masqués (repli sur le visionneur intégré doc-view) et Node.js
 ;;               passe par l'installeur .pkg.  Critère désormais fondé sur la
 ;;               version de macOS plutôt que sur l'architecture.
+;;               SWI-Prolog : sur Mac < 14, installeur officiel .dmg
+;;               (universel, macOS 10.15+) au lieu de Homebrew.  ripgrep
+;;               n'est pas offert sur Mac < 14.
 ;;
 ;; Commandes principales :
 ;;   M-x metal-deps-afficher-etat     - Interface graphique avec boutons
@@ -513,8 +516,14 @@ Cette fonction utilise la même logique que early-init.el."
   (not (null (executable-find "quarto"))))
 
 (defun metal-deps--swipl-present-p ()
-  "Retourne t si SWI-Prolog est installé."
-  (not (null (executable-find "swipl"))))
+  "Retourne t si SWI-Prolog est installé.
+Cherche `swipl' dans le PATH, et sur macOS aussi dans le bundle
+applicatif officiel (/Applications/SWI-Prolog.app), où l'installeur
+.dmg place l'exécutable hors du PATH."
+  (or (not (null (executable-find "swipl")))
+      (and (eq system-type 'darwin)
+           (file-executable-p
+            "/Applications/SWI-Prolog.app/Contents/MacOS/swipl"))))
 
 (defun metal-deps--poppler-present-p ()
   "Retourne t si Poppler est installé."
@@ -1124,18 +1133,77 @@ Note: Cette fonction est un backup - early-init.el installe Git automatiquement.
 ;;; Installateurs - SWI-Prolog
 ;;; ═══════════════════════════════════════════════════════════════════
 
+(defun metal-deps--installer-swipl-dmg ()
+  "Télécharge et monte le .dmg universel officiel de SWI-Prolog.
+Destiné aux Mac < 14, où Homebrew compilerait depuis la source.  Le
+bundle officiel couvre macOS 10.15+ et contient des binaires universels
+(Intel + Apple Silicon).  On télécharge la dernière version stable via
+l'URL `latest' (le serveur répond par une redirection 303 que `curl -L'
+suit), on monte l'image avec `hdiutil', puis on ouvre le volume dans le
+Finder : l'étudiant n'a plus qu'à glisser SWI-Prolog.app dans
+/Applications.
+
+Note : un .dmg ne s'installe pas via un installeur Apple comme un .pkg ;
+le glisser-déposer final reste manuel (norme macOS pour les bundles)."
+  (let* ((url "https://www.swi-prolog.org/download/stable/bin/swipl-latest.fat.dmg")
+         (dest (expand-file-name "swipl-latest.fat.dmg" "~/Downloads"))
+         (buf "*Installation SWI-Prolog*"))
+    (metal-deps--journaliser "Installation de SWI-Prolog via .dmg : %s" url)
+    (with-current-buffer (get-buffer-create buf)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Téléchargement de SWI-Prolog…\n  %s\n\n" url))
+        (insert "Une fenêtre du Finder s'ouvrira à la fin du téléchargement.\n"
+                "Glissez « SWI-Prolog.app » dans le dossier « Applications »,\n"
+                "puis cliquez « Rafraîchir » dans l'Assistant.\n")))
+    (display-buffer buf)
+    ;; Télécharge (curl -L suit la redirection 303 « latest »), monte le
+    ;; .dmg sans interaction (-nobrowse -accept), puis ouvre le volume.
+    ;; `-sS' masque la barre de progression (illisible dans un buffer) tout
+    ;; en conservant les erreurs.
+    (let* ((cmd (format
+                 "curl -fSL -sS -o %s %s && echo TELECHARGE && \
+hdiutil attach %s -nobrowse -accept && \
+open /Volumes/SWI-Prolog* 2>/dev/null; \
+open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
+                 (shell-quote-argument dest)
+                 (shell-quote-argument url)
+                 (shell-quote-argument dest)))
+           (proc (start-process-shell-command "metal-swipl-dmg" buf cmd)))
+      (set-process-sentinel
+       proc
+       (lambda (_p event)
+         (with-current-buffer (get-buffer-create buf)
+           (let ((inhibit-read-only t))
+             (goto-char (point-max))
+             (if (string-match-p "finished" event)
+                 (insert "\n✓ Image montée.  Glissez SWI-Prolog.app dans\n"
+                         "  Applications, puis cliquez « Rafraîchir ».\n")
+               (insert (format "\n⚠ Problème : %s\n" (string-trim event))
+                       "Téléchargez manuellement depuis :\n"
+                       "  https://www.swi-prolog.org/download/stable\n"))))
+         (run-with-timer 1 nil #'metal-deps-afficher-etat))))))
+
 (defun metal-deps-installer-swi-prolog ()
-  "Installe SWI-Prolog."
+  "Installe SWI-Prolog.
+- macOS >= 14 : Homebrew (bottle, rapide)
+- macOS < 14  : .dmg universel officiel (évite la compilation Homebrew
+                depuis la source, faute de bottle)"
   (interactive)
   (if (metal-deps--swipl-present-p)
       (message "✓ SWI-Prolog déjà installé")
     (metal-deps--journaliser "Installation de SWI-Prolog")
     (pcase system-type
       ('darwin
-       (if (metal-deps--brew-present-p)
-           (async-shell-command "brew install swi-prolog" "*SWI-Prolog Install*")
-         (browse-url "https://www.swi-prolog.org/download/stable")
-         (message "Téléchargez SWI-Prolog depuis le site web")))
+       (if (metal-deps--macos-moderne-p)
+           (if (metal-deps--brew-present-p)
+               (async-shell-command "brew install swi-prolog" "*SWI-Prolog Install*")
+             (browse-url "https://www.swi-prolog.org/download/stable")
+             (message "Installez d'abord Homebrew, ou téléchargez depuis le site"))
+         ;; macOS < 14 : installeur officiel (.dmg universel)
+         (when (yes-or-no-p
+                "Installer SWI-Prolog via l'installeur officiel (.dmg) ? ")
+           (metal-deps--installer-swipl-dmg))))
       ('windows-nt
        (if (metal-deps--scoop-present-p)
            (progn
@@ -1158,10 +1226,19 @@ Note: Cette fonction est un backup - early-init.el installe Git automatiquement.
       (metal-deps--journaliser "Désinstallation de SWI-Prolog")
       (pcase system-type
         ('darwin
-         (if (and (metal-deps--brew-present-p)
-                  (= 0 (call-process "brew" nil nil nil "list" "swi-prolog")))
-             (async-shell-command "brew uninstall swi-prolog" "*SWI-Prolog Uninstall*")
-           (message "SWI-Prolog installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
+         (cond
+          ;; Bundle officiel (.dmg) dans /Applications
+          ((file-directory-p "/Applications/SWI-Prolog.app")
+           (when (yes-or-no-p
+                  "Supprimer /Applications/SWI-Prolog.app ? ")
+             (delete-directory "/Applications/SWI-Prolog.app" t)
+             (message "✓ SWI-Prolog.app supprimé")))
+          ;; Installé via Homebrew
+          ((and (metal-deps--brew-present-p)
+                (= 0 (call-process "brew" nil nil nil "list" "swi-prolog")))
+           (async-shell-command "brew uninstall swi-prolog" "*SWI-Prolog Uninstall*"))
+          (t
+           (message "SWI-Prolog installé à l'extérieur de MetalEmacs. Désinstallez manuellement."))))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
              (async-shell-command "scoop uninstall swipl" "*SWI-Prolog Uninstall*")
@@ -2059,7 +2136,9 @@ ET CLI présente sur le système."
      :installer metal-deps-installer-ripgrep 
      :desinstaller metal-deps-desinstaller-ripgrep
      :categorie logiciels
-     :description "Recherche multi-fichiers (C-c g)")
+     :description "Recherche multi-fichiers (C-c g)"
+     :condition (lambda () (or (not (eq system-type 'darwin))
+                               (metal-deps--macos-moderne-p))))
     
     ;; PDF.  Poppler + pdf-tools nécessitent une compilation native
     ;; (epdfinfo).  Sur macOS, on ne les propose qu'à partir du seuil
@@ -2662,6 +2741,17 @@ conflits entre gestionnaires de paquets."
       (when (file-exists-p (expand-file-name "brew" brew-bin))
         (add-to-list 'exec-path brew-bin)
         (setenv "PATH" (concat brew-bin ":" (getenv "PATH"))))))
+
+  ;; SWI-Prolog sur macOS via le bundle officiel (.dmg) : l'exécutable
+  ;; `swipl' vit dans /Applications/SWI-Prolog.app/Contents/MacOS, hors
+  ;; PATH.  C'est le cas d'installation sur les Mac < 14 (cf.
+  ;; `metal-deps--installer-swipl-dmg').  On l'ajoute pour que metal-prolog
+  ;; et les sous-processus trouvent `swipl' sans configuration manuelle.
+  (when (eq system-type 'darwin)
+    (let ((swipl-bin "/Applications/SWI-Prolog.app/Contents/MacOS"))
+      (when (file-executable-p (expand-file-name "swipl" swipl-bin))
+        (add-to-list 'exec-path swipl-bin)
+        (setenv "PATH" (concat swipl-bin ":" (getenv "PATH"))))))
   
   ;; Scoop sur Windows
   (when (and (eq system-type 'windows-nt)
