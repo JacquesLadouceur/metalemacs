@@ -27,7 +27,7 @@ Le tout est organisé dans une interface unifiée qui comprend :
 
 ## Plateformes supportées
 
-- **macOS** (Apple Silicon et Intel)
+- **macOS Monterey (12)** ou plus récent — Apple Silicon et Intel
 - **Windows 10/11**
 - **Linux/ChromeOS** (Debian/Ubuntu)
 
@@ -53,7 +53,7 @@ Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'
    ```bash
    git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
    ```
-   Si Git n'est pas installé, macOS proposera d'installer les **outils de ligne de commande Xcode** — accepter.
+   Si Git n'est pas installé, macOS proposera d'installer les **outils de ligne de commande Xcode** — accepter et refaire la commande précédente après l'installation.
 3. Lancer Emacs (premier démarrage : 5 à 15 minutes pour le téléchargement des paquets)
 4. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer dans l'ordre :
    - Homebrew
