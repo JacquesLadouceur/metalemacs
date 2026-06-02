@@ -20,10 +20,14 @@
 ;;               Rafraîchissement intelligent de l'interface (sentinelle)
 ;; Version 3.7 : Ajout de ripgrep (rg) — moteur de recherche récursive rapide,
 ;;               requis par deadgrep pour la recherche interactive dans Emacs
-;; Version 3.8 : Ajout (en test) de MuPDF + emacs-reader comme backend PDF
-;;               alternatif à Poppler/pdf-tools sur Mac Intel (compilation
-;;               native rapide, sans dépendances gpgme).  pdf-tools reste
-;;               le défaut partout.
+;; Version 3.8 : Seuil macOS « moderne » (>= 14, Sonoma) pour la chaîne PDF
+;;               et Node.js.  Au-delà, Homebrew fournit des bottles fiables
+;;               (Intel comme Apple Silicon) : Poppler/pdf-tools sont offerts
+;;               et Node.js s'installe via Homebrew.  En dessous, ces binaires
+;;               se compileraient depuis la source : Poppler/pdf-tools sont
+;;               masqués (repli sur le visionneur intégré doc-view) et Node.js
+;;               passe par l'installeur .pkg.  Critère désormais fondé sur la
+;;               version de macOS plutôt que sur l'architecture.
 ;;
 ;; Commandes principales :
 ;;   M-x metal-deps-afficher-etat     - Interface graphique avec boutons
@@ -82,6 +86,28 @@ ou que les boutons commencent trop tôt sur des noms longs."
   "Retourne t si macOS >= 13."
   (let ((v (metal-deps--version-macos)))
     (and v (>= (car v) 13))))
+
+(defcustom metal-deps-macos-seuil-moderne 14
+  "Version majeure de macOS à partir de laquelle MetalEmacs considère
+le système comme « moderne ».  Au-delà (>=), Homebrew fournit des
+bottles fiables — y compris sur Intel, qui retombe sur les bottles de
+la version précédente — donc on offre toute la chaîne PDF (Poppler /
+pdf-tools) et l'installation de Node.js via Homebrew.  En dessous, ces
+binaires se compileraient depuis la source (lent, fragile) : on bascule
+alors sur des solutions sans compilation (visionneur PDF intégré
+`doc-view', installeur .pkg pour Node.js).
+
+Le seuil par défaut (14 = Sonoma) correspond à la dernière version
+officiellement supportée par Homebrew.  Ajuster ici si la politique
+de support évolue."
+  :type 'integer
+  :group 'metal-deps)
+
+(defun metal-deps--macos-moderne-p ()
+  "Retourne t si macOS >= `metal-deps-macos-seuil-moderne'.
+Sur les systèmes non-macOS, retourne nil (le concept ne s'applique pas)."
+  (let ((v (metal-deps--version-macos)))
+    (and v (>= (car v) metal-deps-macos-seuil-moderne))))
 
 (defun metal-deps--apple-silicon-p ()
   "Retourne t si le Mac utilise Apple Silicon."
@@ -536,30 +562,6 @@ Cette fonction utilise la même logique que early-init.el."
   "Retourne t si epdfinfo est compilé et exécutable."
   (not (null (metal-deps--chemin-epdfinfo))))
 
-(defun metal-deps--mupdf-present-p ()
-  "Retourne t si la bibliothèque MuPDF est installée.
-On détecte l'outil en ligne de commande `mutool', fourni par la
-formule Homebrew `mupdf' (macOS) — c'est lui qui sert de proxy pour
-la présence des bibliothèques et en-têtes requis par emacs-reader."
-  (not (null (executable-find "mutool"))))
-
-(defun metal-deps--chemin-render-core ()
-  "Retourne le chemin du module natif d'emacs-reader, ou nil.
-Le module `render-core' est compilé par straight via `make all' dans
-le dossier de build du paquet `reader'.  Son extension dépend de la
-plateforme : `.dylib' sur macOS, `.so' sur Linux."
-  (let* ((build (expand-file-name "straight/build/reader" user-emacs-directory))
-         (ext (if (eq system-type 'darwin) "dylib" "so"))
-         (chemins (list (expand-file-name (format "render-core.%s" ext) build)
-                        ;; repli : autre extension si la plateforme a changé
-                        (expand-file-name "render-core.so" build)
-                        (expand-file-name "render-core.dylib" build))))
-    (cl-find-if #'file-exists-p chemins)))
-
-(defun metal-deps--emacs-reader-present-p ()
-  "Retourne t si emacs-reader est installé et son module natif compilé."
-  (not (null (metal-deps--chemin-render-core))))
-
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Installateurs - Gestionnaires de paquets
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -722,22 +724,23 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
              (run-with-timer 1 nil #'metal-deps-afficher-etat))))))))
 
 (defun metal-deps-installer-nodejs ()
-  "Installe Node.js (et npm) selon l'OS (et l'architecture sur macOS).
-- macOS Apple Silicon : Homebrew (brew install node — bottle, rapide)
-- macOS Intel         : installeur .pkg officiel (évite la compilation
-                        Homebrew depuis la source, sans bottle sur Intel)
-- Linux               : affiche les commandes apt/dnf/pacman (nécessite sudo)
-- Windows             : utilise Scoop si disponible, sinon pointe vers nodejs.org"
+  "Installe Node.js (et npm) selon l'OS (et la version sur macOS).
+- macOS >= 14 (Sonoma+) : Homebrew (brew install node — bottle, rapide),
+                          Intel comme Apple Silicon
+- macOS < 14            : installeur .pkg officiel (évite la compilation
+                          Homebrew depuis la source, faute de bottle)
+- Linux                 : affiche les commandes apt/dnf/pacman (nécessite sudo)
+- Windows               : utilise Scoop si disponible, sinon pointe vers nodejs.org"
   (interactive)
   (cond
    ;; Déjà installé
    ((metal-deps--nodejs-present-p)
     (message "✓ Node.js déjà installé (npm version : %s)"
              (string-trim (shell-command-to-string "npm --version"))))
-   ;; macOS : Apple Silicon → Homebrew ; Intel → .pkg officiel
+   ;; macOS : >= 14 → Homebrew ; < 14 → .pkg officiel
    ((eq system-type 'darwin)
-    (if (metal-deps--apple-silicon-p)
-        ;; Apple Silicon : bottle disponible, installation rapide via Homebrew
+    (if (metal-deps--macos-moderne-p)
+        ;; macOS moderne : bottle disponible, installation rapide via Homebrew
         (if (executable-find "brew")
             (when (yes-or-no-p "Installer Node.js via Homebrew (brew install node) ? ")
               (metal-deps--journaliser "Installation de Node.js via Homebrew (Apple Silicon)")
@@ -751,8 +754,9 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
             "Installez d'abord Homebrew via la section « 📦 Gestionnaires de\n"
             "paquets » de l'Assistant (bouton [Installer] à côté de Homebrew),\n"
             "puis revenez ici pour installer Node.js.")))
-      ;; Intel : pas de bottle → Homebrew compilerait tout depuis la source
-      ;; (node → ada-url → llvm…).  On passe par l'installeur .pkg officiel.
+      ;; macOS < 14 : pas de bottle → Homebrew compilerait tout depuis la
+      ;; source (node → ada-url → llvm…).  On passe par l'installeur .pkg
+      ;; officiel.
       (when (yes-or-no-p
              "Installer Node.js via l'installeur officiel (.pkg) ? ")
         (metal-deps--installer-nodejs-pkg))))
@@ -806,10 +810,10 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
   (cond
    ((not (metal-deps--nodejs-present-p))
     (message "Node.js n'est pas installé"))
-   ;; macOS : Apple Silicon → brew uninstall ; Intel → suppression manuelle (.pkg)
+   ;; macOS : >= 14 → brew uninstall ; < 14 → suppression manuelle (.pkg)
    ((eq system-type 'darwin)
-    (if (metal-deps--apple-silicon-p)
-        ;; Apple Silicon : installé via Homebrew
+    (if (metal-deps--macos-moderne-p)
+        ;; macOS moderne : installé via Homebrew
         (if (executable-find "brew")
             (when (yes-or-no-p
                    "Désinstaller Node.js (brew uninstall node) ?  D'autres outils peuvent en dépendre. ")
@@ -1307,102 +1311,6 @@ Note: Cette fonction est un backup - early-init.el installe Git automatiquement.
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "poppler-utils"))
              (async-shell-command "sudo apt remove poppler-utils -y" "*Poppler Uninstall*")
            (message "Poppler installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
-
-;;; ═══════════════════════════════════════════════════════════════════
-;;; Installateurs - emacs-reader (backend MuPDF, alternative à pdf-tools)
-;;; ═══════════════════════════════════════════════════════════════════
-;;
-;; emacs-reader (https://codeberg.org/MonadicSheep/emacs-reader) est un
-;; lecteur de documents fondé sur MuPDF.  Contrairement à pdf-tools (qui
-;; compile epdfinfo contre Poppler), emacs-reader compile un module natif
-;; `render-core' contre MuPDF — dont Homebrew fournit une *bottle* sur Mac
-;; Intel.  La compilation est donc rapide et sans les dépendances
-;; transitives problématiques de Poppler (gpgmepp/libgpg-error).
-;;
-;; ⚠ emacs-reader n'est PAS un sous-module de pdf-tools : il définit son
-;; propre `reader-mode' (et non `pdf-view-mode').  La barre d'outils de
-;; metal-pdf.el ne s'y applique donc pas.  Ce backend est ici proposé en
-;; TEST sur Mac Intel ; pdf-tools reste le défaut partout ailleurs.
-
-(defun metal-deps-installer-mupdf ()
-  "Installe la bibliothèque MuPDF (requise par emacs-reader)."
-  (interactive)
-  (if (metal-deps--mupdf-present-p)
-      (message "✓ MuPDF déjà installé")
-    (metal-deps--journaliser "Installation de MuPDF")
-    (pcase system-type
-      ('darwin
-       (if (metal-deps--brew-present-p)
-           (async-shell-command "brew install gcc make mupdf" "*MuPDF Install*")
-         (message "Installez d'abord Homebrew")))
-      ('gnu/linux
-       (if (metal-deps--apt-present-p)
-           (async-shell-command "sudo apt install -y mupdf mupdf-tools libmupdf-dev gcc make" "*MuPDF Install*")
-         (message "Installez mupdf avec votre gestionnaire de paquets")))
-      (_ (message "MuPDF : installation non gérée sur cette plateforme")))))
-
-(defun metal-deps-installer-emacs-reader ()
-  "Installe et compile emacs-reader (backend MuPDF).
-Vérifie MuPDF d'abord, puis récupère le paquet `reader' via straight
-en compilant le module natif `render-core' (`make all')."
-  (interactive)
-  (metal-deps--journaliser "Installation de emacs-reader")
-
-  ;; Vérifier et installer MuPDF si nécessaire
-  (unless (metal-deps--mupdf-present-p)
-    (metal-deps-installer-mupdf)
-    (message "⚠ Attendez l'installation de MuPDF puis relancez cette commande")
-    (user-error "MuPDF requis"))
-
-  ;; Nettoyer un éventuel build incomplet (artefacts make obsolètes)
-  (let ((build-dir (expand-file-name "straight/build/reader" user-emacs-directory)))
-    (when (file-directory-p build-dir)
-      (message "🧹 Nettoyage du dossier de build existant...")
-      (delete-directory build-dir t)))
-
-  ;; macOS : le module se lie à MuPDF via Homebrew ; on s'assure que le
-  ;; PKG_CONFIG_PATH expose mupdf.pc (selon Apple Silicon ou Intel).
-  (when (eq system-type 'darwin)
-    (let* ((brew (metal-deps--chemin-brew))
-           (prefix (cond
-                    ((and brew (string-prefix-p "/opt/" brew)) "/opt/homebrew")
-                    (brew "/usr/local")
-                    (t "/usr/local")))
-           (pkg-paths (list (format "%s/lib/pkgconfig" prefix)
-                            (format "%s/share/pkgconfig" prefix)
-                            (getenv "PKG_CONFIG_PATH"))))
-      (setenv "PKG_CONFIG_PATH"
-              (mapconcat #'identity (delq nil (delete "" pkg-paths)) ":"))))
-
-  ;; Récupérer et compiler emacs-reader.  La recette diffère par
-  ;; l'extension du module natif : .dylib (macOS) vs .so (Linux).
-  (message "📦 Installation de emacs-reader (compilation MuPDF)...")
-  (let ((module (if (eq system-type 'darwin) "render-core.dylib" "render-core.so")))
-    (straight-use-package
-     `(reader :type git :host codeberg :repo "MonadicSheep/emacs-reader"
-              :files ("*.el" ,module)
-              :pre-build ("make" "all"))))
-
-  (if (metal-deps--emacs-reader-present-p)
-      (message "✓ emacs-reader installé. Ouvrez un PDF avec M-x reader-mode.")
-    (message "⚠ Module render-core non détecté. Voir le buffer de compilation.")))
-
-(defun metal-deps-desinstaller-emacs-reader ()
-  "Désinstalle emacs-reader (paquet `reader')."
-  (interactive)
-  (when (yes-or-no-p "Voulez-vous vraiment désinstaller emacs-reader ? ")
-    (metal-deps--journaliser "Désinstallation de emacs-reader")
-    (let ((repos-dir (expand-file-name "straight/repos/emacs-reader" user-emacs-directory))
-          (build-dir (expand-file-name "straight/build/reader" user-emacs-directory)))
-      (when (file-exists-p repos-dir)
-        (delete-directory repos-dir t))
-      (when (file-exists-p build-dir)
-        (delete-directory build-dir t)))
-    (when (boundp 'straight--build-cache)
-      (remhash "reader" straight--build-cache))
-    (when (boundp 'straight--recipe-cache)
-      (remhash 'reader straight--recipe-cache))
-    (message "✓ emacs-reader désinstallé. Redémarrez Emacs avant de réinstaller.")))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Installateurs - draw.io Desktop
@@ -2153,34 +2061,28 @@ ET CLI présente sur le système."
      :categorie logiciels
      :description "Recherche multi-fichiers (C-c g)")
     
-    ;; PDF
+    ;; PDF.  Poppler + pdf-tools nécessitent une compilation native
+    ;; (epdfinfo).  Sur macOS, on ne les propose qu'à partir du seuil
+    ;; « moderne » (>= 14) où Homebrew fournit des bottles fiables (Intel
+    ;; comme Apple Silicon) : sous ce seuil la compilation depuis la source
+    ;; est lente et fragile, et MetalEmacs se rabat sur le visionneur PDF
+    ;; intégré `doc-view'.  Hors macOS, le seuil ne s'applique pas.
     (:nom "Poppler" 
      :verifier metal-deps--poppler-present-p
      :installer metal-deps-installer-poppler 
      :desinstaller metal-deps-desinstaller-poppler
      :categorie pdf
-     :condition (lambda () (not (eq system-type 'windows-nt))))
+     :condition (lambda () (and (not (eq system-type 'windows-nt))
+                                (or (not (eq system-type 'darwin))
+                                    (metal-deps--macos-moderne-p)))))
     (:nom "pdf-tools" 
      :verifier metal-deps--epdfinfo-present-p
      :installer metal-deps-installer-pdf-tools 
      :desinstaller metal-deps-desinstaller-pdf-tools
      :categorie pdf
-     :condition (lambda () (not (eq system-type 'windows-nt))))
-    (:nom "MuPDF"
-     :verifier metal-deps--mupdf-present-p
-     :installer metal-deps-installer-mupdf
-     :categorie pdf
-     :description "Backend de rendu pour emacs-reader"
-     :condition (lambda () (and (eq system-type 'darwin)
-                                (not (metal-deps--apple-silicon-p)))))
-    (:nom "emacs-reader"
-     :verifier metal-deps--emacs-reader-present-p
-     :installer metal-deps-installer-emacs-reader
-     :desinstaller metal-deps-desinstaller-emacs-reader
-     :categorie pdf
-     :description "Lecteur MuPDF (test Mac Intel)"
-     :condition (lambda () (and (eq system-type 'darwin)
-                                (not (metal-deps--apple-silicon-p))))))
+     :condition (lambda () (and (not (eq system-type 'windows-nt))
+                                (or (not (eq system-type 'darwin))
+                                    (metal-deps--macos-moderne-p))))))
   "Liste des outils gérés par MetalEmacs.")
 
 ;; Les outils-agents sont calculés dynamiquement à chaque accès (et non

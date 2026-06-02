@@ -1705,12 +1705,37 @@ Raccourci Treemacs : M (Shift+M)"
 ;; (add-hook 'prolog-mode-hook #'my/prolog-header-line)
 
 
-(add-to-list 'auto-mode-alist
-             (cons "\\.pdf\\'"
-                   (cond
-                    ((fboundp 'pdf-view-mode) 'pdf-view-mode)
-                    ((fboundp 'doc-view-mode) 'doc-view-mode)
-                    (t 'fundamental-mode))))
+;; Choix du mode d'ouverture des PDF.  On ne se fie PAS à `(fboundp
+;; 'pdf-view-mode)' : pdf-tools étant `:defer t', ce symbole peut être
+;; autoloadé alors qu'epdfinfo n'est pas compilé (typiquement sur un Mac
+;; < 14, où MetalEmacs n'offre pas l'installation de Poppler/pdf-tools).
+;; Dans ce cas, ouvrir un PDF en `pdf-view-mode' échouerait.  On teste donc
+;; la présence RÉELLE d'epdfinfo, et on décide à l'ouverture du fichier (et
+;; non une seule fois au démarrage) via une fonction de dispatch — ainsi,
+;; si pdf-tools est compilé plus tard dans la session, le bon mode est
+;; choisi sans redémarrage.  Repli : `doc-view-mode' (visionneur intégré).
+(defun metal/epdfinfo-disponible-p ()
+  "Retourne non-nil si le binaire epdfinfo de pdf-tools est exécutable."
+  (or (executable-find "epdfinfo")
+      (file-executable-p
+       (expand-file-name "straight/build/pdf-tools/epdfinfo"
+                         user-emacs-directory))
+      ;; Windows : binaire portable fourni avec MetalEmacs
+      (and (eq system-type 'windows-nt)
+           (file-executable-p
+            (expand-file-name "pdf-tools/epdfinfo.exe" user-emacs-directory)))))
+
+(defun metal/ouvrir-pdf ()
+  "Ouvre le PDF courant avec pdf-tools si disponible, sinon doc-view.
+Utilisé comme valeur dans `auto-mode-alist' ; évalué à chaque ouverture."
+  (cond
+   ((and (metal/epdfinfo-disponible-p) (fboundp 'pdf-view-mode))
+    (pdf-view-mode))
+   ((fboundp 'doc-view-mode)
+    (doc-view-mode))
+   (t (fundamental-mode))))
+
+(add-to-list 'auto-mode-alist (cons "\\.pdf\\'" #'metal/ouvrir-pdf))
 
 ;; (find-file "~/.emacs.d/METAL.pdf")
 
