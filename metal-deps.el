@@ -670,10 +670,15 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
                     "Suivez les étapes (« Continuer » / « Installer »).\n")))
         (display-buffer buf)
         ;; Télécharger puis ouvrir le .pkg (open déclenche l'installeur Apple).
-        (let* ((cmd (format "curl -fSL -o %s %s && open %s"
-                            (shell-quote-argument dest)
-                            (shell-quote-argument url)
-                            (shell-quote-argument dest)))
+        ;; `-sS' (silent + show-errors) supprime la barre de progression de
+        ;; curl — qui s'affiche avec des retours chariot ^M illisibles dans
+        ;; un buffer Emacs — tout en conservant les messages d'erreur.
+        ;; (On évite `--no-progress-meter', absent du curl 7.64 de Catalina.)
+        (let* ((cmd (format
+                     "curl -fSL -sS -o %s %s && echo TERMINE && open %s"
+                     (shell-quote-argument dest)
+                     (shell-quote-argument url)
+                     (shell-quote-argument dest)))
                (proc (start-process-shell-command
                       "metal-node-pkg" buf cmd)))
           (set-process-sentinel
