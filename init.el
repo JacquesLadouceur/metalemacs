@@ -1737,6 +1737,17 @@ Utilisé comme valeur dans `auto-mode-alist' ; évalué à chaque ouverture."
 
 (add-to-list 'auto-mode-alist (cons "\\.pdf\\'" #'metal/ouvrir-pdf))
 
+;; Qualité de rendu doc-view (utilisé sur les Mac < 14, où pdf-tools n'est
+;; pas disponible).  doc-view rasterise chaque page en PNG via Ghostscript
+;; à une résolution fixe (96 DPI par défaut) — d'où un rendu plus flou que
+;; pdf-tools, qui rendait à la résolution de l'écran.  On monte à 200 DPI :
+;; bon compromis netteté / performance sur un écran standard (non-Retina).
+;; `doc-view-scale-internally' laisse Emacs mettre à l'échelle l'image déjà
+;; rendue lors des zooms, plutôt que de relancer Ghostscript à chaque fois.
+(with-eval-after-load 'doc-view
+  (setq doc-view-resolution 200)
+  (setq doc-view-scale-internally t))
+
 ;; (find-file "~/.emacs.d/METAL.pdf")
 
 
