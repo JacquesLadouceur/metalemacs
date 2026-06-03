@@ -1766,6 +1766,14 @@ Utilisé comme valeur dans `auto-mode-alist' ; évalué à chaque ouverture."
     (doc-view-reconvert-doc)
     (message "doc-view : document reconverti à %d DPI" doc-view-resolution)))
 
+;; Navigation par page avec les flèches haut/bas (pratique pour présenter
+;; des diapositives).  Par défaut, haut/bas font défiler l'image dans la
+;; page ; on les remappe sur page précédente / suivante, comme le remap
+;; gauche/droite déjà en place pour pdf-view.
+(with-eval-after-load 'doc-view
+  (define-key doc-view-mode-map (kbd "<up>")   #'doc-view-previous-page)
+  (define-key doc-view-mode-map (kbd "<down>") #'doc-view-next-page))
+
 ;; (find-file "~/.emacs.d/METAL.pdf")
 
 
