@@ -1739,14 +1739,32 @@ Utilisé comme valeur dans `auto-mode-alist' ; évalué à chaque ouverture."
 
 ;; Qualité de rendu doc-view (utilisé sur les Mac < 14, où pdf-tools n'est
 ;; pas disponible).  doc-view rasterise chaque page en PNG via Ghostscript
-;; à une résolution fixe (96 DPI par défaut) — d'où un rendu plus flou que
+;; à une résolution fixe (100 DPI par défaut) — d'où un rendu plus flou que
 ;; pdf-tools, qui rendait à la résolution de l'écran.  On monte à 200 DPI :
 ;; bon compromis netteté / performance sur un écran standard (non-Retina).
-;; `doc-view-scale-internally' laisse Emacs mettre à l'échelle l'image déjà
-;; rendue lors des zooms, plutôt que de relancer Ghostscript à chaque fois.
-(with-eval-after-load 'doc-view
-  (setq doc-view-resolution 200)
-  (setq doc-view-scale-internally t))
+;;
+;; IMPORTANT : on règle la résolution AVANT le chargement de doc-view, via
+;; `custom-set-variables'.  Un `with-eval-after-load' s'exécuterait trop
+;; tard — doc-view a déjà rendu et mis en cache la première page à 100 DPI,
+;; donc la nouvelle valeur n'aurait aucun effet tant que le cache n'est pas
+;; vidé.  `custom-set-variables' fixe la valeur dès la définition de la
+;; variable, avant tout rendu.  `doc-view-scale-internally' laisse Emacs
+;; mettre à l'échelle l'image déjà rendue lors des zooms.
+(custom-set-variables
+ '(doc-view-resolution 200)
+ '(doc-view-scale-internally t))
+
+;; Commande pratique : re-rendre le document courant à la résolution
+;; actuelle (utile après avoir changé `doc-view-resolution' en session, ou
+;; si un PDF a été ouvert avant que le réglage ne prenne effet).
+(defun metal/doc-view-rafraichir ()
+  "Vide le cache doc-view et reconvertit le document courant.
+À utiliser dans un buffer `doc-view-mode' si le rendu paraît flou."
+  (interactive)
+  (when (derived-mode-p 'doc-view-mode)
+    (doc-view-clear-cache)
+    (doc-view-reconvert-doc)
+    (message "doc-view : document reconverti à %d DPI" doc-view-resolution)))
 
 ;; (find-file "~/.emacs.d/METAL.pdf")
 
