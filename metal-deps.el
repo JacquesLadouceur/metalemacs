@@ -33,7 +33,9 @@
 ;;               n'est pas offert sur Mac < 14.
 ;;               Ghostscript : proposé sur Mac < 14 comme moteur de rendu
 ;;               de doc-view (sans lui, doc-view affiche le PDF en texte
-;;               brut au lieu des pages).
+;;               brut au lieu des pages).  Sur Mac < 14, installé via le
+;;               .pkg autonome officiel (Koch/MacTeX), Homebrew étant Tier 3
+;;               sur ces systèmes (compilation depuis la source).
 ;;
 ;; Commandes principales :
 ;;   M-x metal-deps-afficher-etat     - Interface graphique avec boutons
@@ -1285,20 +1287,81 @@ open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
            (async-shell-command "sudo apt install -y libpoppler-dev libpoppler-glib-dev poppler-utils autoconf automake" "*Poppler Install*")
          (message "Installez poppler avec votre gestionnaire de paquets"))))))
 
+(defcustom metal-deps-ghostscript-pkg-url
+  "https://pages.uoregon.edu/koch/Ghostscript-10.07.0.pkg"
+  "URL du .pkg Ghostscript autonome pour macOS (binaires universels).
+Maintenu par Richard Koch (mainteneur de MacTeX) ; indépendant de
+Homebrew, il installe `gs' dans /usr/local/bin et fonctionne sur
+macOS Big Sur (11) et ultérieur — donc sur les Mac < 14 où Homebrew
+est en Tier 3 et compilerait depuis la source.
+
+Ces URLs sont versionnées (pas de lien « latest ») : si elle devient
+obsolète, l'installateur ouvre la page de téléchargement dans le
+navigateur.  Mettre à jour la version ici au besoin (voir
+https://pages.uoregon.edu/koch/)."
+  :type 'string
+  :group 'metal-deps)
+
+(defun metal-deps--installer-ghostscript-pkg ()
+  "Télécharge et ouvre le .pkg Ghostscript autonome (macOS < 14).
+Évite Homebrew (Tier 3 sur ces systèmes).  En cas d'échec du
+téléchargement (URL périmée, réseau), ouvre la page de Koch dans le
+navigateur pour un téléchargement manuel."
+  (let* ((url metal-deps-ghostscript-pkg-url)
+         (dest (expand-file-name (file-name-nondirectory url) "~/Downloads"))
+         (buf "*Installation Ghostscript*"))
+    (metal-deps--journaliser "Installation de Ghostscript via .pkg : %s" url)
+    (with-current-buffer (get-buffer-create buf)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Téléchargement de Ghostscript…\n  %s\n\n" url))
+        (insert "L'installeur Apple s'ouvrira automatiquement à la fin.\n"
+                "Suivez les étapes, puis cliquez « Rafraîchir » dans l'Assistant.\n")))
+    (display-buffer buf)
+    (let* ((cmd (format
+                 "curl -fSL -sS -o %s %s && echo TELECHARGE && open %s"
+                 (shell-quote-argument dest)
+                 (shell-quote-argument url)
+                 (shell-quote-argument dest)))
+           (proc (start-process-shell-command "metal-gs-pkg" buf cmd)))
+      (set-process-sentinel
+       proc
+       (lambda (_p event)
+         (with-current-buffer (get-buffer-create buf)
+           (let ((inhibit-read-only t))
+             (goto-char (point-max))
+             (if (string-match-p "finished" event)
+                 (insert "\n✓ Installeur ouvert.  Terminez l'installation,\n"
+                         "  puis cliquez « Rafraîchir ».\n")
+               (insert (format "\n⚠ Téléchargement impossible : %s\n" (string-trim event))
+                       "Ouverture de la page de téléchargement…\n")
+               (browse-url "https://pages.uoregon.edu/koch/"))))
+         (run-with-timer 1 nil #'metal-deps-afficher-etat))))))
+
 (defun metal-deps-installer-ghostscript ()
   "Installe Ghostscript (gs), moteur de rendu de `doc-view'.
 Sur les Mac < 14, MetalEmacs n'offre pas pdf-tools et affiche les PDF
 avec `doc-view', qui a besoin de `gs' pour convertir les pages en
-images.  Sans Ghostscript, doc-view ne montre que le source brut."
+images.  Sans Ghostscript, doc-view ne montre que le source brut.
+
+- macOS < 14 : .pkg autonome officiel (Homebrew est Tier 3 et
+               compilerait depuis la source)
+- macOS >= 14 : Homebrew (bottle)
+- Linux/Windows : gestionnaire système"
   (interactive)
   (if (metal-deps--ghostscript-present-p)
       (message "✓ Ghostscript déjà installé")
     (metal-deps--journaliser "Installation de Ghostscript")
     (pcase system-type
       ('darwin
-       (if (metal-deps--brew-present-p)
-           (async-shell-command "brew install ghostscript" "*Ghostscript Install*")
-         (message "Installez d'abord Homebrew")))
+       (if (metal-deps--macos-moderne-p)
+           (if (metal-deps--brew-present-p)
+               (async-shell-command "brew install ghostscript" "*Ghostscript Install*")
+             (message "Installez d'abord Homebrew"))
+         ;; macOS < 14 : installeur .pkg autonome
+         (when (yes-or-no-p
+                "Installer Ghostscript via l'installeur officiel (.pkg) ? ")
+           (metal-deps--installer-ghostscript-pkg))))
       ('windows-nt
        (if (metal-deps--scoop-present-p)
            (async-shell-command "scoop install ghostscript" "*Ghostscript Install*")
@@ -1317,10 +1380,26 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut."
       (metal-deps--journaliser "Désinstallation de Ghostscript")
       (pcase system-type
         ('darwin
-         (if (and (metal-deps--brew-present-p)
-                  (= 0 (call-process "brew" nil nil nil "list" "ghostscript")))
-             (async-shell-command "brew uninstall ghostscript" "*Ghostscript Uninstall*")
-           (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
+         (cond
+          ;; Installé via Homebrew (Mac >= 14)
+          ((and (metal-deps--brew-present-p)
+                (= 0 (call-process "brew" nil nil nil "list" "ghostscript")))
+           (async-shell-command "brew uninstall ghostscript" "*Ghostscript Uninstall*"))
+          ;; Installé via le .pkg autonome : binaires dans /usr/local/bin.
+          ;; La suppression nécessite root ; on guide plutôt que de tenter
+          ;; un rm -rf silencieux sur /usr/local.
+          ((file-executable-p "/usr/local/bin/gs")
+           (metal-deps--afficher-aide
+            "Désinstaller Ghostscript (.pkg)"
+            (concat
+             "Ghostscript a été installé via l'installeur .pkg autonome.\n"
+             "Pour le retirer, ouvrez un terminal et exécutez :\n\n"
+             "  sudo rm -f /usr/local/bin/gs /usr/local/bin/gs-noX11 \\\n"
+             "    /usr/local/bin/gs-X11\n"
+             "  sudo rm -rf /usr/local/share/ghostscript\n\n"
+             "(Les binaires appartiennent à root : sudo est requis.)")))
+          (t
+           (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement."))))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
              (async-shell-command "scoop uninstall ghostscript" "*Ghostscript Uninstall*")
