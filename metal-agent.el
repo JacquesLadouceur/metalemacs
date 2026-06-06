@@ -173,6 +173,11 @@ Si aucun ne correspond, on bascule sur `tronc-commun' (fallback)."
   :type 'boolean
   :group 'metal-agent)
 
+(defvar metal-agent--profil-verrouille nil
+  "Si non-nil, l'auto-sélection ne change plus `metal-agent-profil-actif'.
+Mis à t par `metal-agent-choisir-profil' (choix manuel).  Persiste
+jusqu'au redémarrage de MetalEmacs.")
+
 (defvar metal-agent--options-actives nil
   "Plist des options actives (override) sur le profil courant.
 Forme : (:id-option t/nil ...).  Les valeurs absentes utilisent le
@@ -362,6 +367,7 @@ matche, retourne `tronc-commun'."
 N'a d'effet que si `metal-agent-auto-selection-profil' est non-nil.
 Réinitialise les options actives si le profil change."
   (when (and metal-agent-auto-selection-profil
+             (not metal-agent--profil-verrouille)
              metal-agent-profils
              ;; Ne s'applique qu'aux buffers fichiers ou aux modes
              ;; programmation/texte, pas aux buffers internes.
@@ -589,45 +595,152 @@ Si APPEND est non nil, ajoute le texte à la fin ; sinon remplace le contenu."
         (ignore-errors (delete-window win)))
       (ignore-errors (kill-buffer buf)))))
 
-(defun metal-agent--codex-command (args prompt)
-  "Construire la commande CLI du provider courant avec ARGS et PROMPT."
-  (append (list (metal-agent--current-command)) args (list prompt)))
+(defcustom metal-agent-timeout 240
+  "Délai maximal (secondes) avant d'interrompre une requête agent.
+Au-delà, le processus est tué, l'indicateur de progression est arrêté,
+et un message d'erreur est affiché plutôt que de geler Emacs."
+  :type 'integer
+  :group 'metal-agent)
 
-(defun metal-agent--run-codex (prompt title callback)
-  "Lancer la CLI du provider courant avec PROMPT et TITLE.
+(defun metal-agent--provider-veut-dernier-message ()
+  "Non-nil si le provider courant écrit sa réponse via --output-last-message."
+  (metal-agent--provider-prop :dernier-message))
 
-CALLBACK reçoit le code de sortie et la sortie brute."
+(defun metal-agent--codex-command (args prompt &optional fichier-sortie)
+  "Construire la commande CLI du provider courant avec ARGS et PROMPT.
+Si FICHIER-SORTIE est fourni et que le provider le réclame
+(`:dernier-message t'), on insère `--output-last-message FICHIER-SORTIE'
+avant le prompt afin que la CLI y écrive SA RÉPONSE FINALE, au lieu de
+la noyer dans une sortie verbeuse (raisonnement, commandes exec, etc.)."
+  (append (list (metal-agent--current-command))
+          args
+          (when (and fichier-sortie
+                     (metal-agent--provider-veut-dernier-message))
+            (list "--output-last-message" fichier-sortie))
+          (list prompt)))
+
+(declare-function metal-agent--progress-start "metal-agent" (&optional texte))
+(declare-function metal-agent--progress-stop "metal-agent" ())
+
+(defun metal-agent--run-codex (prompt title callback &optional texte-progression)
+  "Lancer la CLI du provider courant avec PROMPT et TITLE via `make-process'.
+
+CALLBACK reçoit le code de sortie et la réponse de l'agent.
+TEXTE-PROGRESSION remplace le libellé de l'indicateur de progression
+affiché pendant l'exécution.
+
+Robustesse :
+- Filtre de process qui draine le tube au fur et à mesure.
+- Pour les providers verbeux (`:dernier-message t'), la réponse est lue
+  depuis le fichier `--output-last-message' plutôt que depuis la sortie
+  brute.
+- TIMEOUT de sécurité (`metal-agent-timeout')."
   (unless (metal-agent-disponible-p)
     (user-error "%s CLI introuvable : %s"
                 (metal-agent--current-label)
                 (metal-agent--current-command)))
-  (let* ((default-directory (metal-agent--source-directory))
+  (let* ((veut-fichier (metal-agent--provider-veut-dernier-message))
+         (isoler (metal-agent--provider-prop :isoler-fichier))
+         (src-file (metal-agent--source-file))
+         ;; ISOLATION : pour un provider exploratoire (`:isoler-fichier t'),
+         ;; on exécute la CLI dans un dossier temporaire VIDE contenant
+         ;; seulement une copie du fichier source. La CLI (cas `codex exec'
+         ;; sous --sandbox read-only) ne peut alors explorer aucun fichier
+         ;; voisin, ce qui la rend rapide et strictement focalisée.
+         (dossier-isole
+          (when (and isoler src-file (file-readable-p src-file)
+                     (file-name-absolute-p src-file))
+            (let ((d (make-temp-file "metal-agent-iso-" t)))
+              (ignore-errors
+                (copy-file src-file
+                           (expand-file-name
+                            (file-name-nondirectory src-file) d)
+                           t))
+              d)))
+         (default-directory (or dossier-isole
+                                (metal-agent--source-directory)))
          (buf (metal-agent--codex-buffer))
          (label (metal-agent--current-label))
-         (proc nil))
-    (metal-agent--message-preparation-corrections)
+         (fichier-sortie (when veut-fichier
+                           (make-temp-file "metal-agent-reponse-" nil ".txt")))
+         (proc nil)
+         (timer nil)
+         ;; Nettoyage commun (fichier de réponse + dossier isolé), appelé
+         ;; à la fin normale comme au timeout.
+         (nettoyer
+          (lambda ()
+            (when fichier-sortie
+              (ignore-errors (delete-file fichier-sortie)))
+            (when dossier-isole
+              (ignore-errors (delete-directory dossier-isole t))))))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert (format "%s — %s
 
 " label title))))
+    (metal-agent--progress-start
+     (or texte-progression (format "Exécution : %s" title)))
     (setq proc
           (make-process
            :name (format "metal-agent-%s" (symbol-name metal-agent-provider))
            :buffer buf
            :command (metal-agent--codex-command
-                     (metal-agent--current-propose-args) prompt)
+                     (metal-agent--current-propose-args) prompt fichier-sortie)
            :noquery t
            :connection-type 'pipe
+           ;; FILTRE : draine le tube en continu. Sans cela, une CLI très
+           ;; bavarde peut saturer le pipe OS et bloquer Emacs en attente.
+           :filter
+           (lambda (process chunk)
+             (when (buffer-live-p (process-buffer process))
+               (with-current-buffer (process-buffer process)
+                 (let ((inhibit-read-only t)
+                       (moving (= (point) (process-mark process))))
+                   (save-excursion
+                     (goto-char (process-mark process))
+                     (insert chunk)
+                     (set-marker (process-mark process) (point)))
+                   (when moving
+                     (goto-char (process-mark process)))))))
            :sentinel
            (lambda (process _event)
              (when (memq (process-status process) '(exit signal))
-               (let ((code (process-exit-status process))
-                     (raw (with-current-buffer (process-buffer process)
-                            (buffer-substring-no-properties (point-min) (point-max)))))
+               (when (timerp timer) (cancel-timer timer))
+               (let ((duree (metal-agent--progress-stop)))
+                 (when duree
+                   (message "✓ %s terminé en %s."
+                            (or (metal-agent--current-label) "Agent")
+                            (metal-agent--format-duree duree))))
+               (let* ((code (process-exit-status process))
+                      ;; Réponse : depuis le fichier si le provider l'écrit,
+                      ;; sinon depuis la sortie brute (cas Claude --print).
+                      (raw
+                       (if (and fichier-sortie
+                                (file-readable-p fichier-sortie)
+                                (> (file-attribute-size
+                                    (file-attributes fichier-sortie)) 0))
+                           (with-temp-buffer
+                             (insert-file-contents fichier-sortie)
+                             (buffer-string))
+                         (with-current-buffer (process-buffer process)
+                           (buffer-substring-no-properties
+                            (point-min) (point-max))))))
+                 (funcall nettoyer)
                  (when callback
                    (funcall callback code raw)))))))
+    ;; TIMEOUT : filet de sécurité. Si le process n'a pas rendu la main
+    ;; après `metal-agent-timeout' secondes, on le tue proprement.
+    (setq timer
+          (run-at-time
+           metal-agent-timeout nil
+           (lambda ()
+             (when (process-live-p proc)
+               (metal-agent--progress-stop)
+               (ignore-errors (kill-process proc))
+               (funcall nettoyer)
+               (message "⏱ Requête %s interrompue après %d s (délai dépassé). Réessayez ou réduisez la taille du contenu."
+                        label metal-agent-timeout)))))
     (process-send-eof proc)
     proc))
 
@@ -644,45 +757,82 @@ d'éviter de reprendre le bloc de code du prompt utilisateur."
               pos (match-end 0)))
       (when last-codex
         (setq txt (substring txt last-codex))))
-    ;; Retirer les statistiques finales éventuelles.
-    (when (string-match "\ntokens used\\(?:.\\|\n\\)*\\'" txt)
-      (setq txt (substring txt 0 (match-beginning 0))))
-    ;; Extraire tous les blocs Markdown et garder le dernier non-diff.
-    (let ((pos 0)
-          blocks)
-      (while (string-match
-              "```\\([[:alnum:]_-]*\\)?[ \t]*\n\\(\\(?:.\\|\n\\)*?\\)\n```"
-              txt pos)
-        (let ((lang (match-string 1 txt))
-              (body (match-string 2 txt)))
-          (unless (and lang (not (string-empty-p lang))
-                       (string-match-p "\\`diff\\'" lang))
-            (push (string-trim body) blocks)))
-        (setq pos (match-end 0)))
-      ;; `push` met en tête, donc `(car blocks)` est le DERNIER bloc trouvé.
-      (car blocks))))
+    ;; Retirer les statistiques finales éventuelles (recherche simple, pas
+    ;; de regex récursive : on coupe à partir de la 1re ligne "tokens used").
+    (let ((i (string-match "\ntokens used" txt)))
+      (when i (setq txt (substring txt 0 i))))
+    ;; Extraire les blocs via la fonction sûre, garder le dernier non-diff.
+    (let ((blocs (metal-agent--extraire-blocs-markdown txt))
+          (dernier nil))
+      (dolist (b blocs)
+        (let ((lang (car b)) (corps (cdr b)))
+          (unless (and lang (string-match-p "\\`diff\\'" lang))
+            (setq dernier (string-trim corps)))))
+      dernier)))
+
+(defun metal-agent--extraire-blocs-markdown (raw)
+  "Extraire tous les blocs de code Markdown de RAW, sans regex récursive.
+Retourne une liste (LANG . CORPS) dans l'ordre d'apparition. Utilise une
+recherche de délimiteurs par `search-forward' pour éviter le retour
+arrière catastrophique d'une regex sur de longs textes."
+  (let ((blocs nil))
+    (with-temp-buffer
+      (insert raw)
+      (goto-char (point-min))
+      ;; Chaque bloc s'ouvre par ``` en début de ligne.
+      (while (re-search-forward "^```\\([[:alnum:]_-]*\\)[ \t]*$" nil t)
+        (let ((lang (match-string 1))
+              (debut (1+ (line-end-position))))
+          ;; Chercher la fermeture ``` en début de ligne, par recherche simple.
+          (forward-line 1)
+          (let ((fin (when (re-search-forward "^```[ \t]*$" nil t)
+                       (match-beginning 0))))
+            (when fin
+              (push (cons (and lang (not (string-empty-p lang)) lang)
+                          (buffer-substring-no-properties debut fin))
+                    blocs)
+              (goto-char (match-end 0)))))))
+    (nreverse blocs)))
 
 (defun metal-agent--extract-code-block-claude (raw)
   "Extraire le dernier bloc de code utile de RAW (sortie Claude Code CLI).
-La sortie en mode --print/text est directement la réponse, sans préambule
-à filtrer comme avec Codex.  On extrait simplement le dernier bloc de
-code Markdown non-diff."
-  (let ((pos 0)
-        blocks)
-    (while (string-match
-            "```\\([[:alnum:]_-]*\\)?[ \t]*\n\\(\\(?:.\\|\n\\)*?\\)\n```"
-            raw pos)
-      (let ((lang (match-string 1 raw))
-            (body (match-string 2 raw)))
-        (unless (and lang (not (string-empty-p lang))
-                     (string-match-p "\\`diff\\'" lang))
-          (push (string-trim body) blocks)))
-      (setq pos (match-end 0)))
-    (car blocks)))
+La sortie en mode --print/text est directement la réponse.  On extrait
+le dernier bloc Markdown non-diff via `metal-agent--extraire-blocs-markdown'
+(sans regex récursive, donc sans risque de gel sur de longs fichiers)."
+  (let ((blocs (metal-agent--extraire-blocs-markdown raw))
+        (dernier nil))
+    (dolist (b blocs)
+      (let ((lang (car b)) (corps (cdr b)))
+        (unless (and lang (string-match-p "\\`diff\\'" lang))
+          (setq dernier (string-trim corps)))))
+    dernier))
+
+(defun metal-agent--extraire-entre-marqueurs (raw)
+  "Extraire le texte entre les marqueurs sentinelles dans RAW, ou nil.
+Recherche par chaîne simple (pas de regex récursive). Tolère un éventuel
+bloc ``` résiduel collé juste à l'intérieur des marqueurs."
+  (let ((d (string-search metal-agent--marqueur-debut raw)))
+    (when d
+      (let* ((apres-debut (+ d (length metal-agent--marqueur-debut)))
+             (f (string-search metal-agent--marqueur-fin raw apres-debut)))
+        (when f
+          (let ((corps (substring raw apres-debut f)))
+            ;; Retirer une clôture ``` résiduelle que l'agent aurait
+            ;; éventuellement ajoutée juste à l'intérieur des marqueurs.
+            (setq corps (string-trim corps))
+            (when (string-prefix-p "```" corps)
+              (let ((nl (string-search "\n" corps)))
+                (when nl (setq corps (substring corps (1+ nl))))))
+            (when (string-suffix-p "```" corps)
+              (setq corps (substring corps 0 (- (length corps) 3))))
+            (string-trim corps)))))))
 
 (defun metal-agent--extract-code-block (raw)
-  "Extraire le bloc de code de RAW via la fonction du provider courant."
-  (funcall (metal-agent--current-extract-fn) raw))
+  "Extraire le contenu corrigé de RAW.
+Privilégie les marqueurs sentinelles (robustes à l'imbrication de blocs
+```). À défaut, retombe sur l'extraction par bloc Markdown du provider."
+  (or (metal-agent--extraire-entre-marqueurs raw)
+      (funcall (metal-agent--current-extract-fn) raw)))
 
 (defun metal-agent--show-before-after-diff (old new)
   "Afficher un vrai diff Avant/Après entre OLD et NEW.
@@ -780,8 +930,10 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
    (t
     (let ((proposed (metal-agent--extract-code-block raw)))
       (if (not proposed)
-          (message nil)
-          (metal-agent--show-status-message "🤖 Aucune correction exploitable n'a été retournée.")
+          (progn
+            (message nil)
+            (metal-agent--show-status-message
+             "🤖 Aucune correction exploitable n'a été retournée."))
         (if (and metal-agent--last-original
                  (string= (string-trim proposed)
                           (string-trim metal-agent--last-original)))
@@ -845,10 +997,61 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
 (defvar metal-agent--ediff-variables-saved-p nil
   "Non-nil si les variables Ediff globales ont été sauvegardées.")
 
-(defun metal-agent--message-preparation-corrections ()
-  "Afficher le message de préparation dans la minibuffer jusqu'à l'ouverture d'Ediff."
-  (message "🤖 Préparation des corrections...")
-  (redisplay t))
+(defvar metal-agent--progress-timer nil
+  "Timer de l'indicateur de progression, ou nil si aucun en cours.")
+
+(defvar metal-agent--progress-texte "Exécution de la requête"
+  "Texte de base affiché par l'indicateur de progression (sans les points).")
+
+(defvar metal-agent--progress-tick 0
+  "Compteur d'animation de l'indicateur de progression.")
+
+(defvar metal-agent--progress-debut nil
+  "Horodatage (float-time) du début de l'opération en cours, ou nil.")
+
+(defun metal-agent--format-duree (secs)
+  "Formater SECS (entier de secondes) en texte lisible.
+Au-delà de 60 s, affiche « N min S s » ; sinon « S s »."
+  (if (>= secs 60)
+      (format "%d min %d s" (/ secs 60) (% secs 60))
+    (format "%d s" secs)))
+
+(defun metal-agent--progress-start (&optional texte)
+  "Démarrer l'indicateur de progression dans la minibuffer.
+TEXTE remplace le libellé par défaut.  Affiche un chrono (temps écoulé)
+et rappelle que l'opération peut prendre quelques minutes.  Animé
+jusqu'à `metal-agent--progress-stop'."
+  (metal-agent--progress-stop)
+  (setq metal-agent--progress-texte (or texte "Correction en cours")
+        metal-agent--progress-tick 0
+        metal-agent--progress-debut (float-time))
+  (let ((afficher
+         (lambda ()
+           (let ((secs (when metal-agent--progress-debut
+                         (round (- (float-time)
+                                   metal-agent--progress-debut)))))
+             (setq metal-agent--progress-tick (1+ metal-agent--progress-tick))
+             (let ((message-log-max nil))
+               (message "🤖 %s — %s (merci de patienter, cela peut prendre quelques minutes)"
+                        metal-agent--progress-texte
+                        (if secs (concat (metal-agent--format-duree secs)
+                                         " écoulées") "")))))))
+    (funcall afficher)
+    (setq metal-agent--progress-timer
+          (run-at-time 0.5 0.5 afficher))))
+
+(defun metal-agent--progress-stop ()
+  "Arrêter l'indicateur de progression et effacer la minibuffer.
+Retourne la durée écoulée en secondes (entier) depuis le démarrage, ou nil."
+  (when (timerp metal-agent--progress-timer)
+    (cancel-timer metal-agent--progress-timer))
+  (setq metal-agent--progress-timer nil)
+  (let ((message-log-max nil))
+    (message nil))
+  (prog1
+      (when metal-agent--progress-debut
+        (round (- (float-time) metal-agent--progress-debut)))
+    (setq metal-agent--progress-debut nil)))
 
 (defun metal-agent--ediff-make-wide-control-buffer-id-autour (orig-fn &rest args)
   "Protéger Ediff contre une erreur de format dans son panneau wide.
@@ -1340,10 +1543,20 @@ Inclut le préambule système du profil actif s'il existe."
         (format "[Profil : %s]\n%s\n\n%s" profil-nom systeme base)
       base)))
 
+(defconst metal-agent--marqueur-debut "===METAL-AGENT-DEBUT==="
+  "Marqueur ouvrant délimitant la réponse de l'agent.
+Choisi pour ne jamais apparaître dans un fichier source, ce qui évite la
+confusion avec des blocs de code ``` imbriqués dans le contenu.")
+
+(defconst metal-agent--marqueur-fin "===METAL-AGENT-FIN==="
+  "Marqueur fermant délimitant la réponse de l'agent.")
+
 (defun metal-agent--prompt-final-code (instruction code &optional target-label)
   "Construire un prompt demandant un code final.
-Injecte les fragments des options actives et les instructions libres
-saisies via le panneau transient."
+Injecte les fragments des options actives et les instructions libres.
+La réponse doit être encadrée par des marqueurs sentinelles (et non un
+bloc Markdown ```), afin de gérer les fichiers contenant eux-mêmes des
+blocs de code."
   (let ((fragments (metal-agent--fragments-actifs))
         (libre (and (stringp metal-agent--instructions-libres)
                     (not (string-empty-p
@@ -1355,29 +1568,39 @@ Tâche :
 %s
 
 Contraintes obligatoires :
-- Retourne uniquement le code final.
-- Ne retourne pas de diff.
-- Ne donne pas d'explication.
-- Encadre le code final dans un seul bloc Markdown ```%s.
-- Le bloc doit contenir %s.
+- Ne modifie AUCUN fichier sur le disque. Ne demande PAS la permission
+  d'écrire ou d'éditer un fichier. Tu ne fais qu'analyser le texte fourni
+  ci-dessous et RETOURNER le résultat comme texte dans ta réponse.
+- Ne propose pas de liste de corrections en prose. Ne décris pas les
+  changements. Applique-les directement et retourne le résultat.
+- Ne donne aucune explication, aucun préambule, aucune question.
+- Encadre %s STRICTEMENT entre les deux marqueurs suivants, seuls sur
+  leur ligne, et ne place RIEN d'autre en dehors de ces marqueurs :
+%s
+(contenu ici)
+%s
+- N'utilise PAS de bloc Markdown ``` pour encadrer l'ensemble : le
+  contenu peut lui-même contenir des blocs ```, qu'il faut préserver tels
+  quels à l'intérieur des marqueurs.
 %s%s
 Règle de modification minimale (TRÈS IMPORTANT) :
-- Si le code est déjà correct et fonctionnel, retourne-le EXACTEMENT tel quel,
+- Si le contenu est déjà correct, retourne-le EXACTEMENT tel quel,
   caractère par caractère, sans aucune modification.
-- Ne change RIEN qui ne soit pas strictement nécessaire pour accomplir la tâche :
-  ne modifie pas la casse, l'indentation, les guillemets (simples vs doubles),
-  les noms de variables, l'ordre des lignes, ni la mise en forme.
+- Ne change RIEN qui ne soit pas strictement nécessaire : ni la casse, ni
+  l'indentation, ni les guillemets, ni les noms, ni l'ordre des lignes,
+  ni la mise en forme.
 - N'uniformise pas le style, n'ajoute pas de commentaires, ne reformate pas.
-- Préfère TOUJOURS la version la plus proche du code original.
+- Préfère TOUJOURS la version la plus proche de l'original.
 
-Code actuel :
-```%s
+Contenu actuel :
 %s
-```"
+%s
+%s"
             (metal-agent--context-header)
             instruction
-            (metal-agent--code-block-language)
-            (or target-label "le code corrigé")
+            (or target-label "le résultat corrigé")
+            metal-agent--marqueur-debut
+            metal-agent--marqueur-fin
             (if fragments
                 (concat "\nContraintes du profil :\n"
                         (mapconcat (lambda (f) (concat "- " f)) fragments "\n")
@@ -1386,8 +1609,9 @@ Code actuel :
             (if libre
                 (format "\nInstructions supplémentaires :\n%s\n" libre)
               "")
-            (metal-agent--code-block-language)
-            code)))
+            metal-agent--marqueur-debut
+            code
+            metal-agent--marqueur-fin)))
 
 (defun metal-agent-corriger-selection ()
   "Corriger la sélection avec Codex, puis appliquer dans le buffer après confirmation."
@@ -1495,6 +1719,59 @@ remplace tout le buffer."
      (metal-agent--prompt-final-code demande code target-label)
      (if sur-selection "demande libre (sélection)" "demande libre")
      #'metal-agent--handle-codex-code-response)))
+
+(defun metal-agent-demande-libre-analyse ()
+  "Demande libre d'ANALYSE à l'agent IA (réponse en texte, sans Ediff).
+Contrairement à `metal-agent-demande-libre', le modèle n'est pas
+contraint de renvoyer du code : sa réponse (analyse, explication,
+recommandations) est affichée dans le buffer de sortie de l'agent.
+Si une région est active, seule la sélection sert de contexte ;
+sinon, c'est le fichier entier."
+  (interactive)
+  (metal-agent--save-current-buffer-and-selection)
+  (let* ((sur-selection (and metal-agent--saved-region-beg
+                             metal-agent--saved-region-end))
+         (demande (read-string
+                   (if sur-selection
+                       "Analyse libre (sur la sélection) : "
+                     "Analyse libre (sur le fichier) : ")))
+         (code (if sur-selection
+                   (metal-agent--selection-text)
+                 (metal-agent--file-text)))
+         (titre (if sur-selection "analyse libre (sélection)" "analyse libre")))
+    (metal-agent--run-codex
+     (format
+      "%s
+%s
+
+N'apporte aucune modification au code ; il s'agit d'une analyse.
+
+Format de la réponse (IMPORTANT) — elle sera lue dans un buffer Emacs
+en texte brut, étroit :
+- Réponds en français.
+- N'utilise AUCUN tableau Markdown (pas de « | », pas de lignes « --- »).
+- Présente les listes d'éléments sous forme de puces ; pour chaque
+  élément, mets les détails (cible, lignes, justification) en sous-puces
+  indentées, une par ligne, plutôt qu'en colonnes.
+- Garde les lignes sous ~78 caractères ; va à la ligne au lieu d'étendre.
+- Utilise des titres courts soulignés par des tirets si besoin de sections.
+
+```%s
+%s
+```"
+      (metal-agent--context-header)
+      demande
+      (metal-agent--code-block-language)
+      code)
+     titre
+     (lambda (exit-code _raw)
+       (let ((buf-name (metal-agent--current-buffer-name))
+             (label (or (metal-agent--current-label) "Agent")))
+         (when-let ((buf (get-buffer buf-name)))
+           (display-buffer buf))
+         (if (= exit-code 0)
+             (message "Analyse %s terminée — voir %s." label buf-name)
+           (message "Erreur %s — voir %s." label buf-name)))))))
 
 (defun metal-agent-afficher-codex ()
   "Afficher le buffer du provider courant.
@@ -1805,9 +2082,19 @@ Avec un préfixe (`C-u'), propose TOUS les profils."
          (sym (cdr (assoc label choices))))
     (when sym
       (setq metal-agent-profil-actif sym)
+      (setq metal-agent--profil-verrouille t)
       (metal-agent--reinitialiser-options)
       (force-mode-line-update t)
-      (message "Profil actif : %s" label))))
+      (message "Profil actif : %s (verrouillé)" label))))
+
+(defun metal-agent-deverrouiller-profil ()
+  "Réactiver l'auto-sélection du profil selon le major-mode.
+Annule le verrou posé par un choix manuel via `metal-agent-choisir-profil'."
+  (interactive)
+  (setq metal-agent--profil-verrouille nil)
+  (metal-agent--auto-selectionner-profil)
+  (force-mode-line-update t)
+  (message "Auto-sélection du profil réactivée."))
 
 (defun metal-agent-editer-instructions-libres ()
   "Éditer les instructions libres dans un buffer dédié.
@@ -2326,6 +2613,11 @@ et Prolog et sensibles à `metal-toolbar-emoji-size-offset'."
       (format "Demande libre à %s" label))
      "   "
      (metal-agent--toolbar-button
+      (metal-toolbar-emoji "🔍")
+      #'metal-agent-demande-libre-analyse
+      (format "Analyse libre par %s (réponse texte, sans Ediff)" label))
+     "   "
+     (metal-agent--toolbar-button
       (metal-toolbar-emoji "✅")
       #'metal-agent--apply-proposed-code
       "Appliquer la dernière proposition")
@@ -2468,6 +2760,33 @@ explicitement écartés."
               #'metal-agent--auto-selectionner-profil-window-change)
   ;; Fallback pour Emacs < 27 (peu probable, mais on ne casse rien).
   (add-hook 'buffer-list-update-hook #'metal-agent--auto-selectionner-profil))
+
+(defvar metal-correction-prompt
+  "Identifie d'abord le cours et le travail concernés en lisant l'énoncé/mandat présent dans ce répertoire (cherche un .org, .qmd ou .pdf décrivant les compétences visées et le barème). Corrige ensuite chaque sous-dossier de travail en fonction de ces consignes, en appliquant le skill correction-travaux, puis écris la grille Org cumulative."
+  "Consigne envoyée à Claude Code pour la correction.")
+
+(defun metal-corriger-travaux ()
+  "Lance Claude Code dans le dossier Treemacs courant pour corriger les travaux."
+  (interactive)
+  (let* ((node (treemacs-node-at-point))
+         (path (and node (treemacs--nearest-path node)))
+         (dossier (cond
+                   ((null path)
+                    (user-error "Aucun nœud Treemacs sous le point"))
+                   ((file-directory-p path) path)
+                   (t (file-name-directory path)))))
+    (let ((default-directory (file-name-as-directory dossier))
+          (eat-buffer-name (format "*correction:%s*"
+                                   (file-name-nondirectory
+                                    (directory-file-name dossier)))))
+      (eat)
+      (eat-term-send-string
+       eat-terminal
+       (format "claude --profile correction %S" metal-correction-prompt))
+      (eat-term-send-string eat-terminal "\r"))))
+
+(with-eval-after-load 'treemacs
+  (define-key treemacs-mode-map (kbd "<f9>") #'metal-corriger-travaux))
 
 (global-set-key (kbd "C-c m a") #'metal-agent-toggle-active)
 (global-set-key (kbd "C-c m c") #'metal-agent-afficher-codex)

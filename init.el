@@ -368,16 +368,6 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
 (setq-default major-mode 'fundamental-mode)
 
 
-(defun toggle-treemacs-and-fullscreen ()
-  "Bascule l'affichage de Treemacs. Ouvre si fermé (et quitte le plein écran), ouvre sinon."
-  (interactive)
-  (if (treemacs-is-treemacs-window-selected?)
-      (progn
-        (treemacs-quit)    ;; Ferme l'explorateur de fichiers
-        (toggle-frame-fullscreen))  ;; Active le mode plein écran
-    (progn
-      (treemacs)           ;; Ouvre Treemacs
-      (toggle-frame-fullscreen))))  ;; Active le mode plein écran
 
  
 
@@ -718,9 +708,9 @@ L'argument FRAME est ignore (garde pour compatibilite)."
   (metal-prefs-save-all)
   (message "Taille police reinitialisee: %d" (metal-font-height)))
 
-(global-set-key (kbd "C-+") #'metal-font-increase)
-(global-set-key (kbd "C--") #'metal-font-decrease)
-(global-set-key (kbd "C-0") #'metal-font-reset)
+
+;; (global-set-key (kbd "C--") #'metal-font-decrease)
+;; (global-set-key (kbd "C-0") #'metal-font-reset)
 
 ;; ------------------------------------------------------------
 ;; Application des polices (interface + code)
@@ -813,15 +803,15 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 ;; Reappliquer apres changement de theme
 (add-hook 'after-load-theme-hook #'metal-setup-fonts)
 
-(defun metal-prefs-save-all-safe ()
-  "Sauvegarde securisee des preferences MetalEmacs."
-  (condition-case err
-      (progn
-        (message "MetalEmacs: sauvegarde des preferences...")
-        (metal-prefs-save-all)
-        (message "MetalEmacs: preferences sauvegardees."))
-    (error
-     (message "MetalEmacs: erreur pendant la sauvegarde des preferences: %S" err))))
+;; (defun metal-prefs-save-all-safe ()
+;;   "Sauvegarde securisee des preferences MetalEmacs."
+;;   (condition-case err
+;;       (progn
+;;         (message "MetalEmacs: sauvegarde des preferences...")
+;;         (metal-prefs-save-all)
+;;         (message "MetalEmacs: preferences sauvegardees."))
+;;     (error
+;;      (message "MetalEmacs: erreur pendant la sauvegarde des preferences: %S" err))))
 
 (defun metal-prefs-save-all-safe ()
   "Sauvegarde securisee des preferences MetalEmacs."
@@ -850,20 +840,7 @@ L'argument FRAME est ignore (garde pour compatibilite)."
   (recentf-mode 1))
 
 
-;; Petites fonctions/utilitaires communs
-(defun metal/pdf-sync-colors (&rest _)
-  "Calquer les couleurs PDF sur le theme actif."
-  (setq pdf-view-midnight-colors
-        (cons (face-foreground 'default nil t)
-              (face-background 'default nil t))))
-
-(add-hook 'pdf-view-mode-hook
-          (lambda ()
-            (metal/pdf-sync-colors)
-            (pdf-view-midnight-minor-mode 1)   ;; recoloriage actif
-            (pdf-view-redisplay t)))
-
-(advice-add 'load-theme :after #'metal/pdf-sync-colors)
+;; Synchronisation des couleurs PDF avec le thème : déplacée dans metal-pdf.el.
 
 ;; Forcer tab-line-mode dans les PDF (surtout pour Windows)
 (add-hook 'pdf-view-mode-hook
@@ -932,8 +909,6 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 
 ;; Reveal
 
-
-(add-hook 'pdf-view-mode-hook (lambda () (auto-revert-mode 1)))
 
 (global-visual-line-mode 1)
 
@@ -1060,12 +1035,12 @@ Hors minibuffer, demande le motif via read-string."
 
 (add-hook 'prog-mode-hook 'display-line-numbers-mode )
 
-(add-hook 'prog-mode-hook
-          (lambda ()
-            (auto-fill-mode 1)
-            (setq comment-auto-fill-only-comments t)
-            (setq comment-multi-line t)
-            (setq fill-column 79)))
+;; (add-hook 'prog-mode-hook
+;;           (lambda ()
+;;             (auto-fill-mode 1)
+;;             (setq comment-auto-fill-only-comments t)
+;;             (setq comment-multi-line t)
+;;             (setq fill-column 79)))
 
 
 ;; Configuration CSV mode
@@ -1121,7 +1096,7 @@ Hors minibuffer, demande le motif via read-string."
 ;; (TODO, priorité, timestamps, tableaux). Doit être défini AVANT le chargement
 ;; d'Org pour être pris en compte.
 ;; Résultat :
-;;   S-<flèche>    → metal-buf-move-* (déplacement de buffer global)
+;;   S-<flèche>    → metal-buf-deplace-* (déplacement de buffer global)
 ;;   C-S-<flèche>  → commandes contextuelles Org (cycler TODO, modifier date…)
 (setq org-replace-disputed-keys t)
 
@@ -1204,180 +1179,9 @@ Finalement, si c'est le dernier onglet d'une fenêtre,la fenêtre est fermée av
 
 
 
-(require 'cl-lib)
-(require 'windmove)
-
-;;; Predicats sur les fenêtres
-
-(defun metal-buf-move--main-window-p (window)
-  "Retourne t si WINDOW est une fenêtre 'main' (ni side ni minibuffer)."
-  (and (window-live-p window)
-       (not (window-minibuffer-p window))
-       (not (window-parameter window 'window-side))))
-
-(defun metal-buf-move--main-windows (&optional frame)
-  "Liste des fenêtres main de FRAME."
-  (cl-remove-if-not #'metal-buf-move--main-window-p
-                    (window-list frame 'no-minibuf)))
-
-(defun metal-buf-move--last-main-window-p (window)
-  "Retourne t si WINDOW est la seule fenêtre main de sa frame.
-Remplace (one-window-p) qui ne sait pas ignorer les side-windows."
-  (let ((mains (metal-buf-move--main-windows (window-frame window))))
-    (and (memq window mains)
-         (null (cdr mains)))))
-
-(defun metal-buf-move--usable-window (direction)
-  "Fenêtre dans DIRECTION exploitable comme cible, ou nil."
-  (let ((win (condition-case nil
-                 (windmove-find-other-window direction)
-               (error nil))))
-    (and win
-         (metal-buf-move--main-window-p win)
-         (not (window-dedicated-p win))
-         win)))
-
-(defun metal-buf-move--pick-main-window ()
-  "Retourne une fenêtre main non-dédiée, ou nil."
-  (cl-find-if (lambda (w) (not (window-dedicated-p w)))
-              (metal-buf-move--main-windows)))
-
-;;; Manipulation des buffers et historiques
-
-(defun metal-buf-move--vacate-source (source-window source-buffer)
-  "Affiche un buffer autre que SOURCE-BUFFER dans SOURCE-WINDOW."
-  (let* ((prev (cl-find-if (lambda (entry)
-                             (let ((buf (car entry)))
-                               (and (buffer-live-p buf)
-                                    (not (eq buf source-buffer)))))
-                           (window-prev-buffers source-window)))
-         (replacement (or (and prev (car prev))
-                          (other-buffer source-buffer t))))
-    (when (or (null replacement)
-              (not (buffer-live-p replacement))
-              (eq replacement source-buffer))
-      (setq replacement (get-buffer-create "*scratch*")))
-    (set-window-buffer source-window replacement)))
-
-(defun metal-buf-move--forget-buffer (window buffer)
-  "Retire BUFFER de l'historique (prev et next) de WINDOW."
-  (when (window-live-p window)
-    (set-window-prev-buffers
-     window
-     (cl-remove-if (lambda (entry) (eq (car entry) buffer))
-                   (window-prev-buffers window)))
-    (set-window-next-buffers
-     window
-     (remq buffer (window-next-buffers window)))))
-
-(defun metal-buf-move--forget-buffer-everywhere (buffer keep-window)
-  "Retire BUFFER de l'historique de toutes les fenêtres sauf KEEP-WINDOW.
-C'est ce qui évite qu'un buffer ayant transité par plusieurs fenêtres
-laisse des onglets fantômes un peu partout."
-  (dolist (win (window-list nil 'no-minibuf))
-    (unless (eq win keep-window)
-      (metal-buf-move--forget-buffer win buffer))))
-
-(defun metal-buf-move--clear-history (window)
-  "Efface complètement l'historique de WINDOW."
-  (when (window-live-p window)
-    (set-window-prev-buffers window nil)
-    (set-window-next-buffers window nil)))
-
-(defun metal-buf-move--safe-delete-window (window)
-  "Supprime WINDOW sauf si c'est la dernière fenêtre main.
-Retourne t en cas de suppression effective, nil sinon."
-  (when (and (window-live-p window)
-             (not (metal-buf-move--last-main-window-p window)))
-    (condition-case nil
-        (progn (delete-window window) t)
-      (error nil))))
-
-;;; Opérations composées
-
-(defun metal-buf-move--split-source-and-move
-    (source-window source-buffer direction-split)
-  (let ((new-window (split-window source-window nil direction-split)))
-    (set-window-buffer new-window source-buffer)
-    (metal-buf-move--clear-history new-window)
-    (metal-buf-move--vacate-source source-window source-buffer)
-    (metal-buf-move--forget-buffer source-window source-buffer)
-    (metal-buf-move--forget-buffer-everywhere source-buffer new-window)
-    (select-window new-window)))
-
-(defun metal-buf-move--split-anchor-and-move (source-buffer direction-split)
-  (let* ((anchor (or (metal-buf-move--pick-main-window)
-                     (selected-window)))
-         (new-window (split-window anchor nil direction-split)))
-    (set-window-buffer new-window source-buffer)
-    (metal-buf-move--clear-history new-window)
-    (metal-buf-move--forget-buffer-everywhere source-buffer new-window)
-    (select-window new-window)))
-
-;;; Commande principale
-
-(defun metal-buf-move (direction-windmove direction-split)
-  "Déplace le buffer courant vers la fenêtre en DIRECTION-WINDMOVE.
-
-En l'absence de cible exploitable (side-windows, dédiées et
-minibuffer exclus), crée une fenêtre. Si la source est la
-dernière fenêtre main ou a un historique à préserver, on la
-splitte ; sinon on la supprime et on splitte une autre main.
-
-Avec cible, on déplace le buffer et ferme la source si elle
-n'héberge plus rien d'autre, sauf si c'est la dernière main.
-
-Les historiques des autres fenêtres sont nettoyés du buffer
-déplacé pour éviter les onglets fantômes."
-  (let* ((source-window (selected-window))
-         (source-buffer (window-buffer source-window))
-         (target-window (metal-buf-move--usable-window direction-windmove))
-         (autre-buffer-dans-historique
-          (cl-some (lambda (entry)
-                     (let ((buf (car entry)))
-                       (and (buffer-live-p buf)
-                            (not (eq buf source-buffer)))))
-                   (window-prev-buffers source-window)))
-         (source-is-last-main
-          (metal-buf-move--last-main-window-p source-window)))
-    (cond
-     ;; Cas 1 : aucune cible -> création
-     ((null target-window)
-      (cond
-       ;; 1a : split de la source (historique riche, dernière main, ou seule)
-       ((or (one-window-p)
-            source-is-last-main
-            autre-buffer-dans-historique)
-        (metal-buf-move--split-source-and-move
-         source-window source-buffer direction-split))
-       ;; 1b : suppression de la source + split ailleurs
-       (t
-        (if (metal-buf-move--safe-delete-window source-window)
-            (metal-buf-move--split-anchor-and-move
-             source-buffer direction-split)
-          ;; Fallback défensif : suppression impossible, on splitte la source
-          (metal-buf-move--split-source-and-move
-           source-window source-buffer direction-split)))))
-     ;; Cas 2 : cible existante -> déplacement
-     (t
-      (set-window-buffer target-window source-buffer)
-      (metal-buf-move--vacate-source source-window source-buffer)
-      (metal-buf-move--forget-buffer source-window source-buffer)
-      (metal-buf-move--forget-buffer-everywhere source-buffer target-window)
-      (select-window target-window)
-      (when (and (window-live-p source-window)
-                 (not autre-buffer-dans-historique))
-        (metal-buf-move--safe-delete-window source-window))))))
-
-(defun metal-buf-move-up ()    (interactive) (metal-buf-move 'up    'above))
-(defun metal-buf-move-down ()  (interactive) (metal-buf-move 'down  'below))
-(defun metal-buf-move-left ()  (interactive) (metal-buf-move 'left  'left))
-(defun metal-buf-move-right () (interactive) (metal-buf-move 'right 'right))
-
-(global-set-key (kbd "<S-up>")    #'metal-buf-move-up)
-(global-set-key (kbd "<S-down>")  #'metal-buf-move-down)
-(global-set-key (kbd "<S-left>")  #'metal-buf-move-left)
-(global-set-key (kbd "<S-right>") #'metal-buf-move-right)
+;; Déplacement de buffers entre fenêtres (S-flèche) : déplacé dans
+;; metal-buf-deplace.el.
+(require 'metal-buf-deplace)
 
 
 (setq ns-pop-up-frames nil)  ;; Empêche la création de nouveaux frames
@@ -1554,19 +1358,23 @@ Raccourci Treemacs : M (Shift+M)"
   (interactive)
   (dired user-emacs-directory))
 
-(defun modeline-bouton-systeme ()
-  "Affiche un bouton SYS dans la modeline pour ouvrir .emacs.d dans dired."
-  (let ((map (make-sparse-keymap)))
-    (define-key map [mode-line mouse-1] #'ouvrir-emacs-d-dired)
-    (propertize
-     " SYS "
-     'mouse-face 'mode-line-highlight
-     'local-map map
-     'help-echo "Clique pour ouvrir .emacs.d dans dired")))
+;; (defun modeline-bouton-systeme ()
+;;   "Affiche un bouton SYS dans la modeline pour ouvrir .emacs.d dans dired."
+;;   (let ((map (make-sparse-keymap)))
+;;     (define-key map [mode-line mouse-1] #'ouvrir-emacs-d-dired)
+;;     (propertize
+;;      " SYS "
+;;      'mouse-face 'mode-line-highlight
+;;      'local-map map
+;;      'help-echo "Clique pour ouvrir .emacs.d dans dired")))
+
+;; (setq-default mode-line-format
+;;   (append mode-line-format
+;;           '((:eval (modeline-bouton-systeme)))))
 
 (setq-default mode-line-format
   (append mode-line-format
-          '((:eval (modeline-bouton-systeme)))))
+          '((:eval (metal-toolbar-bouton-systeme)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Ouverture des fichiers dired dans la même fenêtre
@@ -1600,7 +1408,7 @@ Raccourci Treemacs : M (Shift+M)"
         (browse-url url))))
 
 
-(global-set-key (kbd "C-c w") 'search-wiktionary)
+;; (global-set-key (kbd "C-c w") 'search-wiktionary)
 
 ;; ############################################################################
 ;; Wipipedia
@@ -1652,131 +1460,6 @@ Raccourci Treemacs : M (Shift+M)"
   (find-file  "~/.emacs.d/AideMemoire-Python.pdf"))
 
 
-
-;; (defun my/format-toolbar-button-icon (icon tooltip action)
-;;   "Créer un bouton cliquable avec une icône colorée."
-;;   (propertize (format " %s " icon)
-;;               'mouse-face '(:background "#e0e0e0")
-;;               'help-echo tooltip
-;;               'keymap (let ((map (make-sparse-keymap)))
-;;                         (define-key map [header-line mouse-1] action)
-;;                         map)))
-
-
-(defun documentation-prolog ()
-  (interactive)
-  (find-file  "~/.emacs.d/SWI-Prolog-9.2.2.pdf"))
-
-(defun prolog-save-consult ()
-  "Sauvegarde le buffer courant puis lance `prolog-consult-buffer`."
-  (interactive)
-  (when (and (buffer-file-name)
-             (buffer-modified-p))
-    (save-buffer))
-  (prolog-consult-file))
-
-
-
-
-;; (defun metal-prolog-shell-bascule-position ()
-;;   "Bascule la position du shell Prolog (bas â†” droite), la rend permanente et (ré)affiche le REPL."
-;;   (interactive)
-;;   (let* ((nouveau (if (eq metal-prolog-shell-position-defaut 'bottom) 'right 'bottom))
-;;          (buf (metal--prolog-get-buffer)))
-;;     ;; Sauvegarder la préférence
-;;     (setq metal-prolog-shell-position-defaut nouveau)
-;;     (customize-save-variable 'metal-prolog-shell-position-defaut nouveau)
-;;     ;; Appliquer la règle dâ€™affichage
-;;     (metal--prolog-appliquer-regle nouveau)
-;;     ;; Créer le REPL si besoin
-;;     (unless (and buf (buffer-live-p buf))
-;;       (run-prolog)
-;;       (setq buf (metal--prolog-get-buffer)))
-;;     ;; Repositionner/afficher
-;;     (metal--prolog-afficher-ou-repositionner buf nouveau)
-;;     (message "✅ Shell Prolog désormais %s."
-;;              (if (eq nouveau 'bottom) "en bas" "Ã  droite"))))
-
-
-
-
-
-;; (add-hook 'python-mode-hook #'my/python-header-line)
-;; (add-hook 'prolog-mode-hook #'my/prolog-header-line)
-
-
-;; Choix du mode d'ouverture des PDF.  On ne se fie PAS à `(fboundp
-;; 'pdf-view-mode)' : pdf-tools étant `:defer t', ce symbole peut être
-;; autoloadé alors qu'epdfinfo n'est pas compilé (typiquement sur un Mac
-;; < 14, où MetalEmacs n'offre pas l'installation de Poppler/pdf-tools).
-;; Dans ce cas, ouvrir un PDF en `pdf-view-mode' échouerait.  On teste donc
-;; la présence RÉELLE d'epdfinfo, et on décide à l'ouverture du fichier (et
-;; non une seule fois au démarrage) via une fonction de dispatch — ainsi,
-;; si pdf-tools est compilé plus tard dans la session, le bon mode est
-;; choisi sans redémarrage.  Repli : `doc-view-mode' (visionneur intégré).
-(defun metal/epdfinfo-disponible-p ()
-  "Retourne non-nil si le binaire epdfinfo de pdf-tools est exécutable."
-  (or (executable-find "epdfinfo")
-      (file-executable-p
-       (expand-file-name "straight/build/pdf-tools/epdfinfo"
-                         user-emacs-directory))
-      ;; Windows : binaire portable fourni avec MetalEmacs
-      (and (eq system-type 'windows-nt)
-           (file-executable-p
-            (expand-file-name "pdf-tools/epdfinfo.exe" user-emacs-directory)))))
-
-(defun metal/ouvrir-pdf ()
-  "Ouvre le PDF courant avec pdf-tools si disponible, sinon doc-view.
-Utilisé comme valeur dans `auto-mode-alist' ; évalué à chaque ouverture."
-  (cond
-   ((and (metal/epdfinfo-disponible-p) (fboundp 'pdf-view-mode))
-    (pdf-view-mode))
-   ((fboundp 'doc-view-mode)
-    (doc-view-mode))
-   (t (fundamental-mode))))
-
-(add-to-list 'auto-mode-alist (cons "\\.pdf\\'" #'metal/ouvrir-pdf))
-
-;; Qualité de rendu doc-view (utilisé sur les Mac < 14, où pdf-tools n'est
-;; pas disponible).  doc-view rasterise chaque page en PNG via Ghostscript
-;; à une résolution fixe (100 DPI par défaut) — d'où un rendu plus flou que
-;; pdf-tools, qui rendait à la résolution de l'écran.  On monte à 200 DPI :
-;; bon compromis netteté / performance sur un écran standard (non-Retina).
-;;
-;; IMPORTANT : on règle la résolution AVANT le chargement de doc-view, via
-;; `custom-set-variables'.  Un `with-eval-after-load' s'exécuterait trop
-;; tard — doc-view a déjà rendu et mis en cache la première page à 100 DPI,
-;; donc la nouvelle valeur n'aurait aucun effet tant que le cache n'est pas
-;; vidé.  `custom-set-variables' fixe la valeur dès la définition de la
-;; variable, avant tout rendu.  `doc-view-scale-internally' laisse Emacs
-;; mettre à l'échelle l'image déjà rendue lors des zooms.
-(custom-set-variables
- '(doc-view-resolution 200)
- '(doc-view-scale-internally t))
-
-;; Commande pratique : re-rendre le document courant à la résolution
-;; actuelle (utile après avoir changé `doc-view-resolution' en session, ou
-;; si un PDF a été ouvert avant que le réglage ne prenne effet).
-(defun metal/doc-view-rafraichir ()
-  "Vide le cache doc-view et reconvertit le document courant.
-À utiliser dans un buffer `doc-view-mode' si le rendu paraît flou."
-  (interactive)
-  (when (derived-mode-p 'doc-view-mode)
-    (doc-view-clear-cache)
-    (doc-view-reconvert-doc)
-    (message "doc-view : document reconverti à %d DPI" doc-view-resolution)))
-
-;; Navigation par page avec les flèches haut/bas (pratique pour présenter
-;; des diapositives).  Par défaut, haut/bas font défiler l'image dans la
-;; page ; on les remappe sur page précédente / suivante, comme le remap
-;; gauche/droite déjà en place pour pdf-view.
-(with-eval-after-load 'doc-view
-  (define-key doc-view-mode-map (kbd "<up>")   #'doc-view-previous-page)
-  (define-key doc-view-mode-map (kbd "<down>") #'doc-view-next-page))
-
-;; (find-file "~/.emacs.d/METAL.pdf")
-
-
 (use-package shackle
   :config
   (setq shackle-rules
@@ -1822,7 +1505,7 @@ Utilisé comme valeur dans `auto-mode-alist' ; évalué à chaque ouverture."
 ;;  (inclut gestion USB et compression ZIP)
 ;; ===============================
 
-(load (expand-file-name "metal-treemacs.el" user-emacs-directory))
+;; (load (expand-file-name "metal-treemacs.el" user-emacs-directory))
 
 (require 'metal-securite)
 
@@ -1919,99 +1602,8 @@ Utilisé comme valeur dans `auto-mode-alist' ; évalué à chaque ouverture."
                (switch-to-buffer dash-buf)
                (throw 'done nil)))))))))
 
-(defun metal-preparer-distribution ()
-  "Prépare une distribution MetalEmacs en ZIP dans le dossier sélectionné dans Treemacs."
-  (interactive)
-  (let* ((dest-base
-          (let* ((tb (treemacs-get-local-buffer))
-                 (node (when tb
-                         (with-current-buffer tb
-                           (save-excursion
-                             (treemacs--prop-at-point :path))))))
-            (cond
-             ((null node)
-              (user-error "Cliquez d'abord sur un dossier dans Treemacs"))
-             ((file-directory-p node)
-              (file-name-as-directory node))
-             (t
-              (file-name-directory node)))))
-         (source (expand-file-name "~/.emacs.d/"))
-         (timestamp (format-time-string "%Y%m%d"))
-         (dest-name (format "MetalEmacs-%s" timestamp))
-         (dist-dir (expand-file-name (concat dest-name "/") dest-base))
-         (emacs-dir (expand-file-name ".emacs.d/" dist-dir))
-         (zip-file (expand-file-name "emacs.d.zip" dist-dir))
-         ;; Fichiers .el : tous ceux à la racine sauf les exclus
-         (el-exclus '("metal-prefs.el" "metal-custom.el"))
-         (fichiers-el (cl-remove-if
-                       (lambda (f) (member (file-name-nondirectory f) el-exclus))
-                       (directory-files source nil "^.*\\.el$")))
-         ;; Autres fichiers à copier (non-.el)
-         (fichiers-autres '("metal-news.org"
-                            "Document.cfg" "METAL.cfg" "Presentation.cfg"
-                            "MetalEmacs-lisez-moi.txt"
-                            "TAL-MacIntel-Windows-Linux.yml" "TAL-MacM.yml"
-                            "METAL.org" "METAL.pdf"
-                            "AideMemoire-Python.pdf" "orgcard.pdf"
-                            "Quarto_Cheat_Sheet.pdf" "SWI-Prolog-9.2.2.pdf"))
-         ;; Tous les fichiers à copier
-         (fichiers (append fichiers-el fichiers-autres))
-         ;; Dossiers à copier intégralement
-         (dossiers '("icons" "modeles" "snippets" ".cache"
-                     "zip" "PortableGit" "quarto" "pdf-tools" "straight")))
-    ;; Confirmation graphique
-    (unless (x-popup-dialog
-             t
-             `(,(format "Créer la distribution MetalEmacs ?\n\n📁 Destination : %s\n📄 %d fichiers .el détectés"
-                        (abbreviate-file-name dist-dir)
-                        (length fichiers-el))
-               ("✓ Créer" . t)
-               ("✗ Annuler" . nil)))
-      (user-error "Opération annulée"))
-    (message "▶ Préparation de la distribution MetalEmacs en cours...")
-    (redisplay)
-    ;; Nettoyage si une ancienne préparation existe (sans corbeille)
-    (when (file-exists-p dist-dir)
-      (let ((metal-securite-inhiber t)
-            (delete-by-moving-to-trash nil))
-        (delete-directory dist-dir t)))
-    ;; Créer le répertoire .emacs.d dans la distribution
-    (make-directory emacs-dir t)
-    ;; Copier les fichiers individuels
-    (dolist (f fichiers)
-      (let ((src (concat source f)))
-        (when (file-exists-p src)
-          (copy-file src (concat emacs-dir f) t))))
-    ;; Copier les dossiers (sans .elc)
-    (dolist (d dossiers)
-      (let ((src (concat source d)))
-        (when (file-directory-p src)
-          (copy-directory src (concat emacs-dir d) nil t t))))
-    ;; Supprimer tous les .elc et .DS_Store (sans corbeille)
-    (let ((metal-securite-inhiber t)
-          (delete-by-moving-to-trash nil))
-      (dolist (elc (directory-files-recursively emacs-dir "\\.elc$"))
-        (delete-file elc))
-      (dolist (ds (directory-files-recursively emacs-dir "^\\.DS_Store$"))
-        (delete-file ds)))
-    ;; Créer le ZIP
-    (call-process-shell-command
-     (format "cd %s && zip -r emacs.d.zip .emacs.d"
-             (shell-quote-argument dist-dir))
-     nil nil nil)
-    ;; Supprimer le dossier .emacs.d temporaire, ne garder que le ZIP (sans corbeille)
-    (let ((metal-securite-inhiber t)
-          (delete-by-moving-to-trash nil))
-      (delete-directory emacs-dir t))
-    ;; Rafraîchir Treemacs pour voir le résultat
-    (treemacs-refresh)
-    ;; Confirmation finale
-    (x-popup-dialog
-     t
-     `(,(format "✓ Distribution MetalEmacs créée !\n\n📦 %s"
-                (abbreviate-file-name zip-file))
-       ("OK" . t)))
-    (message "✓ Distribution créée : %s" zip-file)))
+;; Préparation d'une distribution MetalEmacs (déplacé dans metal-distribution.el)
+(require 'metal-distribution)
 
 
 (with-eval-after-load 'markdown-mode
@@ -2051,6 +1643,7 @@ Utilisé comme valeur dans `auto-mode-alist' ; évalué à chaque ouverture."
                  (window-height . 0.30)
                  (slot . 0)))))
 
+(global-set-key (kbd "C-+") 'metal-text-scale-increase-mouse)
 (global-set-key (kbd "C-=") 'metal-text-scale-increase-mouse)
 (global-set-key (kbd "C--") 'metal-text-scale-decrease-mouse)
 (global-set-key (kbd "C-0") 'metal-text-scale-reset-all)

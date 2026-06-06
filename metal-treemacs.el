@@ -1017,6 +1017,17 @@ Ouvre Treemacs si nécessaire et, si possible, se place sur le volume ajouté."
   (define-key treemacs-mode-map (kbd "M-H") #'metal-treemacs-monter-dossier)
   (define-key treemacs-mode-map (kbd "M-L") #'metal-treemacs-descendre-dossier))
 
+(defun toggle-treemacs-and-fullscreen ()
+  "Bascule l'affichage de Treemacs. Ouvre si fermé (et quitte le plein écran), ouvre sinon."
+  (interactive)
+  (if (treemacs-is-treemacs-window-selected?)
+      (progn
+        (treemacs-quit)    ;; Ferme l'explorateur de fichiers
+        (toggle-frame-fullscreen))  ;; Active le mode plein écran
+    (progn
+      (treemacs)           ;; Ouvre Treemacs
+      (toggle-frame-fullscreen))))  ;; Active le mode plein écran
+
 
 (provide 'metal-treemacs)
 

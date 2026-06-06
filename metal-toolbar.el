@@ -76,6 +76,17 @@ persistée dans `metal-prefs.el' via `metal-prefs-save'."
 160 par défaut ; modifiable via `metal-toolbar-emoji-increase' et amis."
   (+ metal-toolbar-emoji-base metal-toolbar-emoji-size-offset))
 
+(defcustom metal-toolbar-emoji-raise 0.25
+  "Décalage vertical par défaut des emojis dans les header-lines.
+Les emojis (Apple Color Emoji, Noto, ...) n'ont pas la même ligne de
+base que les icônes nerd-icons (Hack Nerd Font Mono) : à `:height' égal,
+ils « flottent » par rapport aux autres boutons.  Ce décalage les recale.
+Négatif = vers le bas.  Appliqué automatiquement par `metal-toolbar-emoji'
+sauf si un :raise explicite est fourni à l'appel.  Ajustez si le rendu
+diffère sur votre système (macOS, Linux, ...)."
+  :type 'number
+  :group 'metal-toolbar)
+
 (defun metal-toolbar-emoji-increase ()
   "Augmente la taille des emojis de 10 (= +0.1 du multiplicateur).
 Le changement prend effet immédiatement dans toutes les header-lines
@@ -217,19 +228,27 @@ Mots-clés :
   :height   multiplicateur de taille (float).  Si nil (défaut), calculé
             depuis `(metal-toolbar-emoji-size)' divisé par 100.
   :color    couleur :foreground (souvent ignorée par les emojis colorés).
-  :raise    décalage vertical (négatif = vers le bas)."
+  :raise    décalage vertical (négatif = vers le bas).  Si nil (défaut),
+            utilise `metal-toolbar-emoji-raise' pour aligner l'emoji sur
+            les icônes nerd-icons voisines."
   (let* ((h (or height (/ (metal-toolbar-emoji-size) 100.0)))
+         (r (or raise metal-toolbar-emoji-raise))
          (face `(:height ,h ,@(when color `(:foreground ,color))))
          (s (propertize emoji 'face face)))
-    (if raise
-        (propertize s 'display `((raise ,raise)))
+    (if (and r (not (zerop r)))
+        (propertize s 'display `((raise ,r)))
       s)))
 
-(defun metal-toolbar-button (icon tooltip command)
-  "Construit un bouton cliquable pour la header-line.
-ICON est une chaîne (idéalement obtenue via `metal-toolbar-icon').
+(defun metal-toolbar-button (icon tooltip command &optional context)
+  "Construit un bouton cliquable pour une header-line ou une mode-line.
+ICON est une chaîne (idéalement obtenue via `metal-toolbar-icon' ou
+`metal-toolbar-emoji').
 TOOLTIP s'affiche au survol.
 COMMAND est la commande appelée au clic-gauche.
+CONTEXT est le symbole `header-line' (défaut) ou `mode-line' : il
+détermine le pseudo-événement de clic, car un clic dans la header-line
+arrive comme `[header-line mouse-1]' et un clic dans la mode-line comme
+`[mode-line mouse-1]'.
 
 L'espacement horizontal autour de l'icône est contrôlé par
 `metal-toolbar-button-padding'.
@@ -237,13 +256,27 @@ L'espacement horizontal autour de l'icône est contrôlé par
 Note : `mouse-face' utilise un cons frais via `list' (et non un littéral
 quoté).  Sans ça, des boutons adjacents avec une valeur `eq' identique
 fusionneraient en une seule région de surbrillance."
-  (let ((spc (make-string metal-toolbar-button-padding ?\s)))
+  (let* ((ctx (or context 'header-line))
+         (evt (vector ctx 'mouse-1))
+         (spc (make-string metal-toolbar-button-padding ?\s)))
     (propertize (concat spc icon spc)
                 'mouse-face (list :background metal-toolbar-hover-background)
                 'help-echo tooltip
                 'keymap (let ((map (make-sparse-keymap)))
-                          (define-key map [header-line mouse-1] command)
+                          (define-key map evt command)
                           map))))
+
+;;; --- Bouton système (mode-line) ------------------------------------------
+
+(declare-function ouvrir-emacs-d-dired "init" ())
+
+(defun metal-toolbar-bouton-systeme ()
+  "Bouton « SYS » pour la mode-line : ouvre `.emacs.d' dans Dired.
+Construit via `metal-toolbar-button' avec le contexte `mode-line', donc
+cohérent avec les boutons des header-lines.  La commande `ouvrir-emacs-d-dired'
+est résolue au moment du clic."
+  (metal-toolbar-button " SYS " "Ouvrir .emacs.d dans Dired"
+                        #'ouvrir-emacs-d-dired 'mode-line))
 
 ;;; --- Style de la header-line ---------------------------------------------
 

@@ -1746,6 +1746,7 @@ dans les fichiers de projet."
      :couleur     "#4285F4"
      :format      claude-style
      :args        nil
+     ;; :args ("-p" "") ;; si un problème avec nil
      :auth-args   nil
      :auth-aide   "Choisissez la méthode d'authentification dans le menu (1, 2 ou 3), puis appuyez sur Entrée.  Quand l'authentification est terminée, fermez ce buffer (C-x k)."
      :auth-fichiers ("~/.gemini/oauth_creds.json")
@@ -1772,7 +1773,8 @@ dans les fichiers de projet."
      :commande    "claude"
      :couleur     "#D97757"
      :format      claude-style
-     :args        ("-p" "--permission-mode" "plan" "--output-format" "text")
+     :args ("-p" "--output-format" "text")
+     :via-process t    
      :auth-args   ("auth" "login")
      :auth-aide   "Le navigateur va s'ouvrir pour l'OAuth Anthropic.  Si rien ne s'ouvre, appuyez sur « c » pour copier l'URL et collez-la dans votre navigateur.  Revenez ici après autorisation, puis fermez le buffer (C-x k)."
      :auth-fichiers ("~/.claude/.credentials.json")

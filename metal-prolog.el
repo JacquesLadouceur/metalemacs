@@ -26,6 +26,19 @@
 ;;; -------------------------------------------------------------------
 ;;; Détection et configuration de SWI-Prolog
 ;;; -------------------------------------------------------------------
+
+(defun documentation-prolog ()
+  (interactive)
+  (find-file  "~/.emacs.d/SWI-Prolog-9.2.2.pdf"))
+
+(defun prolog-save-consult ()
+  "Sauvegarde le buffer courant puis lance `prolog-consult-buffer`."
+  (interactive)
+  (when (and (buffer-file-name)
+             (buffer-modified-p))
+    (save-buffer))
+  (prolog-consult-file))
+
 (defun metal-prolog--detecter-swipl ()
   "Détecte et retourne le chemin vers swipl, ou nil si non trouvé."
   (or
@@ -71,17 +84,28 @@ Gère le cas des shims Scoop qui ne sont pas dans le vrai dossier SWI-Prolog."
                                  (expand-file-name home-dir)))
         (message "SWI_HOME_DIR configuré : %s" home-dir)))))
 
-;; Configuration automatique au chargement
-(let ((swipl-path (metal-prolog--detecter-swipl)))
-  (if swipl-path
-      (progn
-        (metal-prolog--configurer-swipl-home swipl-path)
-        (setq prolog-program-name `((swi ,swipl-path)))
-        (setq prolog-system 'swi)
-        (message "SWI-Prolog configuré : %s" swipl-path))
-    (setq prolog-program-name nil)
-    (setq prolog-system nil)
-    (message "?? SWI-Prolog non trouvé. Installez-le via M-x metal-deps-installer-swi-prolog")))
+;; Configuration différée : au premier usage de Prolog
+(with-eval-after-load 'prolog
+  (let ((swipl-path (metal-prolog--detecter-swipl)))
+    (if swipl-path
+        (progn
+          (metal-prolog--configurer-swipl-home swipl-path)
+          (setq prolog-program-name `((swi ,swipl-path)))
+          (setq prolog-system 'swi)
+          (add-hook 'prolog-mode-hook
+                    (lambda ()
+                      (setq-local prolog-system 'swi)
+                      (setq-local prolog-program-name
+                                  `((swi ,swipl-path)))))
+          (add-hook 'prolog-inferior-mode-hook
+                    (lambda ()
+                      (setq-local prolog-system 'swi)
+                      (setq-local prolog-program-name
+                                  `((swi ,swipl-path)))))
+          (message "SWI-Prolog configuré : %s" swipl-path))
+      (setq prolog-program-name nil)
+      (setq prolog-system nil)
+      (message "?? SWI-Prolog non trouvé. Installez-le via M-x metal-deps-installer-swi-prolog"))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Fonction utilitaire

@@ -331,5 +331,84 @@ Installer SumatraPDF (~12 Mo) pour résoudre le problème ? "))
 (with-eval-after-load 'pdf-view
   (define-key pdf-view-mode-map (kbd "C-c t") #'metal-pdf-toolbar-mode))
 
+;;; --- Synchronisation des couleurs avec le thème ------------------
+
+(defun metal-pdf-sync-colors (&rest _)
+  "Calquer les couleurs PDF (mode nuit) sur le thème actif."
+  (setq pdf-view-midnight-colors
+        (cons (face-foreground 'default nil t)
+              (face-background 'default nil t))))
+
+(add-hook 'pdf-view-mode-hook
+          (lambda ()
+            (metal-pdf-sync-colors)
+            (pdf-view-midnight-minor-mode 1)   ; recoloriage actif
+            (pdf-view-redisplay t)))
+
+(advice-add 'load-theme :after #'metal-pdf-sync-colors)
+
+;; Auto-revert dans les PDF (recharge si le fichier change sur disque).
+(add-hook 'pdf-view-mode-hook (lambda () (auto-revert-mode 1)))
+
+;;; --- Choix du moteur d'ouverture (pdf-tools ou doc-view) ---------
+
+(defun metal-pdf-epdfinfo-disponible-p ()
+  "Retourne non-nil si le binaire epdfinfo de pdf-tools est exécutable."
+  (or (executable-find "epdfinfo")
+      (file-executable-p
+       (expand-file-name "straight/build/pdf-tools/epdfinfo"
+                         user-emacs-directory))
+      ;; Windows : binaire portable fourni avec MetalEmacs
+      (and (eq system-type 'windows-nt)
+           (file-executable-p
+            (expand-file-name "pdf-tools/epdfinfo.exe" user-emacs-directory)))))
+
+(defun metal-pdf-ouvrir ()
+  "Ouvre le PDF courant avec pdf-tools si disponible, sinon doc-view.
+Utilisé comme valeur dans `auto-mode-alist' ; évalué à chaque ouverture."
+  (cond
+   ((and (metal-pdf-epdfinfo-disponible-p) (fboundp 'pdf-view-mode))
+    (pdf-view-mode))
+   ((fboundp 'doc-view-mode)
+    (doc-view-mode))
+   (t (fundamental-mode))))
+
+(add-to-list 'auto-mode-alist (cons "\\.pdf\\'" #'metal-pdf-ouvrir))
+
+;;; --- Qualité de rendu doc-view (Mac < 14, sans pdf-tools) --------
+
+;; doc-view rasterise chaque page en PNG via Ghostscript à une
+;; résolution fixe (100 DPI par défaut) — d'où un rendu plus flou que
+;; pdf-tools, qui rendait à la résolution de l'écran.  On monte à 200 DPI :
+;; bon compromis netteté / performance sur un écran standard (non-Retina).
+;;
+;; IMPORTANT : on règle la résolution AVANT le chargement de doc-view, via
+;; `custom-set-variables'.  Un `with-eval-after-load' s'exécuterait trop
+;; tard — doc-view a déjà rendu et mis en cache la première page à 100 DPI,
+;; donc la nouvelle valeur n'aurait aucun effet tant que le cache n'est pas
+;; vidé.  `custom-set-variables' fixe la valeur dès la définition de la
+;; variable, avant tout rendu.  `doc-view-scale-internally' laisse Emacs
+;; mettre à l'échelle l'image déjà rendue lors des zooms.
+(custom-set-variables
+ '(doc-view-resolution 200)
+ '(doc-view-scale-internally t))
+
+(defun metal-pdf-doc-view-rafraichir ()
+  "Vide le cache doc-view et reconvertit le document courant.
+À utiliser dans un buffer `doc-view-mode' si le rendu paraît flou."
+  (interactive)
+  (when (derived-mode-p 'doc-view-mode)
+    (doc-view-clear-cache)
+    (doc-view-reconvert-doc)
+    (message "doc-view : document reconverti à %d DPI" doc-view-resolution)))
+
+;; Navigation par page avec les flèches haut/bas (pratique pour présenter
+;; des diapositives).  Par défaut, haut/bas font défiler l'image dans la
+;; page ; on les remappe sur page précédente / suivante, comme le remap
+;; gauche/droite déjà en place pour pdf-view.
+(with-eval-after-load 'doc-view
+  (define-key doc-view-mode-map (kbd "<up>")   #'doc-view-previous-page)
+  (define-key doc-view-mode-map (kbd "<down>") #'doc-view-next-page))
+
 (provide 'metal-pdf)
 ;;; metal-pdf.el ends here
