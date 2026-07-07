@@ -695,60 +695,34 @@ buffer d'extraction comme `*ITALIQUES*`), la fonction y active
   (find-file "~/.emacs.d/orgcard.pdf"))
 
 (defun metal-org-toolbar-format ()
-  "Construit la barre d'outils Org."
-  (concat
-   (metal-toolbar-vpadding) " "
-
-   ;; ----- Formatage de texte -----
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_bold" :color "#2c3e50")
-    "Gras" #'gras)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_italic" :color "#2c3e50")
-    "Italique" #'italique)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_underline" :color "#2980b9")
-    "Souligné" #'souligne)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_strikethrough" :color "#c0392b" :height 2.0 :raise -0.1)
-    "Barré" #'barre)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-code_tags" :color "#8e44ad" :height 2.0 :raise -0.1)
-    "Code inline" #'code)
-
-   (metal-toolbar-separator)
-
-   ;; ----- Production / extraction -----
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-file_pdf_box" :color "#c0392b" :height 2.0 :raise -0.1)
-    "Produire le PDF" #'my/org-compile)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-text_search" :color "#2980b9" :height 2.0 :raise -0.1)
-    "Extraire (gras / italique / souligné / barré)"
-    #'my-header-line-menu)
-
-   (metal-toolbar-separator)
-
-   ;; ----- Référence -----
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-book_open_page_variant" :color "#1e8449" :height 2.0 :raise -0.1)
-    "Wiktionnaire" #'search-wiktionary)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-wikipedia" :color "#5d6d7e" :height 2.0 :raise -0.1)
-    "Wikipédia" #'search-wikipedia)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-help_circle_outline" :color "#d68910" :height 2.0 :raise -0.1)
-    "Aide-mémoire (orgcard)" #'aide-memoire-org)
-
-   ;; Extension optionnelle Metal-Agent / Codex / Claude.
-   ;; IMPORTANT : on protège l'appel avec `ignore-errors' pour ne jamais
-   ;; perdre toute la header-line Org si metal-agent.el est absent,
-   ;; incomplet ou en cours de développement.
-   (or (and (fboundp 'metal-agent-toolbar-buttons)
-            (ignore-errors (metal-agent-toolbar-buttons)))
-       "")
-
-   " " (metal-toolbar-vpadding)))
+  "Construit la barre d'outils Org via `metal-toolbar-build'.
+Formatage typographique en lettres stylées (G/I/S/B), reste en emoji.
+Dans un fichier .sec (séance d'assemblée), greffe aussi le segment
+Secrétaire via `:secretaire t' : le bouton 🗒️ apparaît à côté de 🤖, et
+bascule vers la barre du secrétaire (qui remplace alors les boutons Org)."
+  (let ((sec-p (and buffer-file-name
+                    (string-suffix-p ".sec" buffer-file-name))))
+    (metal-toolbar-build
+     '((:char "G" :style bold      :color "#2c3e50"
+              :tooltip "Gras" :command gras)
+       (:char "I" :style italic    :color "#2c3e50"
+              :tooltip "Italique" :command italique)
+       (:char "S" :style underline :color "#2980b9"
+              :tooltip "Souligné" :command souligne)
+       (:char "B" :style strike    :color "#c0392b"
+              :tooltip "Barré" :command barre)
+       (:char "</>" :color "#8e44ad"
+              :tooltip "Code inline" :command code)
+       (:sep)
+       (:emoji "📄" :tooltip "Produire le PDF" :command my/org-compile)
+       (:emoji "🔎" :tooltip "Extraire (gras / italique / souligné / barré)"
+               :command my-header-line-menu)
+       (:sep)
+       (:emoji "📖" :tooltip "Wiktionnaire" :command search-wiktionary)
+       (:emoji "🌐" :tooltip "Wikipédia" :command search-wikipedia)
+       (:emoji "❓" :tooltip "Aide-mémoire (orgcard)" :command aide-memoire-org))
+     :agent t
+     :secretaire sec-p)))
 
 (defun metal-org-header-line ()
   "Active la barre d'outils dans le tampon Org courant."
@@ -763,25 +737,75 @@ buffer d'extraction comme `*ITALIQUES*`), la fonction y active
 ;;  9. DRAG & DROP DE LIENS WEB DANS UN FICHIER ORG
 ;; ============================================================
 
-(defvar metal-org-links-file "~/Documents/MetalEmacs/Signets.org"
-  "Fichier Org où les liens web sont classés par section.")
+(defcustom metal-org-signets-dir
+  (expand-file-name "~/Documents/MetalEmacs/Signets/")
+  "Dossier contenant les fichiers de signets (`.org').
+Calque de `metal-dashboard-notes-dir' : plusieurs fichiers thématiques
+de signets peuvent coexister dans ce dossier. Placé dans
+~/Documents/MetalEmacs/ pour survivre aux mises à jour de MetalEmacs."
+  :type 'directory
+  :group 'metal-org)
+
+(defvar metal-org-links-file
+  (expand-file-name "Signets.org" metal-org-signets-dir)
+  "Fichier de signets actif où les liens web sont classés par section.
+Pointe par défaut vers `Signets.org' dans `metal-org-signets-dir'.
+`metal-org-selectionner-signets' change ce fichier actif.")
 
 ;; Cache des sections — évite de relire le fichier à chaque drop
 (defvar metal-org--sections-cache nil
   "Cache : (MODTIME . SECTIONS).")
 
+(defun metal-org--migrer-signets-si-besoin ()
+  "Déplacer l'ancien `Signets.org' unique vers le nouveau dossier.
+Migration unique : l'ancien emplacement était un fichier unique
+`~/Documents/MetalEmacs/Signets.org' à côté du nouveau dossier
+`Signets/'. Le fichier est déplacé tel quel comme un fichier de
+signets parmi d'autres."
+  (let* ((ancien (expand-file-name "~/Documents/MetalEmacs/Signets.org"))
+         (cible (expand-file-name "Signets.org" metal-org-signets-dir)))
+    (when (and (file-exists-p ancien)
+               (not (file-exists-p cible)))
+      (make-directory metal-org-signets-dir t)
+      (rename-file ancien cible)
+      (message "🔖 Signets.org déplacé : %s → %s" ancien cible))))
+
+(metal-org--migrer-signets-si-besoin)
+
 (defun metal-org-links-ensure-file ()
-  "Crée le dossier et le fichier de signets s'ils n'existent pas."
+  "Crée le dossier et le fichier de signets actif s'ils n'existent pas."
   (let ((dir (file-name-directory metal-org-links-file)))
     (unless (file-exists-p dir)
       (make-directory dir t))
     (unless (file-exists-p metal-org-links-file)
       (with-temp-file metal-org-links-file
-        (insert "#+TITLE: Signets\n\n* Général\n")))))
+        (insert (format "#+TITLE: %s\n\n* Général\n"
+                        (file-name-base metal-org-links-file)))))))
+
+(defun metal-org-selectionner-signets (filepath)
+  "Définir FILEPATH comme fichier de signets actif.
+Invalide le cache des sections pour forcer une relecture."
+  (setq metal-org-links-file (expand-file-name filepath))
+  (setq metal-org--sections-cache nil))
+
+(defun metal-org--signets-fichiers ()
+  "Liste des fichiers de signets (`.org') du dossier, l'actif en tête.
+Retourne une liste de chemins absolus. Le fichier actif
+`metal-org-links-file' apparaît toujours en premier (dernier utilisé),
+suivi des autres fichiers triés par nom."
+  (let* ((dir (file-name-directory (expand-file-name metal-org-links-file)))
+         (actif (expand-file-name metal-org-links-file))
+         (tous (when (file-directory-p dir)
+                 (directory-files dir t "\\.org\\'" t)))
+         (autres (sort (seq-remove (lambda (f) (file-equal-p f actif)) tous)
+                       #'string<)))
+    (if (file-exists-p actif)
+        (cons actif autres)
+      autres)))
 
 ;;;###autoload
 (defun metal-org-ouvrir-signets ()
-  "Ouvre le fichier de signets Org."
+  "Ouvre le fichier de signets actif."
   (interactive)
   (metal-org-links-ensure-file)
   (find-file metal-org-links-file))
@@ -857,28 +881,58 @@ Diffère l'affichage du menu via `run-at-time' pour ne pas bloquer le DnD."
   'private)
 
 (defun metal-org--prompt-and-save (url)
-  "Affiche un menu popup pour choisir la section, puis enregistre le lien."
+  "Affiche deux menus popup : d'abord le fichier de signets, puis la section.
+Le fichier actif (dernier utilisé) est proposé en premier. Une option
+permet de créer un nouveau fichier de signets."
   (metal-org-links-ensure-file)
-  (let* ((sections (metal-org-get-sections))
-         ;; Construire le menu popup
-         (menu-items (append
-                      (mapcar (lambda (s) (cons s s)) sections)
-                      '(("---")  ;; séparateur
-                        ("✚ Nouvelle section..." . __new__))))
-         (choix (x-popup-menu
-                 (list '(300 300) (selected-frame))
-                 (list "📎 Classer le signet" (cons "" menu-items)))))
-    (when choix
-      (let* ((section (if (eq choix '__new__)   ; symbole, pas chaîne : la
-                                                ; valeur de menu dans la liste
-                                                ; citée reste un symbole
-                          (read-string "Nom de la nouvelle section : ")
-                        choix))
-             (title (read-string "Titre du lien : "
-                                 (metal-org--extract-domain url)
-                                 nil url)))
-        (when (and section (not (string-empty-p section)))
-          (metal-org--insert-link section title url))))))
+  ;; --- Étape 1 : choisir le fichier de signets ---------------------------
+  (let* ((fichiers (metal-org--signets-fichiers))
+         (fichier-items (append
+                         (mapcar (lambda (f)
+                                   (cons (file-name-nondirectory f) f))
+                                 fichiers)
+                         '(("---")  ;; séparateur
+                           ("✚ Nouveau fichier de signets..." . __new-file__))))
+         (choix-fichier (x-popup-menu
+                         (list '(300 300) (selected-frame))
+                         (list "🔖 Classer dans quel fichier ?"
+                               (cons "" fichier-items)))))
+    (when choix-fichier
+      (let ((fichier
+             (if (eq choix-fichier '__new-file__)
+                 (let* ((dir (file-name-directory
+                              (expand-file-name metal-org-links-file)))
+                        (nom (read-string "Nom du nouveau fichier de signets : "))
+                        (nom-ext (if (string-suffix-p ".org" nom)
+                                     nom
+                                   (concat nom ".org"))))
+                   (when (string-empty-p nom)
+                     (user-error "Nom de fichier vide"))
+                   (expand-file-name nom-ext dir))
+               choix-fichier)))
+        ;; Activer le fichier choisi (crée le fichier au besoin)
+        (metal-org-selectionner-signets fichier)
+        (metal-org-links-ensure-file)
+        ;; --- Étape 2 : choisir la section -------------------------------
+        (let* ((sections (metal-org-get-sections))
+               (menu-items (append
+                            (mapcar (lambda (s) (cons s s)) sections)
+                            '(("---")  ;; séparateur
+                              ("✚ Nouvelle section..." . __new__))))
+               (choix (x-popup-menu
+                       (list '(300 300) (selected-frame))
+                       (list (format "📎 Section dans %s"
+                                     (file-name-nondirectory fichier))
+                             (cons "" menu-items)))))
+          (when choix
+            (let* ((section (if (eq choix '__new__)
+                                (read-string "Nom de la nouvelle section : ")
+                              choix))
+                   (title (read-string "Titre du lien : "
+                                       (metal-org--extract-domain url)
+                                       nil url)))
+              (when (and section (not (string-empty-p section)))
+                (metal-org--insert-link section title url)))))))))
 
 (defun metal-org--extract-domain (url)
   "Extrait le nom de domaine d'une URL pour suggestion de titre."
@@ -896,105 +950,117 @@ Diffère l'affichage du menu via `run-at-time' pour ne pas bloquer le DnD."
                               dnd-protocol-alist))))
 
 ;; ============================================================
-;;  10. SYNCHRONISATION BEORG (iCloud Drive)
+;;  10. SYNCHRONISATION iCloud Drive (dossier MetalEmacs)
 ;; ============================================================
 ;;
 ;; Principe :
-;;   1. Le fichier .org est DÉPLACÉ vers le dossier Beorg dans iCloud Drive
+;;   1. Le fichier .org est DÉPLACÉ vers le dossier MetalEmacs dans iCloud Drive
 ;;   2. Un lien symbolique est créé à l'emplacement original
 ;;   3. Emacs suit le symlink → édition transparente
-;;   4. iCloud synchronise le vrai fichier vers Beorg sur iOS
+;;   4. iCloud synchronise le vrai fichier → accessible sur iOS
+;;      (Plain Org ou toute autre application lisant iCloud Drive)
 ;;
 ;; Usage :
-;;   - Dans Treemacs : C-c b sur un fichier .org → lier vers Beorg
+;;   - Dans Treemacs : C-c b sur un fichier .org → lier vers iCloud
 ;;   - Depuis un buffer org : C-c b s
-;;   - Délier : C-c b u ou M-x metal-beorg-unlink-file
-;;   - État   : C-c b i ou M-x metal-beorg-show-status
+;;   - Délier : C-c b u ou M-x metal-icloud-delier-fichier
+;;   - État   : C-c b i ou M-x metal-icloud-afficher-etat
 
 (require 'treemacs nil t)
 
-(defgroup metal-beorg nil
-  "Synchronisation bidirectionnelle de fichiers org avec Beorg."
+(defgroup metal-icloud nil
+  "Synchronisation bidirectionnelle de fichiers org via iCloud Drive."
   :group 'metal
-  :prefix "metal-beorg-")
+  :prefix "metal-icloud-")
 
-(defcustom metal-beorg-icloud-path
+(defcustom metal-icloud-path
   (expand-file-name
-   "~/Library/Mobile Documents/iCloud~com~appsonthemove~beorg/Documents")
-  "Chemin du dossier Beorg dans iCloud Drive."
+   "~/Library/Mobile Documents/com~apple~CloudDocs/MetalEmacs")
+  "Chemin du dossier MetalEmacs dans iCloud Drive.
+Créé automatiquement au chargement du module s'il n'existe pas."
   :type 'directory
-  :group 'metal-beorg)
+  :group 'metal-icloud)
 
-(defcustom metal-beorg-folder nil
-  "Sous-dossier dans Beorg où stocker les fichiers org.
-Correspond au réglage « Folder » dans Beorg sur iOS.
-Mettre nil ou \"\" pour utiliser la racine de Documents/."
+(defcustom metal-icloud-sous-dossier nil
+  "Sous-dossier optionnel où stocker les fichiers org.
+Mettre nil ou \"\" pour utiliser la racine du dossier MetalEmacs."
   :type '(choice (const :tag "Racine (pas de sous-dossier)" nil)
                  string)
-  :group 'metal-beorg)
+  :group 'metal-icloud)
 
-(defcustom metal-beorg-confirm t
+(defcustom metal-icloud-confirm t
   "Si non-nil, demander confirmation avant chaque opération."
   :type 'boolean
-  :group 'metal-beorg)
+  :group 'metal-icloud)
 
-(defun metal-beorg--icloud-available-p ()
-  "Vérifie si le dossier Beorg iCloud Drive existe."
-  (file-directory-p metal-beorg-icloud-path))
-
-(defun metal-beorg--dest-dir ()
+(defun metal-icloud--dossier-destination ()
   "Retourne le chemin complet de destination (avec sous-dossier si configuré)."
-  (if (and metal-beorg-folder (not (string-empty-p metal-beorg-folder)))
-      (expand-file-name metal-beorg-folder metal-beorg-icloud-path)
-    metal-beorg-icloud-path))
+  (if (and metal-icloud-sous-dossier
+           (not (string-empty-p metal-icloud-sous-dossier)))
+      (expand-file-name metal-icloud-sous-dossier metal-icloud-path)
+    metal-icloud-path))
 
-(defun metal-beorg--already-linked-p (file)
-  "Vérifie si FILE est déjà un symlink vers le dossier Beorg."
+(defun metal-icloud--assurer-dossier ()
+  "Crée le dossier de destination iCloud s'il n'existe pas.
+Retourne le chemin du dossier de destination."
+  (let ((dest (metal-icloud--dossier-destination)))
+    (unless (file-directory-p dest)
+      (make-directory dest t))
+    dest))
+
+(defun metal-icloud--disponible-p ()
+  "Vérifie si le dossier iCloud Drive existe (le crée au besoin)."
+  (condition-case nil
+      (file-directory-p (metal-icloud--assurer-dossier))
+    (error nil)))
+
+(defun metal-icloud--deja-lie-p (file)
+  "Vérifie si FILE est déjà un symlink vers le dossier iCloud."
   (and (file-symlink-p file)
-       (string-prefix-p (expand-file-name (metal-beorg--dest-dir))
+       (string-prefix-p (expand-file-name (metal-icloud--dossier-destination))
                         (file-truename file))))
 
-(defun metal-beorg--link-file (src-file)
-  "Déplace SRC-FILE vers Beorg et crée un symlink à sa place.
+(defun metal-icloud--lier-fichier (src-file)
+  "Déplace SRC-FILE vers iCloud Drive et crée un symlink à sa place.
 
 Opération :
-  1. src-file → déplacé vers iCloud Drive/beorg/Documents/
+  1. src-file → déplacé vers iCloud Drive/MetalEmacs/
   2. symlink créé : src-file → fichier dans iCloud
   3. Recharge le buffer si le fichier était ouvert"
   (unless (and src-file (file-exists-p src-file))
     (user-error "Fichier introuvable : %s" src-file))
   (unless (string-suffix-p ".org" src-file t)
-    (user-error "Seuls les fichiers .org peuvent être liés à Beorg"))
-  (unless (metal-beorg--icloud-available-p)
-    (user-error "Dossier Beorg iCloud introuvable : %s"
-                metal-beorg-icloud-path))
+    (user-error "Seuls les fichiers .org peuvent être liés à iCloud"))
+  (unless (metal-icloud--disponible-p)
+    (user-error "Dossier iCloud introuvable ou non créable : %s"
+                metal-icloud-path))
 
   (let ((real-src (file-truename src-file)))
 
-    (when (metal-beorg--already-linked-p src-file)
-      (user-error "Déjà lié à Beorg : %s → %s"
+    (when (metal-icloud--deja-lie-p src-file)
+      (user-error "Déjà lié à iCloud : %s → %s"
                   (abbreviate-file-name src-file)
                   (abbreviate-file-name real-src)))
 
-    (let* ((dest-root (metal-beorg--dest-dir))
+    (let* ((dest-root (metal-icloud--assurer-dossier))
            (src-name  (file-name-nondirectory src-file))
            (dest-file (expand-file-name src-name dest-root))
            (buf       (find-buffer-visiting src-file)))
 
-      ;; Collision dans Beorg
+      ;; Collision dans le dossier iCloud
       (when (file-exists-p dest-file)
         (unless (y-or-n-p
-                 (format "⚠ %s existe déjà dans Beorg. Remplacer ?" src-name))
+                 (format "⚠ %s existe déjà dans iCloud. Remplacer ?" src-name))
           (user-error "Opération annulée"))
         (delete-file dest-file))
 
       ;; Confirmation
-      (when metal-beorg-confirm
+      (when metal-icloud-confirm
         (unless (y-or-n-p
-                 (format "Lier %s vers Beorg (iCloud Drive) ?" src-name))
+                 (format "Lier %s vers iCloud Drive ?" src-name))
           (user-error "Opération annulée")))
 
-      ;; 1. Copier le fichier vers Beorg
+      ;; 1. Copier le fichier vers iCloud
       (copy-file real-src dest-file t)
 
       ;; 2. Supprimer l'original
@@ -1010,10 +1076,10 @@ Opération :
         (with-current-buffer buf
           (revert-buffer t t t)))
 
-      (message "✓ %s lié à Beorg (iCloud Drive)" src-name))))
+      (message "✓ %s lié à iCloud Drive" src-name))))
 
-(defun metal-beorg--unlink-file (src-file)
-  "Rapatrie le fichier depuis Beorg et supprime le symlink."
+(defun metal-icloud--delier-fichier (src-file)
+  "Rapatrie le fichier depuis iCloud et supprime le symlink."
   (unless (file-symlink-p src-file)
     (user-error "Ce fichier n'est pas un lien symbolique : %s" src-file))
 
@@ -1024,9 +1090,9 @@ Opération :
     (unless (file-exists-p target)
       (user-error "Le fichier cible n'existe plus : %s" target))
 
-    (when metal-beorg-confirm
+    (when metal-icloud-confirm
       (unless (y-or-n-p
-               (format "Délier %s de Beorg ? (rapatrier le fichier)" src-name))
+               (format "Délier %s d'iCloud ? (rapatrier le fichier)" src-name))
         (user-error "Opération annulée")))
 
     ;; 1. Supprimer le symlink
@@ -1040,11 +1106,11 @@ Opération :
       (with-current-buffer buf
         (revert-buffer t t t)))
 
-    (message "✓ %s délié de Beorg — fichier rapatrié" src-name)))
+    (message "✓ %s délié d'iCloud — fichier rapatrié" src-name)))
 
 ;; Commandes interactives
 
-(defun metal-beorg--get-file-at-point ()
+(defun metal-icloud--fichier-sous-curseur ()
   "Retourne le fichier sous le curseur (Treemacs ou buffer courant)."
   (or (when (eq major-mode 'treemacs-mode)
         (treemacs--prop-at-point :path))
@@ -1053,68 +1119,71 @@ Opération :
                       (lambda (f) (string-suffix-p ".org" f t)))))
 
 ;;;###autoload
-(defun metal-beorg-link-file (&optional file)
-  "Lie FILE à Beorg via iCloud Drive (symlink bidirectionnel)."
+(defun metal-icloud-lier-fichier (&optional file)
+  "Lie FILE à iCloud Drive (symlink bidirectionnel)."
   (interactive)
-  (metal-beorg--link-file (or file (metal-beorg--get-file-at-point))))
+  (metal-icloud--lier-fichier (or file (metal-icloud--fichier-sous-curseur))))
 
 ;;;###autoload
-(defun metal-beorg-unlink-file (&optional file)
-  "Délie FILE de Beorg : rapatrie le fichier, supprime le symlink."
+(defun metal-icloud-delier-fichier (&optional file)
+  "Délie FILE d'iCloud : rapatrie le fichier, supprime le symlink."
   (interactive)
-  (metal-beorg--unlink-file (or file (metal-beorg--get-file-at-point))))
+  (metal-icloud--delier-fichier (or file (metal-icloud--fichier-sous-curseur))))
 
 ;;;###autoload
-(defun metal-beorg-link-from-treemacs ()
+(defun metal-icloud-lier-depuis-treemacs ()
   "Lie/délie le fichier .org sélectionné dans Treemacs."
   (interactive)
   (let* ((path (treemacs--prop-at-point :path)))
     (cond
      ((not (and path (string-suffix-p ".org" path t)))
       (user-error "Sélectionnez un fichier .org dans Treemacs"))
-     ((metal-beorg--already-linked-p path)
-      (when (y-or-n-p (format "%s est déjà lié à Beorg. Délier ?"
+     ((metal-icloud--deja-lie-p path)
+      (when (y-or-n-p (format "%s est déjà lié à iCloud. Délier ?"
                               (file-name-nondirectory path)))
-        (metal-beorg--unlink-file path)))
-     (t (metal-beorg--link-file path)))))
+        (metal-icloud--delier-fichier path)))
+     (t (metal-icloud--lier-fichier path)))))
 
 ;;;###autoload
-(defun metal-beorg-show-status ()
-  "Affiche l'état de la synchronisation Beorg."
+(defun metal-icloud-afficher-etat ()
+  "Affiche l'état de la synchronisation iCloud."
   (interactive)
-  (let ((available (metal-beorg--icloud-available-p)))
-    (with-help-window "*Beorg Status*"
-      (with-current-buffer "*Beorg Status*"
-        (insert "MetalEmacs ↔ Beorg\n")
+  (let ((available (metal-icloud--disponible-p)))
+    (with-help-window "*iCloud Status*"
+      (with-current-buffer "*iCloud Status*"
+        (insert "MetalEmacs ↔ iCloud Drive\n")
         (insert (make-string 30 ?─) "\n\n")
         (insert (format "%s iCloud Drive : %s\n"
                         (if available "✓" "✗")
-                        (abbreviate-file-name metal-beorg-icloud-path)))
+                        (abbreviate-file-name metal-icloud-path)))
         (insert (format "  Sous-dossier  : %s\n\n"
-                        (or metal-beorg-folder "(racine)")))
+                        (or metal-icloud-sous-dossier "(racine)")))
         (if (not available)
-            (insert "⚠ Dossier Beorg iCloud introuvable.\n")
-          (let* ((dest (metal-beorg--dest-dir))
+            (insert "⚠ Dossier iCloud introuvable ou non créable.\n")
+          (let* ((dest (metal-icloud--dossier-destination))
                  (org-files (and (file-directory-p dest)
                                  (directory-files dest nil "\\.org$"))))
             (if org-files
                 (progn
-                  (insert (format "Fichiers dans Beorg (%d) :\n" (length org-files)))
+                  (insert (format "Fichiers dans iCloud (%d) :\n" (length org-files)))
                   (dolist (f org-files)
                     (insert (format "  📄 %s\n" f))))
-              (insert "Aucun fichier .org dans Beorg.\n"))))))))
+              (insert "Aucun fichier .org dans iCloud.\n"))))))))
+
+;; Création automatique du dossier au chargement du module
+(ignore-errors (metal-icloud--assurer-dossier))
 
 ;; Intégration Treemacs
 (with-eval-after-load 'treemacs
-  (define-key treemacs-mode-map (kbd "C-c b") #'metal-beorg-link-from-treemacs)
+  (define-key treemacs-mode-map (kbd "C-c b") #'metal-icloud-lier-depuis-treemacs)
 
-  (easy-menu-define metal-beorg-treemacs-menu treemacs-mode-map
-    "Menu Beorg dans Treemacs."
-    '("Beorg"
-      ["Lier / Délier" metal-beorg-link-from-treemacs
-       :help "Lie ou délie le fichier .org avec Beorg via iCloud"]
-      ["État Beorg" metal-beorg-show-status
-       :help "Affiche les fichiers synchronisés avec Beorg"])))
+  (easy-menu-define metal-icloud-treemacs-menu treemacs-mode-map
+    "Menu iCloud dans Treemacs."
+    '("iCloud"
+      ["Lier / Délier" metal-icloud-lier-depuis-treemacs
+       :help "Lie ou délie le fichier .org avec iCloud Drive"]
+      ["État iCloud" metal-icloud-afficher-etat
+       :help "Affiche les fichiers synchronisés avec iCloud"])))
 
 (defun my/org-hide-header ()
   "Cache les lignes #+KEYWORD en début de fichier org."
@@ -1184,10 +1253,15 @@ Opération :
                       (my/org-hide-header))))
                 (current-buffer)))))
 
-;; Raccourcis Beorg
-(global-set-key (kbd "C-c b s") #'metal-beorg-link-file)
-(global-set-key (kbd "C-c b u") #'metal-beorg-unlink-file)
-(global-set-key (kbd "C-c b i") #'metal-beorg-show-status)
+;; Raccourcis iCloud
+(global-set-key (kbd "C-c b s") #'metal-icloud-lier-fichier)
+(global-set-key (kbd "C-c b u") #'metal-icloud-delier-fichier)
+(global-set-key (kbd "C-c b i") #'metal-icloud-afficher-etat)
+
+(use-package org-table-wrap-functions
+  :straight (:host github :repo "analyticd/org-table-wrap-functions")
+  :bind (:map org-mode-map
+              ("C-|" . org-table-column-wrap-to-point)))
 
 ;; ============================================================
 ;;  FIN METAL-ORG

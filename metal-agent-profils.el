@@ -152,8 +152,14 @@ Retourne nil si le fichier ne peut pas être parsé."
                (id (metal-agent--slugify nom))
                (modes (metal-agent--parser-modes
                        (or (cdr (assoc "MODES" meta)) "t")))
+               ;; AUTO_DEFAUT absent → « f » : un profil n'est
+               ;; auto-sélectionnable QUE s'il déclare explicitement
+               ;; #+AUTO_DEFAUT: t.  Réservé de fait aux profils système
+               ;; livrés ; les profils personnels créés par
+               ;; `metal-agent-creer-profil' n'ont pas la clé (donc neutres,
+               ;; activables à la main via la barre d'outils).
                (auto-defaut (metal-agent--parser-bool
-                             (or (cdr (assoc "AUTO_DEFAUT" meta)) "t")))
+                             (or (cdr (assoc "AUTO_DEFAUT" meta)) "f")))
                ;; Trouver la première option (titre niveau 1)
                (debut-options
                 (string-match "^\\*[ \t]+" contenu))
@@ -343,7 +349,7 @@ pour tous les modes."
                                    (file-name-nondirectory chemin)))
         (user-error "Création annulée")))
     (with-temp-file chemin
-      (insert (format "#+MODES: %s\n#+AUTO_DEFAUT: t\n\n"
+      (insert (format "#+MODES: %s\n\n"
                       (string-trim modes-str)))
       (insert "Décris ici le rôle de l'agent pour ce profil.\n")
       (insert "Ce préambule est envoyé à l'agent à chaque appel quand\n")

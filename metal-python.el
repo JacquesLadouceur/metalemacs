@@ -1,4 +1,4 @@
-;;; metal-python.el --- Configuration Python et Conda pour MetalEmacs -*- lexical-binding: t; -*-
+;;; metal-python.el --- Configuration Python et Conda pour MetalEmacs -*- coding: utf-8; lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Jacques Ladouceur
 ;; Auteur: Jacques Ladouceur
@@ -969,29 +969,38 @@ ou le symbole à l'avance, avant le clic."
       (dape-watch-dwim expression))))
 
 (defun metal-python--dape-header-format ()
-  "Construire la chaîne du header-line pour une session dape active."
+  "Construire la chaîne du header-line pour une session dape active.
+Les libellés sont des emoji ; le constructeur `metal-python--dape-bouton'
+reste spécifique car il capture le buffer cliqué (contrainte des
+commandes dape)."
   (concat
-   (metal-python--dape-bouton "▶ Continue" "Continuer jusqu'au prochain breakpoint"
-                              #'dape-continue 'success)
+   (metal-python--dape-bouton (metal-toolbar-emoji "▶️" :color "#27ae60")
+                              "Continuer jusqu'au prochain breakpoint"
+                              #'dape-continue)
    " "
-   (metal-python--dape-bouton "↷ Next" "Ligne suivante, sans entrer dans les fonctions"
+   (metal-python--dape-bouton (metal-toolbar-emoji "⤵️")
+                              "Ligne suivante, sans entrer dans les fonctions"
                               #'dape-next)
    " "
-   (metal-python--dape-bouton "↓ Step-in" "Entrer dans la fonction"
+   (metal-python--dape-bouton (metal-toolbar-emoji "🔽")
+                              "Entrer dans la fonction"
                               #'dape-step-in)
    " "
-   (metal-python--dape-bouton "↑ Step-out" "Sortir de la fonction"
+   (metal-python--dape-bouton (metal-toolbar-emoji "🔼")
+                              "Sortir de la fonction"
                               #'dape-step-out)
-   "  │  "
-   (metal-python--dape-bouton "◉ Watch"
+   (metal-toolbar-separator)
+   (metal-python--dape-bouton (metal-toolbar-emoji "👁️" :color "#2980b9")
                               "Surveiller la sélection ou le symbole sous le curseur"
                               #'metal-python--dape-watch-depuis-selection-ou-symbole)
    " "
-   (metal-python--dape-bouton "● Breakpoint" "Poser/enlever un breakpoint à la ligne courante"
+   (metal-python--dape-bouton (metal-toolbar-emoji "🔴")
+                              "Poser/enlever un breakpoint à la ligne courante"
                               #'dape-breakpoint-toggle)
    " "
-   (metal-python--dape-bouton "✕ Quitter" "Terminer la session de débogage"
-                              #'dape-quit 'error)))
+   (metal-python--dape-bouton (metal-toolbar-emoji "⏹️" :color "#c0392b")
+                              "Terminer la session de débogage"
+                              #'dape-quit)))
 
 (defun metal-python--dape-header-activer ()
   "Remplacer le header-line par la barre de boutons dape.
@@ -1169,9 +1178,14 @@ Appelé via `python-mode-hook' et `python-ts-mode-hook'."
     ;; --- Eldoc ---
     (setq-local eldoc-echo-area-use-multiline-p 1)
     (setq-local eldoc-echo-area-prefer-doc-buffer t)
-    ;; --- Activer Conda ---
-    (unless (metal-python--ensure-conda-env)
-      (metal-python-pick-interpreter))
+    ;; --- Activer Conda, puis TOUJOURS choisir l'interpréteur ---
+    ;; pick-interpreter pose `python-shell-interpreter' en local au buffer.
+    ;; Il doit être appelé pour CHAQUE buffer .py, que l'env conda vienne
+    ;; d'être activé ou qu'il soit déjà actif (sinon un .py ouvert après le
+    ;; premier de la session retombe sur le REPL standard au lieu d'IPython,
+    ;; car `conda-postactivate-hook' ne se redéclenche pas).
+    (metal-python--ensure-conda-env)
+    (metal-python-pick-interpreter)
     ;; --- Démarrer un shell Python s'il n'y en a pas déjà un ---
     (unless (metal-python--shell-vivant-p)
       (run-with-idle-timer 0 nil #'metal-python--ensure-shell-visible))))
@@ -1195,61 +1209,32 @@ Appelé via `python-mode-hook' et `python-ts-mode-hook'."
 
 (require 'metal-toolbar)
 
-;; Toolbar Python : on utilise les emojis Unicode (via metal-toolbar-emoji)
-;; au lieu des nerd-icons, pour avoir la même mécanique de rendu que la
-;; toolbar Agent/Codex.  Les emojis ont leurs couleurs natives, donc la
-;; signature change : plus de paramètre `color'.
+;; Toolbar Python : barre déclarative via `metal-toolbar-build'.  Le module
+;; ne décrit que la liste des boutons (icône nerd-icons, couleur, tooltip,
+;; commande) ; tout le rendu (taille, padding, séparateurs, alignement,
+;; extension agent) est appliqué uniformément par `metal-toolbar'.
 
 (defun metal-python-toolbar-format ()
-  "Construit la barre d'outils Python (emojis Unicode)."
-  (concat
-   (metal-toolbar-vpadding) " "
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "▶️")
-    "Exécuter le script"
-    #'metal-python-sauvegarde-execute)
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "🐛")
-    "Lancer le débogueur"
-    #'metal-python-deboguer)
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "🔄")
-    "Redémarrer Python"
-    #'metal-python-redemarre)
-
-   (metal-toolbar-separator)
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "⬇️➡️")
-    (format "Basculer la position du shell Python (actuel : %s)"
-            (if (eq metal-python-shell-position-defaut 'bottom)
-                "en bas" "à droite"))
-    #'metal-python-shell-bascule-position)
-
-   (metal-toolbar-separator)
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "📋")
-    "Aide-mémoire"
-    #'aide-memoire-python)
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "💬")
-    "ChatGPT"
-    #'chatgpt)
-
-   ;; Extension optionnelle Metal-Agent / Codex.
-   ;; IMPORTANT : on protege l'appel avec `ignore-errors' pour ne jamais
-   ;; perdre toute la header-line Python si metal-agent.el est absent,
-   ;; incomplet ou en cours de developpement.
-   (or (and (fboundp 'metal-agent-toolbar-buttons)
-            (ignore-errors (metal-agent-toolbar-buttons)))
-       "")
-
-   " " (metal-toolbar-vpadding)))
+  "Construit la barre d'outils Python via `metal-toolbar-build'.
+Le module ne décrit que les boutons ; taille, padding, alignement et
+style viennent uniformément de `metal-toolbar'."
+  (metal-toolbar-build
+   `((:emoji "▶️"  :tooltip "Exécuter le script"
+             :command metal-python-sauvegarde-execute)
+     (:emoji "🐛"  :tooltip "Lancer le débogueur"
+             :command metal-python-deboguer)
+     (:emoji "🔄"  :tooltip "Redémarrer Python"
+             :command metal-python-redemarre)
+     (:sep)
+     (:emoji "↔️"  :tooltip ,(lambda ()
+                               (format "Basculer la position du shell Python (actuel : %s)"
+                                       (if (eq metal-python-shell-position-defaut 'bottom)
+                                           "en bas" "à droite")))
+             :command metal-python-shell-bascule-position)
+     (:sep)
+     (:emoji "📋"  :tooltip "Aide-mémoire"
+             :command aide-memoire-python))
+   :agent t))
 
 (defun metal-python-header-line ()
   "Active la barre d'outils dans le tampon Python courant."

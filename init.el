@@ -54,7 +54,7 @@
 (when (eq system-type 'windows-nt)
   (set-selection-coding-system 'utf-16-le))
 
-
+(setq debug-on-quit nil)
 
 ;; INDICATEUR DE TRAITTEMENT DÉBUT
 
@@ -322,7 +322,7 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
 ;; Ajuster la taille initiale de Emacs
 (defun tailleInitiale ()
   (let* ((base-factor 0.70)
-         ;; Hauteur réduite sur Windows (barre des tÃ¢ches)
+         ;; Hauteur réduite sur Windows (barre des tâches)
          (height-factor (if (eq system-type 'windows-nt) 0.60 0.70))
          ;; Utiliser la taille du moniteur principal
          (screen-width (display-pixel-width))
@@ -336,7 +336,7 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
     (set-frame-size (selected-frame) (truncate a-width) (truncate a-height) t)
     ;; Puis la position
     (set-frame-position (selected-frame) a-left a-top)
-    ;; Réajuster Treemacs Ã  sa largeur normale
+    ;; Réajuster Treemacs à sa largeur normale
     (when (and (fboundp 'treemacs-get-local-window)
                (treemacs-get-local-window))
       (with-selected-window (treemacs-get-local-window)
@@ -391,7 +391,7 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
  use-short-answers t
  load-prefer-newer t
  confirm-kill-processes nil
- truncate-string-ellipsis "â€¦"
+ truncate-string-ellipsis "…"
  help-window-select t
  delete-by-moving-to-trash t
  scroll-preserve-screen-position t
@@ -635,12 +635,15 @@ Ne sauvegarde la position/taille que si les valeurs sont numeriques
   (with-temp-file metal-prefs-file
     (insert ";; Preferences MetalEmacs - genere automatiquement\n")
     (insert (format "(setq metal-font-size-offset %d)\n" metal-font-size-offset))
-    ;; Taille des icônes (parallèle à metal-font-size-offset)
+    ;; Taille des icônes des barres (offset emoji, en centièmes)
     (when (boundp 'metal-toolbar-emoji-size-offset)
       (insert (format "(setq metal-toolbar-emoji-size-offset %d)\n"
                       metal-toolbar-emoji-size-offset)))
     ;; Largeur Treemacs
     (insert (format "(setq metal-treemacs-width %d)\n" metal-treemacs-width))
+    ;; Taille des icônes Treemacs (pixels)
+    (when (boundp 'metal-treemacs-icon-size)
+      (insert (format "(setq metal-treemacs-icon-size %d)\n" metal-treemacs-icon-size)))
     ;; Position: seulement si numerique (pas de symboles comme +)
     (when (numberp metal-frame-left)
       (insert (format "(setq metal-frame-left %d)\n" metal-frame-left)))
@@ -923,11 +926,15 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 ;; Charger metal-deps.el depuis le répertoire de configuration
 (add-to-list 'load-path user-emacs-directory)
 (require 'metal-deps)
+(with-eval-after-load 'metal-deps
+  (require 'metal-agents-catalogue-externe))
 
 ;; ===============================
 ;;  TREEMACS [EXTERNE]
 ;; ===============================
-(require 'metal-treemacs)
+(require 'metal-explorateur)
+
+(require 'metal-nettoyer)
 
 ;; Vertico : minibuffer moderne
 (use-package vertico
@@ -1358,23 +1365,19 @@ Raccourci Treemacs : M (Shift+M)"
   (interactive)
   (dired user-emacs-directory))
 
-;; (defun modeline-bouton-systeme ()
-;;   "Affiche un bouton SYS dans la modeline pour ouvrir .emacs.d dans dired."
-;;   (let ((map (make-sparse-keymap)))
-;;     (define-key map [mode-line mouse-1] #'ouvrir-emacs-d-dired)
-;;     (propertize
-;;      " SYS "
-;;      'mouse-face 'mode-line-highlight
-;;      'local-map map
-;;      'help-echo "Clique pour ouvrir .emacs.d dans dired")))
-
-;; (setq-default mode-line-format
-;;   (append mode-line-format
-;;           '((:eval (modeline-bouton-systeme)))))
+(defun modeline-bouton-systeme ()
+  "Affiche un bouton SYS dans la modeline pour ouvrir .emacs.d dans dired."
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mode-line mouse-1] #'ouvrir-emacs-d-dired)
+    (propertize
+     " SYS "
+     'mouse-face 'mode-line-highlight
+     'local-map map
+     'help-echo "Clique pour ouvrir .emacs.d dans dired")))
 
 (setq-default mode-line-format
   (append mode-line-format
-          '((:eval (metal-toolbar-bouton-systeme)))))
+          '((:eval (modeline-bouton-systeme)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Ouverture des fichiers dired dans la même fenêtre
@@ -1444,7 +1447,7 @@ Raccourci Treemacs : M (Shift+M)"
     ;; Sauvegarder la préférence
     (setq metal-python-shell-position-defaut nouveau)
     (customize-save-variable 'metal-python-shell-position-defaut nouveau)
-    ;; Appliquer la règle dâ€™affichage
+    ;; Appliquer la règle d'affichage
     (metal--python-appliquer-regle nouveau)
     ;; Créer le shell si besoin
     (unless (and buf (buffer-live-p buf))
@@ -1453,11 +1456,34 @@ Raccourci Treemacs : M (Shift+M)"
     ;; Repositionner/afficher
     (metal--python-afficher-ou-repositionner buf nouveau)
     (message "✅ Shell Python désormais %s."
-             (if (eq nouveau 'bottom) "en bas" "Ã  droite"))))
+             (if (eq nouveau 'bottom) "en bas" "à droite"))))
 
 (defun aide-memoire-python ()
   (interactive)
   (find-file  "~/.emacs.d/AideMemoire-Python.pdf"))
+
+
+
+;; (defun my/format-toolbar-button-icon (icon tooltip action)
+;;   "Créer un bouton cliquable avec une icône colorée."
+;;   (propertize (format " %s " icon)
+;;               'mouse-face '(:background "#e0e0e0")
+;;               'help-echo tooltip
+;;               'keymap (let ((map (make-sparse-keymap)))
+;;                         (define-key map [header-line mouse-1] action)
+;;                         map)))
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 (use-package shackle
@@ -1559,7 +1585,7 @@ Raccourci Treemacs : M (Shift+M)"
   "Exporte le buffer en HTML avec couleurs et TITLE comme nom."
   (let ((html-buffer (htmlize-buffer)))
     (with-current-buffer html-buffer
-      ;; Ajouter CSS pour cacher l'URL dans le pied de page Ã  l'impression
+      ;; Ajouter CSS pour cacher l'URL dans le pied de page à l'impression
       (goto-char (point-min))
       (when (re-search-forward "</head>" nil t)
         (replace-match "<style>@page { margin: 1cm; } @media print { footer, .url { display: none; } }</style></head>"))
@@ -1634,14 +1660,58 @@ Raccourci Treemacs : M (Shift+M)"
       (when (and (boundp 'text-scale-mode) text-scale-mode)
         (text-scale-set 0)))))
 
-;; Faire que les buffers transitoires apparaissent en side-window en bas
+;; Faire que les buffers transitoires apparaissent en side-window en bas.
+;; NOTE : *compilation* est volontairement EXCLU de cette liste — il est
+;; routé vers la fenêtre d'édition principale (en haut, à côté de *scratch*)
+;; par la règle qui suit.  Le motif side-window le renvoyait sinon dans la
+;; fenêtre basse, où il se greffait en onglet à côté du *Tableau-de-bord*.
 (setq display-buffer-alist
       (append display-buffer-alist
-              '(("\\`\\*\\(Quarto Render\\|Compile-Log\\|Warnings\\|Backtrace\\|Async Shell Command\\|compilation\\)\\*\\'"
+              '(("\\`\\*\\(Quarto Render\\|Compile-Log\\|Warnings\\|Backtrace\\|Async Shell Command\\)\\*\\'"
                  (display-buffer-in-side-window)
                  (side . bottom)
                  (window-height . 0.30)
                  (slot . 0)))))
+
+;; Routage de *compilation* vers la fenêtre principale (haut).
+;;
+;; Les installations de l'Assistant passent par `compile' → `compilation-start'
+;; → `display-buffer'.  Sans règle dédiée, le buffer atterrit dans la fenêtre
+;; basse (celle du *Tableau-de-bord*), où `global-tab-line-mode' lui colle un
+;; onglet à côté du dashboard.  On veut au contraire qu'il s'ouvre dans la
+;; grande fenêtre d'édition du haut, comme un onglet frère de *scratch*.
+;;
+;; `metal/fenetre-principale-p' identifie cette fenêtre : non latérale
+;; (pas de paramètre `window-side'), non dédiée, et n'affichant pas un buffer
+;; « spécial » persistant du bas (dashboard, notes, compilation elle-même).
+;; `display-buffer-use-some-window' s'en sert pour réutiliser cette fenêtre
+;; plutôt que d'en créer une nouvelle.
+(defun metal/fenetre-principale-p (win)
+  "Retourne non-nil si WIN est la fenêtre d'édition principale (haut).
+Exclut les side-windows, les fenêtres dédiées et celles affichant les
+buffers persistants du bas (dashboard / notes)."
+  (and (not (window-parameter win 'window-side))
+       (not (window-dedicated-p win))
+       (let ((nom (buffer-name (window-buffer win))))
+         (not (string-match-p
+               "\\`\\*\\(Tableau-de-bord\\|Notes rapides\\|compilation\\)\\*"
+               nom)))))
+
+(defun metal/afficher-compilation-en-haut (buffer alist)
+  "Affiche BUFFER (*compilation*) dans la fenêtre d'édition principale.
+Réutilise d'abord une fenêtre déjà occupée par ce buffer, sinon choisit la
+fenêtre principale via `metal/fenetre-principale-p'."
+  (or (display-buffer-reuse-window buffer alist)
+      (let ((win (catch 'trouve
+                   (dolist (w (window-list nil 'no-minibuffer))
+                     (when (metal/fenetre-principale-p w)
+                       (throw 'trouve w))))))
+        (when win
+          (window--display-buffer buffer win 'reuse alist)))))
+
+(add-to-list 'display-buffer-alist
+             '("\\`\\*compilation\\*\\'"
+               (metal/afficher-compilation-en-haut)))
 
 (global-set-key (kbd "C-+") 'metal-text-scale-increase-mouse)
 (global-set-key (kbd "C-=") 'metal-text-scale-increase-mouse)
@@ -1664,6 +1734,48 @@ Raccourci Treemacs : M (Shift+M)"
 (let ((file (expand-file-name "metal-agent.el" user-emacs-directory)))
   (when (file-exists-p file)
     (load file)))
+
+;; Recharger les préférences APRÈS le chargement des modules.  Les valeurs
+;; sauvegardées qui concernent des `defcustom' définis dans les modules
+;; (p. ex. `metal-toolbar-emoji-size-offset') doivent être appliquées une fois ces
+;; defcustom évalués, sinon le `defcustom' réinitialise la variable à son
+;; défaut et le réglage utilisateur est perdu.  Le premier chargement (au
+;; début) sert aux réglages utilisés tôt (police, géométrie) ; ce second
+;; chargement, idempotent, garantit la pérennité des réglages liés aux modules.
+(metal-prefs-load-all)
+
+;; Réappliquer la taille des icônes Treemacs avec la valeur fraîchement
+;; rechargée (le `treemacs-resize-icons' du :config a utilisé la valeur par
+;; défaut, avant que les prefs ne soient relues ici).  On neutralise
+;; temporairement le conseil de sauvegarde pour ne pas réécrire metal-prefs
+;; à chaque démarrage (l'appel ne fait qu'appliquer, pas enregistrer).
+(with-eval-after-load 'treemacs
+  (when (and (boundp 'metal-treemacs-icon-size)
+             (fboundp 'treemacs-resize-icons))
+    (let ((inhibit-message t))
+      (ignore-errors
+        (advice-remove 'treemacs-resize-icons #'metal-treemacs--save-icon-size))
+      (treemacs-resize-icons metal-treemacs-icon-size)
+      (when (fboundp 'metal-treemacs--save-icon-size)
+        (advice-add 'treemacs-resize-icons :after #'metal-treemacs--save-icon-size)))))
+
+
+;;; Intégration de metal-secretaire dans MetalEmacs -*- lexical-binding: t; -*-
+;;
+
+;; Module secrétaire d'assemblée — personnel, chargé seulement s'il est présent.
+(when (require 'metal-secretaire nil t)
+  ;; Répertoire de travail des séances (optionnel).
+  (setq metal-secretaire-repertoire
+        (expand-file-name "secretaire/" user-emacs-directory))
+  ;; Raccourcis (préfixe « C-c é » pour éviter les collisions Org).
+  (define-key global-map (kbd "C-c é c") #'metal-secretaire-configurer-cle)
+  (define-key global-map (kbd "C-c é e") #'metal-secretaire-enregistrer)
+  (define-key global-map (kbd "C-c é t") #'metal-secretaire-transcrire)
+  (define-key global-map (kbd "C-c é p") #'metal-secretaire-rediger-pv)
+  (define-key global-map (kbd "C-c é r") #'metal-secretaire-renommer-intervenant)
+  (define-key global-map (kbd "C-c é k") #'metal-secretaire-interrompre)
+  (define-key global-map (kbd "C-c é b") #'metal-secretaire-toggle-active))
 
 (server-start)
 

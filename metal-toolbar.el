@@ -1,4 +1,4 @@
-;;; metal-toolbar.el --- Primitives pour barres d'outils header-line -*- lexical-binding: t; -*-
+;;; metal-toolbar.el --- Primitives pour barres d'outils header-line -*- coding: utf-8; lexical-binding: t; -*-
 
 ;; Author: Jacques Ladouceur
 ;; Keywords: tools, header-line, gui
@@ -18,9 +18,12 @@
 ;;   (metal-toolbar-separator [CHAR])
 ;;       Séparateur visuel entre groupes de boutons (défaut "|").
 ;;
-;;   (metal-toolbar-icon NAME &key COLOR HEIGHT FALLBACK)
-;;       Icône nerd-icons colorée.  La famille est détectée à partir du
-;;       préfixe (nf-md-, nf-fa-, nf-oct-, etc.).
+;;   (metal-toolbar-emoji EMOJI &key HEIGHT COLOR RAISE)
+;;       Emoji Unicode dimensionné et aligné pour la barre.
+;;
+;;   (metal-toolbar-char TEXTE &key STYLE COLOR HEIGHT RAISE)
+;;       Lettre portant son style (G gras, I italique, S souligné, B barré),
+;;       quand aucun emoji ne convient (formatage typographique).
 ;;
 ;;   (metal-toolbar-button ICON TOOLTIP COMMAND)
 ;;       Bouton cliquable, infobulle au survol, action au clic-gauche.
@@ -31,18 +34,17 @@
 ;;     (concat
 ;;      (metal-toolbar-vpadding) " "
 ;;      (metal-toolbar-button
-;;       (metal-toolbar-icon "nf-fa-play" :color "#34C759")
+;;       (metal-toolbar-emoji "▶️")
 ;;       "Démarrer" #'demarrer)
 ;;      (metal-toolbar-separator)
 ;;      (metal-toolbar-button
-;;       (metal-toolbar-icon "nf-fa-stop" :color "#FF3B30")
+;;       (metal-toolbar-emoji "⏹️")
 ;;       "Arrêter" #'arreter)
 ;;      " " (metal-toolbar-vpadding)))
 
 ;;; Code:
 
 (require 'cl-lib)
-(require 'nerd-icons nil t)
 
 (defgroup metal-toolbar nil
   "Primitives partagées pour barres d'outils header-line."
@@ -50,11 +52,6 @@
   :prefix "metal-toolbar-")
 
 ;;; --- Variables de configuration ------------------------------------------
-
-(defcustom metal-toolbar-icon-height 1.3
-  "Hauteur des icônes par défaut (multiplicateur de la taille de police)."
-  :type 'number
-  :group 'metal-toolbar)
 
 ;;; --- Emojis Unicode (parallèle au pattern metal-font) ---
 
@@ -79,11 +76,22 @@ persistée dans `metal-prefs.el' via `metal-prefs-save'."
 (defcustom metal-toolbar-emoji-raise 0.25
   "Décalage vertical par défaut des emojis dans les header-lines.
 Les emojis (Apple Color Emoji, Noto, ...) n'ont pas la même ligne de
-base que les icônes nerd-icons (Hack Nerd Font Mono) : à `:height' égal,
+base que les lettres (police texte) : à `:height' égal,
 ils « flottent » par rapport aux autres boutons.  Ce décalage les recale.
 Négatif = vers le bas.  Appliqué automatiquement par `metal-toolbar-emoji'
 sauf si un :raise explicite est fourni à l'appel.  Ajustez si le rendu
 diffère sur votre système (macOS, Linux, ...)."
+  :type 'number
+  :group 'metal-toolbar)
+
+(defcustom metal-toolbar-char-raise 0.25
+  "Décalage vertical par défaut des lettres stylées (`metal-toolbar-char').
+Les lettres (police texte) et les emoji (police emoji) n'ont pas la même
+ligne de base ; sans ajustement, les boutons-lettres (G, I, S, B, </>)
+« flottent » par rapport aux boutons-emoji voisins.  Ce décalage les
+recale sur la même ligne.  Par défaut identique à `metal-toolbar-emoji-raise'
+pour que lettres et emoji s'alignent.  Négatif = vers le bas.  Ajustez
+finement si le rendu diffère sur votre système."
   :type 'number
   :group 'metal-toolbar)
 
@@ -94,7 +102,7 @@ qui utilisent `metal-toolbar-emoji' (Python, Prolog, Agent/Codex, ...)
 et est persisté via `metal-prefs-save-all'."
   (interactive)
   (setq metal-toolbar-emoji-size-offset (+ metal-toolbar-emoji-size-offset 10))
-  (force-mode-line-update t)
+  (metal-toolbar-rafraichir)
   (when (fboundp 'metal-prefs-save-all)
     (metal-prefs-save-all))
   (message "Taille icônes : %d" (metal-toolbar-emoji-size)))
@@ -103,7 +111,7 @@ et est persisté via `metal-prefs-save-all'."
   "Diminue la taille des emojis de 10 (= -0.1 du multiplicateur)."
   (interactive)
   (setq metal-toolbar-emoji-size-offset (- metal-toolbar-emoji-size-offset 10))
-  (force-mode-line-update t)
+  (metal-toolbar-rafraichir)
   (when (fboundp 'metal-prefs-save-all)
     (metal-prefs-save-all))
   (message "Taille icônes : %d" (metal-toolbar-emoji-size)))
@@ -112,10 +120,27 @@ et est persisté via `metal-prefs-save-all'."
   "Réinitialise la taille des emojis à la base (`metal-toolbar-emoji-base')."
   (interactive)
   (setq metal-toolbar-emoji-size-offset 0)
-  (force-mode-line-update t)
+  (metal-toolbar-rafraichir)
   (when (fboundp 'metal-prefs-save-all)
     (metal-prefs-save-all))
   (message "Taille icônes réinitialisée : %d" (metal-toolbar-emoji-size)))
+
+(defun metal-toolbar-rafraichir ()
+  "Forcer le redessin des barres dans tous les buffers concernés.
+Les header-lines ne se rafraîchissent pas toujours sur un simple
+`force-mode-line-update'.  On parcourt les buffers et on retouche leur
+état d'affichage pour déclencher la réévaluation des `:eval' de barre."
+  ;; Mettre à jour mode-lines et header-lines de toutes les fenêtres.
+  (force-mode-line-update t)
+  ;; Pour chaque buffer affichant une barre, forcer une réévaluation.
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (when (and header-line-format
+                 (derived-mode-p 'python-mode 'python-ts-mode
+                                 'prolog-mode 'emacs-lisp-mode 'fundamental-mode))
+        ;; Toucher header-line-format (le re-set force le redessin).
+        (setq header-line-format header-line-format))))
+  (redraw-display))
 
 (defcustom metal-toolbar-vpadding-height 1.7
   "Hauteur du caractère de padding vertical (multiplicateur)."
@@ -146,19 +171,6 @@ Augmenter pour aérer la barre d'outils horizontalement."
 
 ;;; --- Helpers internes -----------------------------------------------------
 
-(defun metal-toolbar--icon-fn (name)
-  "Retourne la fonction nerd-icons appropriée selon le préfixe de NAME."
-  (cond
-   ((string-prefix-p "nf-md-"      name) #'nerd-icons-mdicon)
-   ((string-prefix-p "nf-fa-"      name) #'nerd-icons-faicon)
-   ((string-prefix-p "nf-oct-"     name) #'nerd-icons-octicon)
-   ((string-prefix-p "nf-cod-"     name) #'nerd-icons-codicon)
-   ((string-prefix-p "nf-dev-"     name) #'nerd-icons-devicon)
-   ((string-prefix-p "nf-seti-"    name) #'nerd-icons-sucicon)
-   ((string-prefix-p "nf-weather-" name) #'nerd-icons-wicon)
-   ((string-prefix-p "nf-pom-"     name) #'nerd-icons-pomicon)
-   (t                                    #'nerd-icons-mdicon)))
-
 ;;; --- API publique ---------------------------------------------------------
 
 (defun metal-toolbar-vpadding ()
@@ -173,56 +185,26 @@ chaîne `header-line-format'."
 
 (defun metal-toolbar-separator (&optional char)
   "Séparateur vertical entre groupes de boutons.
-CHAR peut surcharger le caractère utilisé (défaut : \"|\")."
-  (propertize (format " %s " (or char "|"))
-              'face 'metal-toolbar-separator-face))
-
-;; (cl-defun metal-toolbar-icon (name &key color
-;;                                    (height metal-toolbar-icon-height)
-;;                                    fallback)
-;;   "Retourne une icône nerd-icons NAME, colorisée.
-;; La famille est détectée automatiquement à partir du préfixe (nf-md-,
-;; nf-fa-, nf-oct-, nf-cod-, etc.).
-
-;; Mots-clés :
-;;   :color    couleur de premier plan (chaîne hex ou nom).
-;;   :height   multiplicateur de taille (défaut `metal-toolbar-icon-height').
-;;   :fallback caractère de repli si nerd-icons est absent."
-;;   (let ((face `(,@(when color `(:foreground ,color)) :height ,height)))
-;;     (if (and (featurep 'nerd-icons) (fboundp 'nerd-icons-mdicon))
-;;         (funcall (metal-toolbar--icon-fn name) name :face face)
-;;       (propertize (or fallback "•") 'face face))))
-
-(cl-defun metal-toolbar-icon (name &key color
-                                   (height metal-toolbar-icon-height)
-                                   raise
-                                   fallback)
-  "Retourne une icône nerd-icons NAME, colorisée.
-La famille est détectée automatiquement à partir du préfixe (nf-md-,
-nf-fa-, nf-oct-, nf-cod-, etc.).
-
-Mots-clés :
-  :color    couleur de premier plan (chaîne hex ou nom).
-  :height   multiplicateur de taille (défaut `metal-toolbar-icon-height').
-  :raise    décalage vertical (négatif = vers le bas, défaut nil).
-  :fallback caractère de repli si nerd-icons est absent."
-  (let* ((face `(,@(when color `(:foreground ,color)) :height ,height))
-         (icon (if (and (featurep 'nerd-icons) (fboundp 'nerd-icons-mdicon))
-                   (funcall (metal-toolbar--icon-fn name) name :face face)
-                 (propertize (or fallback "•") 'face face))))
-    (if raise
-        (propertize icon 'display `((raise ,raise)))
-      icon)))
+CHAR peut surcharger le caractère utilisé (défaut : \"|\").
+Le séparateur reçoit la même hauteur (taille des icônes) et le même
+décalage vertical que les lettres (`metal-toolbar-char-raise'), afin de
+rester aligné avec les boutons voisins (lettres et emoji)."
+  (let* ((h (/ (metal-toolbar-emoji-size) 100.0))
+         (r metal-toolbar-char-raise)
+         (s (propertize (format " %s " (or char "|"))
+                        'face `(:weight bold :foreground "gray" :height ,h))))
+    (if (and r (not (zerop r)))
+        (propertize s 'display `((raise ,r)))
+      s)))
 
 (cl-defun metal-toolbar-emoji (emoji &key height color raise)
   "Retourne un EMOJI Unicode propertize pour la header-line.
 Convient aux emojis colorés natifs (▶️ 🐛 🔄 📋 💬 🪄 ✅ ❌ etc.).
 
-Contrairement à `metal-toolbar-icon' qui passe par nerd-icons (rendu via
-Hack Nerd Font Mono à taille fixe en pixels), cette fonction utilise le
-mécanisme `:height' standard d'Emacs.  Toutes les toolbars qui l'utilisent
-(Python, Prolog, Agent/Codex, ...) partagent donc la même taille, modifiable
-par l'utilisateur via `metal-toolbar-emoji-increase' et amis.
+Utilise le mécanisme `:height' standard d'Emacs.  Toutes les toolbars qui
+l'utilisent (Python, Prolog, Agent/Codex, ...) partagent donc la même
+taille, modifiable par l'utilisateur via `metal-toolbar-emoji-increase'
+et amis.
 
 Mots-clés :
   :height   multiplicateur de taille (float).  Si nil (défaut), calculé
@@ -230,7 +212,7 @@ Mots-clés :
   :color    couleur :foreground (souvent ignorée par les emojis colorés).
   :raise    décalage vertical (négatif = vers le bas).  Si nil (défaut),
             utilise `metal-toolbar-emoji-raise' pour aligner l'emoji sur
-            les icônes nerd-icons voisines."
+            les autres boutons voisins."
   (let* ((h (or height (/ (metal-toolbar-emoji-size) 100.0)))
          (r (or raise metal-toolbar-emoji-raise))
          (face `(:height ,h ,@(when color `(:foreground ,color))))
@@ -239,16 +221,49 @@ Mots-clés :
         (propertize s 'display `((raise ,r)))
       s)))
 
+(cl-defun metal-toolbar-char (texte &key style color height raise)
+  "Rendre TEXTE (souvent une lettre) comme bouton, avec un STYLE de format.
+Sert quand aucun emoji ne convient (formatage typographique : gras,
+italique, etc.).  La lettre PORTE le style qu'elle déclenche, pour être
+auto-explicative : « G » en gras, « I » en italique, etc.
+
+STYLE : un symbole parmi `bold', `italic', `underline', `strike', ou nil.
+COLOR : couleur de premier plan optionnelle.
+HEIGHT : multiplicateur de taille (défaut : taille emoji courante, pour
+         rester cohérent avec les autres boutons de la barre).
+RAISE : décalage vertical ; si nil, `metal-toolbar-char-raise' (pour
+        aligner la lettre sur les emoji voisins)."
+  (let* ((h (or height (/ (metal-toolbar-emoji-size) 100.0)))
+         (r (or raise metal-toolbar-char-raise))
+         (attrs (pcase style
+                  ('bold      '(:weight bold))
+                  ('italic    '(:slant italic))
+                  ('underline '(:underline t))
+                  ('strike    '(:strike-through t))
+                  (_          nil)))
+         (face `(:height ,h
+                 ,@(when color `(:foreground ,color))
+                 ,@attrs))
+         (s (propertize texte 'face face)))
+    (if (and r (not (zerop r)))
+        (propertize s 'display `((raise ,r)))
+      s)))
+
 (defun metal-toolbar-button (icon tooltip command &optional context)
   "Construit un bouton cliquable pour une header-line ou une mode-line.
-ICON est une chaîne (idéalement obtenue via `metal-toolbar-icon' ou
+ICON est une chaîne (idéalement obtenue via `metal-toolbar-emoji' ou
 `metal-toolbar-emoji').
 TOOLTIP s'affiche au survol.
 COMMAND est la commande appelée au clic-gauche.
-CONTEXT est le symbole `header-line' (défaut) ou `mode-line' : il
-détermine le pseudo-événement de clic, car un clic dans la header-line
-arrive comme `[header-line mouse-1]' et un clic dans la mode-line comme
-`[mode-line mouse-1]'.
+CONTEXT détermine le ou les pseudo-événements de clic câblés :
+- nil (défaut) : `header-line' seul ;
+- un symbole (`header-line', `mode-line' ou `nil-event') : ce contexte seul,
+  où `nil-event' câble `[mouse-1]' sans préfixe ;
+- une liste de tels symboles : tous câblés (utile quand un même bouton peut
+  apparaître en header-line ET en mode-line).
+Un clic dans la header-line arrive comme `[header-line mouse-1]', dans la
+mode-line comme `[mode-line mouse-1]', et un `[mouse-1]' nu couvre les
+autres affichages (overlay, texte de buffer).
 
 L'espacement horizontal autour de l'icône est contrôlé par
 `metal-toolbar-button-padding'.
@@ -256,15 +271,129 @@ L'espacement horizontal autour de l'icône est contrôlé par
 Note : `mouse-face' utilise un cons frais via `list' (et non un littéral
 quoté).  Sans ça, des boutons adjacents avec une valeur `eq' identique
 fusionneraient en une seule région de surbrillance."
-  (let* ((ctx (or context 'header-line))
-         (evt (vector ctx 'mouse-1))
-         (spc (make-string metal-toolbar-button-padding ?\s)))
+  (let* ((ctxs (cond ((null context) '(header-line))
+                     ((listp context) context)
+                     (t (list context))))
+         (spc (make-string metal-toolbar-button-padding ?\s))
+         (map (make-sparse-keymap)))
+    (dolist (ctx ctxs)
+      (define-key map
+                  (if (eq ctx 'nil-event)
+                      [mouse-1]
+                    (vector ctx 'mouse-1))
+                  command))
     (propertize (concat spc icon spc)
                 'mouse-face (list :background metal-toolbar-hover-background)
                 'help-echo tooltip
-                'keymap (let ((map (make-sparse-keymap)))
-                          (define-key map evt command)
-                          map))))
+                'keymap map)))
+
+;;; --- Assemblage déclaratif d'une barre -----------------------------------
+
+(defun metal-toolbar--resoudre (v)
+  "Résoudre V : si c'est une fonction (symbole fboundp ou lambda), l'appeler.
+Permet aux champs :icon, :color, :tooltip d'être dynamiques (évalués au
+rendu) aussi bien que statiques."
+  (cond
+   ((functionp v) (funcall v))
+   ((and (symbolp v) v (fboundp v)) (funcall v))
+   (t v)))
+
+(cl-defun metal-toolbar-build (items &key agent secretaire (context 'header-line))
+  "Construire une chaîne de header-line à partir d'ITEMS déclaratifs.
+
+Chaque élément d'ITEMS est une plist décrivant un bouton ou un séparateur.
+Le module appelant ne décrit QUE le contenu ; la taille, le padding,
+l'alignement, le style et l'espacement sont appliqués uniformément ici,
+de façon identique pour tous les modules (Python, Prolog, Agent, et tout
+futur module : R, etc.).
+
+Formes reconnues dans ITEMS :
+  (:emoji \"▶️\" [:color C] [:tooltip TIP] [:command CMD])
+      Un bouton emoji.  :emoji, :color et :tooltip peuvent être une valeur
+      OU une fonction (évaluée au rendu, pour les libellés dynamiques).
+  (:char \"G\" [:style bold] [:color C] [:tooltip TIP] [:command CMD])
+      Un bouton-lettre, quand aucun emoji ne convient (formatage
+      typographique).  La lettre porte son :style (bold, italic,
+      underline, strike) : « G » en gras, « I » en italique, etc.
+  (:sep [CHAR])
+      Un séparateur vertical (CHAR optionnel surcharge le \"|\").
+
+Mots-clés de BUILD :
+  :agent      si non nil, greffe l'extension Metal-Agent à la fin (protégée
+              par `ignore-errors' : la barre survit si metal-agent est absent).
+  :secretaire si non nil, greffe l'extension Metal-Secrétaire (bouton 🗒️
+              compact, ou barre secrétaire complète si active).  Parallèle
+              exact de :agent.
+  :context    contexte de clic transmis à `metal-toolbar-button'
+              (défaut `header-line').
+
+La barre est encadrée par `metal-toolbar-vpadding' aux deux extrémités.
+
+Lorsque la toolbar Agent complète est active (`metal-agent-active'), ou la
+toolbar Secrétaire (`metal-secretaire-active'), elle REMPLACE les boutons
+spécifiques au mode : ces derniers ne sont alors pas rendus, seul le segment
+spécialisé (étendu) apparaît.  À la fermeture, les boutons du mode reviennent
+automatiquement."
+  (let* ((parts (list (metal-toolbar-vpadding) " "))
+         ;; L'agent « prend la barre » uniquement si ce module a demandé
+         ;; l'intégration agent (:agent t) ET que l'agent est actif dans le
+         ;; buffer courant.  On protège l'accès à la variable au cas où
+         ;; metal-agent n'est pas chargé.
+         (agent-prend-la-barre
+          (and agent
+               (boundp 'metal-agent-active)
+               metal-agent-active))
+         ;; Le secrétaire « prend la barre » selon la même logique.
+         (secretaire-prend-la-barre
+          (and secretaire
+               (boundp 'metal-secretaire-active)
+               metal-secretaire-active))
+         ;; Une barre spécialisée prend le dessus → on masque les boutons mode.
+         (mode-masque (or agent-prend-la-barre secretaire-prend-la-barre)))
+    ;; Boutons spécifiques au mode : masqués quand une barre spécialisée
+    ;; prend la barre (agent ou secrétaire).
+    (unless mode-masque
+      (dolist (item items)
+        (let ((kind (car item)))
+          (cond
+           ((eq kind :sep)
+            (push (metal-toolbar-separator (cadr item)) parts))
+           ((eq kind :emoji)
+            (let* ((glyphe  (metal-toolbar--resoudre (plist-get item :emoji)))
+                   (color   (metal-toolbar--resoudre (plist-get item :color)))
+                   (tooltip (metal-toolbar--resoudre (plist-get item :tooltip)))
+                   (command (plist-get item :command))
+                   (icon    (metal-toolbar-emoji glyphe :color color)))
+              (push (metal-toolbar-button icon tooltip command context) parts)
+              (push " " parts)))
+           ((eq kind :char)
+            (let* ((texte   (metal-toolbar--resoudre (plist-get item :char)))
+                   (style   (plist-get item :style))
+                   (color   (metal-toolbar--resoudre (plist-get item :color)))
+                   (tooltip (metal-toolbar--resoudre (plist-get item :tooltip)))
+                   (command (plist-get item :command))
+                   (icon    (metal-toolbar-char texte :style style :color color)))
+              (push (metal-toolbar-button icon tooltip command context) parts)
+              (push " " parts)))
+           (t nil)))))
+    ;; Segment Secrétaire : compact (🗒️ seul) si inactif, étendu si actif.
+    ;; Affiché seulement si l'agent n'a pas pris la barre (priorité simple :
+    ;; deux barres spécialisées ne s'affichent jamais en même temps).
+    (when (and secretaire (not agent-prend-la-barre))
+      (push (or (and (fboundp 'metal-secretaire-toolbar-buttons)
+                     (ignore-errors (metal-secretaire-toolbar-buttons)))
+                "")
+            parts))
+    ;; Segment Agent : compact (🤖 seul) si inactif, étendu si actif.
+    ;; Masqué si le secrétaire a pris la barre.
+    (when (and agent (not secretaire-prend-la-barre))
+      (push (or (and (fboundp 'metal-agent-toolbar-buttons)
+                     (ignore-errors (metal-agent-toolbar-buttons)))
+                "")
+            parts))
+    (push " " parts)
+    (push (metal-toolbar-vpadding) parts)
+    (apply #'concat (nreverse parts))))
 
 ;;; --- Bouton système (mode-line) ------------------------------------------
 

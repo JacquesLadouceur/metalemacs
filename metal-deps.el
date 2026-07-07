@@ -6,7 +6,7 @@
 
 ;;; Commentaire:
 ;; Ce module gère l'installation automatique des dépendances externes
-;; pour MetalEmacs : Git (Scoop ou portable), Xcode CLI (macOS), HOME (Windows),
+;; pour MetalEmacs : Git (winget ou Scoop), Xcode CLI (macOS), HOME (Windows),
 ;; Homebrew/Scoop/apt, Miniconda, Quarto, SWI-Prolog, MiKTeX, Poppler,
 ;; pdf-tools, draw.io Desktop et ripgrep.
 ;; Supporte macOS, Windows et Linux (Chromebook/Debian/Ubuntu).
@@ -446,14 +446,6 @@ Retourne t si la commande a été lancée."
        (getenv "HOME")
        (file-directory-p (getenv "HOME"))))
 
-(defvar metal-deps--git-portable-dossier
-  (expand-file-name "PortableGit" user-emacs-directory)
-  "Dossier d'installation de Git Portable.")
-
-(defvar metal-deps--git-portable-url
-  "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/PortableGit-2.47.1.2-64-bit.7z.exe"
-  "URL de Git Portable.")
-
 (defun metal-deps--find-git-bin ()
   "Trouve un répertoire bin/cmd Git contenant git.exe. 
 Retourne le répertoire ou nil. Aligné avec early-init.el."
@@ -461,17 +453,15 @@ Retourne le répertoire ou nil. Aligné avec early-init.el."
     (let* ((home (or (getenv "HOME") (getenv "USERPROFILE") "C:/"))
            (candidates
             (list
-             ;; PortableGit dans .emacs.d (installé par early-init.el)
-             (expand-file-name "PortableGit/cmd" user-emacs-directory)
-             (expand-file-name "PortableGit/bin" user-emacs-directory)
-             ;; Scoop
-             (expand-file-name "scoop/apps/git/current/bin" home)
-             (expand-file-name "scoop/apps/git/current/cmd" home)
-             (expand-file-name "scoop/shims" home)
-             ;; Installations standard
+             ;; Git for Windows (winget / installeur officiel)
              "C:/Program Files/Git/cmd"
              "C:/Program Files/Git/bin"
              "C:/Program Files (x86)/Git/bin"
+             ;; Scoop (installation par utilisateur)
+             (expand-file-name "scoop/apps/git/current/bin" home)
+             (expand-file-name "scoop/apps/git/current/cmd" home)
+             (expand-file-name "scoop/shims" home)
+             ;; Autres gestionnaires / emplacements connus
              "C:/ProgramData/chocolatey/bin"
              "C:/tools/git/bin"
              "C:/Git/bin"
@@ -483,19 +473,14 @@ Retourne le répertoire ou nil. Aligné avec early-init.el."
             (throw 'found dir)))
         nil))))
 
-(defun metal-deps--git-portable-present-p ()
-  "Retourne t si Git est disponible (PortableGit, Scoop, ou autre installation).
-Cette fonction utilise la même logique que early-init.el."
+(defun metal-deps--git-present-p ()
+  "Retourne t si Git est disponible.
+Sur Windows, utilise la détection complète (PATH + emplacements standard,
+même logique que early-init.el).  Ailleurs, vérifie simplement le PATH."
   (if (eq system-type 'windows-nt)
-      ;; Sur Windows, utiliser la détection complète
       (or (executable-find "git")
           (not (null (metal-deps--find-git-bin))))
-    ;; Sur autres systèmes, vérifier simplement si git est dans le PATH
     (not (null (executable-find "git")))))
-
-(defun metal-deps--git-present-p ()
-  "Retourne t si Git est disponible."
-  (metal-deps--git-portable-present-p))
 
 (defun metal-deps--miniconda-homebrew-path ()
   "Retourne le chemin Miniconda installé via Homebrew, ou nil."
@@ -767,7 +752,11 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
               (metal-deps--journaliser "Installation de Node.js via Homebrew (Apple Silicon)")
               (let ((compilation-buffer-name-function
                      (lambda (_) "*Installation Node.js*")))
-                (compile "brew install node")))
+                ;; COMINT = t : buffer interactif.  brew demande « Do you want
+                ;; to proceed? [y/n] » ; sans comint, le buffer est en lecture
+                ;; seule et « y » déclenche « y is undefined » au lieu d'être
+                ;; transmis au processus.
+                (compile "brew install node" t)))
           (metal-deps--afficher-aide
            "Installer Node.js — Homebrew requis"
            (concat
@@ -811,7 +800,7 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
         (progn
           (metal-deps--journaliser "Installation de Node.js via Scoop")
           (when (yes-or-no-p "Installer Node.js via Scoop (scoop install nodejs) ? ")
-            (compile "scoop install nodejs")))
+            (compile "scoop install nodejs" t)))
       (metal-deps--afficher-aide
        "Installer Node.js sur Windows"
        (concat
@@ -841,7 +830,7 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
               (metal-deps--journaliser "Désinstallation Node.js via Homebrew")
               (let ((compilation-buffer-name-function
                      (lambda (_) "*Désinstallation Node.js*")))
-                (compile "brew uninstall node")))
+                (compile "brew uninstall node" t)))
           (metal-deps--afficher-aide
            "Désinstaller Node.js"
            (concat
@@ -886,7 +875,7 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
         (when (yes-or-no-p
                "Désinstaller Node.js (scoop uninstall nodejs) ?  D'autres outils peuvent en dépendre. ")
           (metal-deps--journaliser "Désinstallation Node.js via Scoop")
-          (compile "scoop uninstall nodejs"))
+          (compile "scoop uninstall nodejs" t))
       (metal-deps--afficher-aide
        "Désinstaller Node.js sur Windows"
        "Désinstaller via :\n  • Panneau de configuration > Programmes\n  • ou la commande Scoop si vous l'avez utilisée à l'install")))))
@@ -922,42 +911,59 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
         (message "✓ Scoop désinstallé")))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
-;;; Installateurs - Git Portable (Windows)
+;;; Installateurs - Git for Windows (via winget)
 ;;; ═══════════════════════════════════════════════════════════════════
 
-(defun metal-deps-installer-git-portable ()
-  "Télécharge et installe Git Portable pour Windows.
-Note: Cette fonction est un backup - early-init.el installe Git automatiquement."
+(defun metal-deps--winget-disponible-p ()
+  "Retourne non-nil si la commande `winget' est disponible (Windows)."
+  (and (eq system-type 'windows-nt)
+       (executable-find "winget")))
+
+(defun metal-deps-installer-git ()
+  "Installe Git for Windows via winget, en mode silencieux.
+Sur Windows, early-init.el tente déjà cette installation au démarrage si Git
+est absent ; cette commande sert de point d'entrée manuel depuis l'Assistant.
+Si winget est indisponible, affiche les méthodes d'installation alternatives."
   (interactive)
   (unless (eq system-type 'windows-nt)
-    (user-error "Git Portable est uniquement pour Windows"))
+    (user-error "Cette installation de Git est réservée à Windows"))
   (if (metal-deps--git-present-p)
       (message "✓ Git déjà disponible")
-    (metal-deps--journaliser "Installation de Git Portable")
-    (let ((temp-file (expand-file-name "git-portable.exe" temporary-file-directory)))
-      (message "📦 Téléchargement de Git Portable...")
-      (url-copy-file metal-deps--git-portable-url temp-file t)
-      (message "📂 Extraction en cours...")
-      (make-directory metal-deps--git-portable-dossier t)
-      (call-process temp-file nil nil nil
-                    (concat "-o" metal-deps--git-portable-dossier) "-y")
-      ;; Ajouter au PATH
-      (let ((git-bin (expand-file-name "bin" metal-deps--git-portable-dossier)))
-        (add-to-list 'exec-path git-bin)
-        (setenv "PATH" (concat git-bin ";" (getenv "PATH"))))
-      (delete-file temp-file)
-      (message "✓ Git Portable installé dans %s" metal-deps--git-portable-dossier))))
-
-(defun metal-deps-desinstaller-git-portable ()
-  "Désinstalle Git Portable."
-  (interactive)
-  (let ((git-dir metal-deps--git-portable-dossier))
-    (if (not (file-exists-p git-dir))
-        (message "Git Portable n'est pas installé dans %s" git-dir)
-      (when (yes-or-no-p (format "Supprimer Git Portable dans %s ? " git-dir))
-        (metal-deps--journaliser "Désinstallation de Git Portable")
-        (delete-directory git-dir t)
-        (message "✓ Git Portable désinstallé")))))
+    (if (not (metal-deps--winget-disponible-p))
+        ;; winget absent : on ne peut pas installer automatiquement.
+        (metal-deps--afficher-aide
+         "Installer Git — winget indisponible"
+         (concat
+          "winget n'est pas disponible sur ce système.\n\n"
+          "Installez Git for Windows par l'une de ces méthodes, puis\n"
+          "redémarrez MetalEmacs :\n\n"
+          "  • Téléchargement officiel :\n"
+          "      https://git-scm.com/download/win\n\n"
+          "  • Scoop (sans droits administrateur) :\n"
+          "      scoop install git\n"))
+      ;; winget présent : installation silencieuse.
+      (progn
+        (metal-deps--journaliser "Installation de Git for Windows via winget")
+        (message "📦 Installation de Git for Windows via winget...")
+        (let* ((cmd (concat "winget install --id Git.Git -e --source winget "
+                            "--accept-package-agreements --accept-source-agreements --silent"))
+               (code (call-process "powershell" nil
+                                   (get-buffer-create "*Installation Git*") nil
+                                   "-NoProfile" "-ExecutionPolicy" "Bypass"
+                                   "-Command" cmd)))
+          (if (and (numberp code) (= code 0))
+              (progn
+                ;; winget installe Git system-wide ; le PATH du processus Emacs
+                ;; courant n'est pas rafraîchi.  On ajoute l'emplacement détecté
+                ;; à `exec-path' pour la session, sinon il sera pris au prochain
+                ;; démarrage.
+                (let ((git-bin (or (metal-deps--find-git-bin)
+                                   "C:/Program Files/Git/cmd")))
+                  (when (file-exists-p (expand-file-name "git.exe" git-bin))
+                    (add-to-list 'exec-path git-bin)
+                    (setenv "PATH" (concat git-bin ";" (getenv "PATH")))))
+                (message "✓ Git for Windows installé. Redémarrez MetalEmacs si Git n'est pas détecté."))
+            (message "⚠ winget a renvoyé le code %s — voir *Installation Git*." code)))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Installateurs - Xcode Command Line Tools (macOS)
@@ -1736,82 +1742,17 @@ dans les fichiers de projet."
 (defvar metal-agent-provider)
 (declare-function metal-agent-authentifier-cli "metal-agent" (&optional id force))
 
-(defvar metal-deps-agents-catalogue
-  '((gemini
-     :nom         "Gemini"
-     :description "Gratuit avec compte Google"
-     :gratuit     t
-     :paquet-npm  "@google/gemini-cli"
-     :commande    "gemini"
-     :couleur     "#4285F4"
-     :format      claude-style
-     :args        nil
-     ;; :args ("-p" "") ;; si un problème avec nil
-     :auth-args   nil
-     :auth-aide   "Choisissez la méthode d'authentification dans le menu (1, 2 ou 3), puis appuyez sur Entrée.  Quand l'authentification est terminée, fermez ce buffer (C-x k)."
-     :auth-fichiers ("~/.gemini/oauth_creds.json")
-     :auth-env    ("GEMINI_API_KEY" "GOOGLE_GENAI_USE_VERTEXAI" "GOOGLE_GENAI_USE_GCA"))
-    (codex
-     :nom         "ChatGPT"
-     :description "Gratuit avec ChatGPT Free ou abonnement Plus/Pro"
-     :gratuit     t
-     :paquet-npm  "@openai/codex"
-     :paquet-brew "codex"
-     :commande    "codex"
-     :couleur     "#10A37F"
-     :format      codex-style
-     :args        ("exec" "--sandbox" "read-only" "--skip-git-repo-check")
-     :auth-args   ("login")
-     :auth-aide   "Choisissez « Sign in with ChatGPT » (OAuth via navigateur) — fonctionne avec ChatGPT Free.  Ou « Sign in with API key » pour une clé OpenAI.  Une fois connecté, fermez ce buffer (C-x k)."
-     :auth-fichiers ("~/.codex/auth.json" "~/.codex/config.toml"))
-    (claude
-     :nom         "Claude"
-     :description "Avec abonnement Claude Pro/Max ou clé API"
-     :gratuit     nil
-     :paquet-npm  "@anthropic-ai/claude-code"
-     :paquet-brew "claude-code"
-     :commande    "claude"
-     :couleur     "#D97757"
-     :format      claude-style
-     :args ("-p" "--output-format" "text")
-     :via-process t    
-     :auth-args   ("auth" "login")
-     :auth-aide   "Le navigateur va s'ouvrir pour l'OAuth Anthropic.  Si rien ne s'ouvre, appuyez sur « c » pour copier l'URL et collez-la dans votre navigateur.  Revenez ici après autorisation, puis fermez le buffer (C-x k)."
-     :auth-fichiers ("~/.claude/.credentials.json")
-     :auth-verifier metal-deps--claude-authentifie-p))
-  "Catalogue des agents IA installables via l'Assistant MetalEmacs.
-Chaque entrée est (ID . PLIST) où PLIST contient :
-  :nom          Nom affiché.
-  :description  Description courte.
-  :gratuit      Indication de coût/conditions :
-                t                → suffixe \"(gratuit)\"
-                \"texte libre\"    → suffixe \"(texte libre)\"
-                nil              → pas de suffixe (abonnement payant requis)
-  :paquet-npm   Nom du paquet npm (ex: \"@google/gemini-cli\").
-  :paquet-brew  Nom du paquet brew (optionnel).
-  :paquet-pipx  Nom du paquet pipx/pip (optionnel).
-  :commande     Commande CLI invoquée.
-  :couleur      Couleur hex de l'icône robot dans la toolbar.
-  :format       `codex-style' (filtre prompt) ou `claude-style' (générique).
-  :args         Arguments par défaut pour proposer sans modifier.
-  :auth-args    Arguments à ajouter à la commande pour lancer l'auth
-                explicite (ex: (\"login\")).  nil = lancer la commande seule.
-  :auth-aide    Instructions affichées en header-line du buffer terminal.
-  :auth-fichiers  Liste de chemins (un seul présent suffit) qui indiquent
-                  que l'agent est authentifié.  Doit inclure les paths
-                  des 3 OS : Linux (~/.config, ~/.local/share),
-                  macOS (~/Library/Application Support),
-                  Windows (~/AppData/Roaming, ~/AppData/Local).
-  :auth-env       Liste de variables d'environnement (une seule définie
-                  suffit) qui indiquent que l'agent est authentifié.
-  :auth-verifier  Fonction custom (sans argument) qui retourne t si
-                  l'agent est authentifié.  Priorité sur :auth-fichiers
-                  et :auth-env.
-  :install-manuelle  Optionnel : alist ((SYSTEM-TYPE . INSTRUCTIONS) …)
-                     d'instructions textuelles à afficher quand aucun
-                     gestionnaire automatique ne peut installer l'agent
-                     sur l'OS courant.  Clés possibles : windows-nt,
-                     darwin, gnu/linux, ou t (fallback générique).")
+(defvar metal-deps-agents-catalogue nil
+  "Catalogue des agents IA installables/utilisables via l'Assistant.
+
+IMPORTANT : ne plus coder d'agents en dur ici.  Le catalogue est
+desormais charge depuis un fichier editable par l'utilisateur
+(voir `metal-deps-agents-catalogue-fichier' dans le module
+`metal-agents-catalogue-externe').  Cette variable est peuplee au
+chargement de ce module ; elle reste nil si le module n'est pas charge.
+
+Format de chaque entree : (ID :nom S :commande S ...).  Voir l'en-tete
+du fichier catalogue pour la liste complete des champs.")
 
 (defun metal-deps--claude-authentifie-p ()
   "Détection multi-OS pour Claude : fichier credentials OU keychain natif.
@@ -1879,17 +1820,64 @@ AGENT-SPEC est le PLIST (sans le ID) du catalogue."
   (and (metal-deps--agent-enregistre-p id)
        (metal-deps--agent-cli-installee-p agent-spec)))
 
+;; (defun metal-deps--agent-spec->provider-entry (id spec)
+;;   "Convertit une entrée du catalogue en entrée pour `metal-agent-providers'.
+;; Propage tous les champs que `metal-agent.el' lit sur le provider, y
+;; compris `:isoler-fichier' (isolation des CLI exploratoires comme agy /
+;; codex) et `:dernier-message' (lecture de la réponse via fichier)."
+;;   (let ((entry (list :label       (plist-get spec :nom)
+;;                      :color       (plist-get spec :couleur)
+;;                      :command     (plist-get spec :commande)
+;;                      :args        (plist-get spec :args)
+;;                      :buffer-name (format "*Metal %s*" (plist-get spec :nom))
+;;                      :format      (plist-get spec :format)
+;;                      :auth-args   (plist-get spec :auth-args)
+;;                      :auth-aide   (plist-get spec :auth-aide))))
+;;     ;; Champs optionnels : propagés seulement si présents dans le catalogue,
+;;     ;; pour ne pas polluer l'entrée provider avec des nil inutiles.
+;;     (dolist (cle '(:isoler-fichier :dernier-message :via-process :extract-fn))
+;;       (when (plist-member spec cle)
+;;         (setq entry (plist-put entry cle (plist-get spec cle)))))
+;;     (cons id entry)))
+
+
 (defun metal-deps--agent-spec->provider-entry (id spec)
-  "Convertit une entrée du catalogue en entrée pour `metal-agent-providers'."
-  (cons id
-        (list :label       (plist-get spec :nom)
-              :color       (plist-get spec :couleur)
-              :command     (plist-get spec :commande)
-              :args        (plist-get spec :args)
-              :buffer-name (format "*Metal %s*" (plist-get spec :nom))
-              :format      (plist-get spec :format)
-              :auth-args   (plist-get spec :auth-args)
-              :auth-aide   (plist-get spec :auth-aide))))
+  "Convertit une spécification d'agent ID et SPEC en entrée pour `metal-agent-providers`.
+
+Deux régimes selon que l'agent est défini dans le catalogue ou non :
+
+- Agent PRÉSENT dans `metal-deps-agents-catalogue' : on n'enregistre
+  qu'un état MINIMAL (`:label', plus `:catalogue t' comme marqueur).
+  Toute la config (`:command', `:args', `:format'…) est relue à la
+  volée depuis le catalogue par `metal-agent--provider-prop'.  Ainsi,
+  modifier le catalogue suffit ; aucune copie figée ne peut diverger.
+
+- Agent ABSENT du catalogue (créé hors Assistant, cas résiduel) : on
+  conserve l'entrée COMPLÈTE, car `metal-custom.el' est alors la seule
+  source de vérité pour cet agent."
+  (if (and (boundp 'metal-deps-agents-catalogue)
+           (assq id metal-deps-agents-catalogue))
+      ;; Agent du catalogue : état minimal, config relue du catalogue.
+      (cons id (list :label (plist-get spec :nom)
+                     :catalogue t))
+    ;; Agent hors catalogue : entrée complète (Custom = seule source).
+    (let* ((commande (plist-get spec :commande))
+           (args-bruts (plist-get spec :args))
+           (format-style (plist-get spec :format))
+           (plist-interne (list :label       (plist-get spec :nom)
+                                :color       (plist-get spec :couleur)
+                                :command     commande
+                                :args        args-bruts
+                                :buffer-name (format "*Metal %s*" (plist-get spec :nom))
+                                :format      format-style
+                                :via-process (plist-get spec :via-process)
+                                :auth-mode   (or (plist-get spec :auth-mode)
+                                                 (if (or (plist-get spec :auth-args)
+                                                         (plist-get spec :auth-fichiers))
+                                                     'interne
+                                                   'externe)))))
+      (cons id plist-interne))))
+
 
 (defun metal-deps--assurer-npm-prefix-user ()
   "Configure npm pour installer en mode utilisateur (~/.npm-global).
@@ -2045,6 +2033,7 @@ la procédure d'auth pour référence future."
       "\n\nUne fois la CLI installée (statut ✓), cliquez sur « authentifier »\n"
       "dans cette section pour lancer le flux d'authentification dans un terminal."))))
 
+
 (defun metal-deps--installer-agent-ia (id)
   "Installe l'agent ID : enregistre dans `metal-agent-providers' + installe CLI.
 
@@ -2081,7 +2070,7 @@ affiche un buffer d'aide avec les instructions manuelles (champ
                    (format "Installer « %s » via %s ?  Commande : %s "
                            (plist-get spec :nom) (car cmd) cmdline))
               (metal-deps--journaliser "Installation CLI : %s" cmdline)
-              (let ((buf (compile cmdline)))
+              (let ((buf (compile cmdline t)))
                 (when (buffer-live-p buf)
                   (with-current-buffer buf
                     (when (fboundp 'ansi-color-compilation-filter)
@@ -2155,7 +2144,7 @@ affiche un buffer d'aide avec les instructions manuelles (champ
                    (compilation-buffer-name-function
                     (lambda (_) (format "*Désinstallation %s*" nom))))
               (metal-deps--journaliser "Désinstallation CLI : %s" cmdline)
-              (compile cmdline)))))
+              (compile cmdline t)))))
       (message "« %s » désinstallé." nom))))
 
 (defun metal-deps--authentifier-agent-ia (id)
@@ -2197,9 +2186,9 @@ ET CLI présente sur le système."
      :categorie prerequis 
      :windows-seulement t)
     (:nom "Git" 
-     :verifier metal-deps--git-portable-present-p
-     :installer metal-deps-installer-git-portable 
-     :desinstaller metal-deps-desinstaller-git-portable
+     :verifier metal-deps--git-present-p
+     :installer metal-deps-installer-git 
+     :desinstaller nil
      :categorie prerequis 
      :windows-seulement t)
     (:nom "Command Line Tools" 
@@ -2631,7 +2620,16 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                      (authentifie (and agent-id
                                        (or (not spec)  ; agent perso : on autorise
                                            (metal-deps--agent-authentifie-p spec))))
-                     (radio-applicable (and agent-id present authentifie))
+                     ;; Auth non vérifiable (ex: agy, :auth-mode externe) :
+                     ;; l'agent doit quand même pouvoir être choisi comme défaut.
+                     (auth-non-verifiable
+                      (and spec
+                           (fboundp 'metal-deps--agent-auth-verifiable-p)
+                           (not (metal-deps--agent-auth-verifiable-p spec))))
+                     ;; Le radio ●/◯ s'applique dès que l'agent est installé
+                     ;; ET (authentifié OU son auth n'est pas vérifiable).
+                     (radio-applicable (and agent-id present
+                                            (or authentifie auth-non-verifiable)))
                      (est-defaut (and radio-applicable
                                       (boundp 'metal-agent-provider)
                                       (eq metal-agent-provider agent-id)))
@@ -2704,28 +2702,39 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                 (cond
                  ;; Cas agent : "🔑 statut : description"
                  (agent-id
-                  (let* ((spec (cdr (assq agent-id metal-deps-agents-catalogue)))
-                         (authentifie (and spec
-                                           (metal-deps--agent-authentifie-p spec))))
-                    (widget-insert
-                     (propertize "🔑 " 'face '(:foreground "#10A37F")))
-                    (cond
-                     ;; Installé + authentifié : texte vert (non cliquable).
-                     (authentifie
-                      (widget-insert
-                       (propertize "authentifié"
-                                   'face '(:foreground "#10A37F" :weight bold))))
-                     ;; Installé non authentifié : « authentifier » cliquable
-                     ;; lance l'auth en terminal (comportement habituel).
-                     (present
-                      (let ((id agent-id))
-                        (insert-text-button
-                         "authentifier"
-                         'action (lambda (_)
-                                   (metal-deps--authentifier-agent-ia id))
-                         'face '(:foreground "#0366d6" :underline t :weight bold)
-                         'follow-link t
-                         'help-echo "Lancer l'authentification dans un terminal")))
+                 (let* ((spec (cdr (assq agent-id metal-deps-agents-catalogue)))
+                        (authentifie (and spec
+                                          (metal-deps--agent-authentifie-p spec)))
+                        ;; Auth verifiable ? (nil si :auth-mode externe ou
+                        ;; aucun mecanisme d'auth fourni — cas agy.)
+                        (verifiable (and spec
+                                         (fboundp 'metal-deps--agent-auth-verifiable-p)
+                                         (metal-deps--agent-auth-verifiable-p spec))))
+                   (widget-insert
+                    (propertize "🔑 " 'face '(:foreground "#10A37F")))
+                   (cond
+                    ;; Installé + authentifié : texte vert (non cliquable).
+                    (authentifie
+                     (widget-insert
+                      (propertize "authentifié"
+                                  'face '(:foreground "#10A37F" :weight bold))))
+                    ;; Auth non vérifiable (ex: agy, gérée par l'app) :
+                    ;; statut neutre, pas de bouton trompeur.
+                    ((and present (not verifiable))
+                     (widget-insert
+                      (propertize "auth. externe"
+                                  'face '(:foreground "gray50" :slant italic))))
+                    ;; Installé non authentifié : « authentifier » cliquable
+                    ;; lance l'auth en terminal (comportement habituel).
+                    (present
+                     (let ((id agent-id))
+                       (insert-text-button
+                        "authentifier"
+                        'action (lambda (_)
+                                  (metal-deps--authentifier-agent-ia id))
+                        'face '(:foreground "#0366d6" :underline t :weight bold)
+                        'follow-link t
+                        'help-echo "Lancer l'authentification dans un terminal")))
                      ;; Pas installé : « authentifier » cliquable affiche
                      ;; la procédure dans un buffer d'aide.
                      (t

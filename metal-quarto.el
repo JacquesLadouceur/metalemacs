@@ -661,65 +661,259 @@ Si xwidget-webkit est disponible, l'ouvrir dans Emacs, sinon navigateur externe.
       (user-error "Fichier introuvable : %s" pdf-file))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
+;;; Encadrés (callouts) Quarto
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defconst metal-quarto-callout-types
+  '(("Note"      . "note")
+    ("Conseil"   . "tip")
+    ("Avertissement" . "warning")
+    ("Important" . "important")
+    ("Attention" . "caution"))
+  "Encadrés (callouts) Quarto : libellé français vers classe Quarto.
+Quarto impose les classes anglaises (.callout-note, etc.) ; seuls les
+libellés présentés à l'utilisateur sont en français.")
+
+(defun metal-quarto--inserer-callout (type)
+  "Insère un encadré Quarto de type TYPE.
+Si une région est active, son contenu devient le corps de l'encadré ;
+sinon, insère un gabarit vide avec le point positionné dans le corps."
+  (if (use-region-p)
+      (let* ((beg (region-beginning))
+             (end (region-end))
+             (contenu (string-trim (buffer-substring-no-properties beg end))))
+        (delete-region beg end)
+        (goto-char beg)
+        (insert (format "::: {.callout-%s}\n%s\n:::\n" type contenu)))
+    (let ((debut (point)))
+      (insert (format "::: {.callout-%s}\n\n:::\n" type))
+      ;; Replacer le point sur la ligne vide du corps.
+      (goto-char debut)
+      (forward-line 1)
+      (end-of-line))))
+
+(defun metal-quarto-callout-note ()
+  "Insère un encadré Quarto « note » (information complémentaire)."
+  (interactive)
+  (metal-quarto--inserer-callout "note"))
+
+(defun metal-quarto-callout-tip ()
+  "Insère un encadré Quarto « tip » (conseil pratique)."
+  (interactive)
+  (metal-quarto--inserer-callout "tip"))
+
+(defun metal-quarto-callout-warning ()
+  "Insère un encadré Quarto « warning » (mise en garde)."
+  (interactive)
+  (metal-quarto--inserer-callout "warning"))
+
+(defun metal-quarto-callout-important ()
+  "Insère un encadré Quarto « important » (information cruciale)."
+  (interactive)
+  (metal-quarto--inserer-callout "important"))
+
+(defun metal-quarto-callout-caution ()
+  "Insère un encadré Quarto « caution » (précaution à prendre)."
+  (interactive)
+  (metal-quarto--inserer-callout "caution"))
+
+(defun metal-quarto-callout ()
+  "Insère un encadré Quarto, type choisi via `completing-read'.
+Les types sont présentés en français mais insérés avec leur classe
+Quarto anglaise.  Réutilise la région active comme corps de l'encadré
+le cas échéant."
+  (interactive)
+  (let* ((libelle (completing-read "Type d'encadré : "
+                                   metal-quarto-callout-types nil t nil nil "Note"))
+         (type (cdr (assoc libelle metal-quarto-callout-types))))
+    (metal-quarto--inserer-callout type)))
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Figures, notes et références
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defun metal-quarto-figure (chemin legende &optional id)
+  "Insère une figure Quarto avec CHEMIN, LEGENDE et ID optionnel.
+Produit la syntaxe Markdown ![légende](chemin){#fig-id}, avec une
+ancre #fig-ID permettant le renvoi via @fig-ID.  Si CHEMIN est vide et
+qu'une région est active, son contenu sert de légende et seul le
+chemin reste à compléter."
+  (interactive
+   (let* ((region (and (use-region-p)
+                       (string-trim (buffer-substring-no-properties
+                                     (region-beginning) (region-end)))))
+          (chemin (read-string "Chemin de l'image : " "images/"))
+          (legende (read-string "Légende : " region))
+          (id (read-string "Identifiant (pour @fig-…, vide pour aucun) : ")))
+     (list chemin legende id)))
+  (when (use-region-p)
+    (delete-region (region-beginning) (region-end)))
+  (let ((ancre (if (and id (not (string-empty-p id)))
+                   (format "{#fig-%s}" id)
+                 "")))
+    (insert (format "![%s](%s)%s\n" legende chemin ancre))))
+
+(defun metal-quarto--fin-paragraphe-courant ()
+  "Retourne la position de fin du paragraphe courant.
+Cherche la prochaine ligne vide à partir du début du paragraphe (et non
+du point), afin de fonctionner peu importe la position du point à
+l'intérieur du paragraphe.  Retourne `point-max' si aucune ligne vide
+ne suit."
+  (save-excursion
+    (let ((debut (progn (backward-paragraph) (point))))
+      (goto-char debut)
+      (if (re-search-forward "\n[ \t]*\n" nil t)
+          (match-beginning 0)
+        (point-max)))))
+
+(defun metal-quarto-note-bas-de-page (corps)
+  "Insère une note de bas de page Quarto avec CORPS comme contenu.
+Le marqueur [^id] est inséré au point ; la définition [^id]: CORPS est
+placée après le paragraphe courant, séparée par une ligne vide.  Si une
+région est active, son contenu sert de proposition initiale pour CORPS."
+  (interactive
+   (list (read-string "Texte de la note : "
+                       (and (use-region-p)
+                            (string-trim (buffer-substring-no-properties
+                                          (region-beginning) (region-end)))))))
+  (when (use-region-p)
+    (delete-region (region-beginning) (region-end)))
+  (let* ((id (format-time-string "note-%s"))
+         (fin (metal-quarto--fin-paragraphe-courant)))
+    (insert (format "[^%s]" id))
+    (save-excursion
+      (goto-char fin)
+      (insert (format "\n\n[^%s]: %s" id corps)))))
+
+(defun metal-quarto-citation (cle &optional page)
+  "Insère une citation Quarto [@CLE] au point.
+Avec PAGE non vide, produit [@CLE, p. PAGE].  Les citations renvoient
+à une entrée du fichier indiqué par `bibliography:' dans l'en-tête YAML."
+  (interactive
+   (list (read-string "Clé de citation (sans @) : ")
+         (read-string "Page (vide pour aucune) : ")))
+  (insert (if (and page (not (string-empty-p page)))
+              (format "[@%s, p. %s]" cle page)
+            (format "[@%s]" cle))))
+
+(defconst metal-quarto-renvoi-types
+  '(("Figure"   . "fig")
+    ("Tableau"  . "tbl")
+    ("Section"  . "sec")
+    ("Équation" . "eq"))
+  "Types de renvois croisés Quarto : libellé français vers préfixe d'ancre.")
+
+(defun metal-quarto--ancres-existantes (prefixe)
+  "Retourne la liste des identifiants d'ancres {#PREFIXE-id} du buffer."
+  (let (ancres)
+    (save-excursion
+      (goto-char (point-min))
+      (while (re-search-forward
+              (format "{#%s-\\([[:alnum:]_-]+\\)}" (regexp-quote prefixe))
+              nil t)
+        (push (match-string 1) ancres)))
+    (nreverse ancres)))
+
+(defun metal-quarto-renvoi ()
+  "Insère un renvoi croisé Quarto (@fig-id, @tbl-id, @sec-id, @eq-id) au point.
+Le type est choisi via `completing-read', puis l'identifiant est
+complété à partir des ancres {#type-id} déjà présentes dans le buffer,
+sans empêcher la saisie d'un nouvel identifiant."
+  (interactive)
+  (let* ((libelle (completing-read "Type de renvoi : "
+                                    metal-quarto-renvoi-types nil t))
+         (prefixe (cdr (assoc libelle metal-quarto-renvoi-types)))
+         (candidats (metal-quarto--ancres-existantes prefixe))
+         (id (completing-read (format "Identifiant (@%s-…) : " prefixe)
+                               candidats)))
+    (insert (format "@%s-%s" prefixe id))))
+
+(defun metal-quarto-bibliographie ()
+  "Ajoute les champs `bibliography:' et `csl:' à l'en-tête YAML.
+Insère les champs juste avant la ligne de fermeture --- de l'en-tête
+si celui-ci existe ; sinon, insère un en-tête minimal au début du
+buffer.  Ne duplique pas un champ `bibliography:' déjà présent."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (if (looking-at "^---[ \t]*$")
+        (let ((fin-entete
+               (save-excursion
+                 (forward-line 1)
+                 (when (re-search-forward "^---[ \t]*$" nil t)
+                   (line-beginning-position)))))
+          (if (and fin-entete
+                   (save-excursion
+                     (goto-char (point-min))
+                     (re-search-forward "^bibliography:" fin-entete t)))
+              (message "Un champ « bibliography: » est déjà présent.")
+            (if fin-entete
+                (progn
+                  (goto-char fin-entete)
+                  (let ((fichier (read-string "Fichier de bibliographie : "
+                                              "references.bib")))
+                    (insert (format "bibliography: %s\n" fichier))
+                    (insert "csl: \n")))
+              (user-error "En-tête YAML mal fermé"))))
+      (let ((fichier (read-string "Fichier de bibliographie : "
+                                  "references.bib")))
+        (insert "---\n"
+                (format "bibliography: %s\n" fichier)
+                "csl: \n"
+                "---\n\n")))))
+
+(defconst metal-quarto-references-menu
+  '(("Note de bas de page" . metal-quarto-note-bas-de-page)
+    ("Citation [@clé]"     . metal-quarto-citation)
+    ("Image / figure"      . metal-quarto-figure)
+    ("Renvoi croisé (@fig-, @tbl-, @sec-)" . metal-quarto-renvoi))
+  "Menu unifié des insertions de type référence.
+Libellé français vers commande interactive correspondante.")
+
+(defun metal-quarto-references ()
+  "Propose un choix de référence à insérer (note, citation, image, renvoi).
+Point d'entrée unique regroupant `metal-quarto-note-bas-de-page',
+`metal-quarto-citation', `metal-quarto-figure' et `metal-quarto-renvoi',
+sélectionné via `completing-read'."
+  (interactive)
+  (let* ((libelle (completing-read "Insérer : "
+                                    metal-quarto-references-menu nil t))
+         (commande (cdr (assoc libelle metal-quarto-references-menu))))
+    (call-interactively commande)))
+
+;;; ═══════════════════════════════════════════════════════════════════
 ;;; Barre d'outils header-line
 ;;; ═══════════════════════════════════════════════════════════════════
 
 (require 'metal-toolbar)
 
 (defun metal-quarto-toolbar-format ()
-  "Construit la barre d'outils Quarto."
-  (concat
-   (metal-toolbar-vpadding) " "
-
-   ;; ----- Formatage de texte -----
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_bold" :color "#2c3e50")
-    "Gras" #'metal-quarto-bold)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_italic" :color "#2c3e50")
-    "Italique" #'metal-quarto-italic)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_underline" :color "#2980b9")
-    "Souligné" #'metal-quarto-underline)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-format_strikethrough" :color "#c0392b" :height 2.0 :raise -0.1)
-    "Barré" #'metal-quarto-strike)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-code_tags" :color "#8e44ad" :height 2.5 :raise -0.1)
-    "Code inline" #'metal-quarto-code)
-
-   (metal-toolbar-separator)
-
-   ;; ----- Production -----
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-file_pdf_box" :color "#c0392b" :height 2.0 :raise -0.05)
-    "Produire le document (F8)" #'metal-quarto-rendre-fichier)
-
-   (metal-toolbar-separator)
-
-   ;; ----- Référence -----
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-book_open_page_variant" :color "#1e8449" :height 2.0)
-    "Wiktionnaire" #'search-wiktionary)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-wikipedia" :color "#5d6d7e" :height 2.0)
-    "Wikipédia" #'search-wikipedia)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-book_open_variant" :color "#2980b9" :height 2.0)
-    "Documentation Quarto" #'metal-quarto-doc-buffer)
-   (metal-toolbar-button
-    (metal-toolbar-icon "nf-md-clipboard_text_outline" :color "#e67e22" :height 2.0)
-    "Aide-mémoire QMD" #'metal-quarto-open-cheatsheet)
-
-   ;; Extension optionnelle Metal-Agent / Codex / Claude.
-   ;; IMPORTANT : on protège l'appel avec `ignore-errors' pour ne jamais
-   ;; perdre toute la header-line Quarto si metal-agent.el est absent,
-   ;; incomplet ou en cours de développement.
-   (or (and (fboundp 'metal-agent-toolbar-buttons)
-            (ignore-errors (metal-agent-toolbar-buttons)))
-       "")
-
-   " " (metal-toolbar-vpadding)))
+  "Construit la barre d'outils Quarto via `metal-toolbar-build'.
+Formatage typographique : lettres portant leur propre style (G gras,
+I italique, S souligné, B barré) faute d'emoji adéquat.  Le reste en
+emoji."
+  (metal-toolbar-build
+   '((:char "G" :style bold      :color "#2c3e50"
+            :tooltip "Gras" :command metal-quarto-bold)
+     (:char "I" :style italic    :color "#2c3e50"
+            :tooltip "Italique" :command metal-quarto-italic)
+     (:char "S" :style underline :color "#2980b9"
+            :tooltip "Souligné" :command metal-quarto-underline)
+     (:char "B" :style strike    :color "#c0392b"
+            :tooltip "Barré" :command metal-quarto-strike)
+     (:char "</>" :color "#8e44ad"
+            :tooltip "Code inline" :command metal-quarto-code)
+     (:emoji "💡" :tooltip "Encadré (callout)" :command metal-quarto-callout)
+     (:emoji "🔗" :tooltip "Références (note, citation, image, renvoi)" :command metal-quarto-references)
+     (:sep)
+     (:emoji "📄" :tooltip "Produire le document (F8)"
+             :command metal-quarto-rendre-fichier)
+     (:sep)
+     (:emoji "📖" :tooltip "Wiktionnaire" :command search-wiktionary)
+     (:emoji "🌐" :tooltip "Wikipédia" :command search-wikipedia)
+     (:emoji "📘" :tooltip "Documentation Quarto" :command metal-quarto-doc-buffer)
+     (:emoji "📋" :tooltip "Aide-mémoire QMD" :command metal-quarto-open-cheatsheet))
+   :agent t))
 
 (defun metal-quarto-header-line ()
   "Active la barre d'outils dans tout fichier Markdown (Quarto ou non).

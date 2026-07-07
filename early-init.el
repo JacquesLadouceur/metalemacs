@@ -9,8 +9,8 @@
 ;; - Si HOME est problématique (espaces ou non-ASCII), basculer vers un HOME ASCII sûr.
 ;; - Créer ~/Documents dans le nouveau HOME (pas de lien symbolique).
 ;; - Informer l'utilisateur (une fois) APRÈS l'affichage du premier frame.
-;; - Assurer que git est disponible for straight.el; si manquant, installer PortableGit.
-;; - L'installation PortableGit utilise une fenêtre PowerShell VISIBLE window (Emacs attend).
+;; - Assurer que git est disponible for straight.el; si manquant, installer Git
+;;   for Windows via winget (installation silencieuse, system-wide).
 ;; - Configurer le frame UNE SEULE FOIS pour éviter les redimensionnements multiples.
 
 ;;; Code:
@@ -259,12 +259,8 @@ Sinon, prépare des instructions pour l'utilisateur."
 (metal-early--fix-problematic-home)
 
 ;; ----------------------------
-;; PortableGit (Windows) pour straight.el
+;; Git for Windows (via winget) pour straight.el
 ;; ----------------------------
-
-(defvar metal-early-git-portable-dir
-  (expand-file-name "PortableGit" user-emacs-directory)
-  "Répertoire d'installation de PortableGit sous user-emacs-directory.")
 
 (defvar metal-early--git-config-marker
   (expand-file-name ".metal-git-config-done" user-emacs-directory)
@@ -286,13 +282,15 @@ Sinon, prépare des instructions pour l'utilisateur."
   (let* ((home (or (getenv "HOME") (getenv "USERPROFILE") "C:/"))
          (candidates
           (list
-           (expand-file-name "PortableGit/cmd" user-emacs-directory)
-           (expand-file-name "PortableGit/bin" user-emacs-directory)
-           (expand-file-name "scoop/apps/git/current/bin" home)
-           (expand-file-name "scoop/shims" home)
+           ;; Git for Windows (winget / installeur officiel)
            "C:/Program Files/Git/cmd"
            "C:/Program Files/Git/bin"
            "C:/Program Files (x86)/Git/bin"
+           ;; Scoop (installation par utilisateur)
+           (expand-file-name "scoop/apps/git/current/cmd" home)
+           (expand-file-name "scoop/apps/git/current/bin" home)
+           (expand-file-name "scoop/shims" home)
+           ;; Autres gestionnaires / emplacements connus
            "C:/ProgramData/chocolatey/bin"
            "C:/tools/git/bin"
            "C:/Git/bin"
@@ -307,7 +305,7 @@ Sinon, prépare des instructions pour l'utilisateur."
 (defun metal-early--windows-run-visible-powershell-wait (ps1-content)
   "Run PS1-CONTENT in a VISIBLE PowerShell window and wait; return exit code.
 Implémentation : un PowerShell caché démarre un PowerShell visible (-Wait) et retourne son code de sortie."
-  (let* ((ps1 (make-temp-file "metal-portablegit-" nil ".ps1"))
+  (let* ((ps1 (make-temp-file "metal-git-install-" nil ".ps1"))
          (ps1-win (metal-early--win-path ps1))
          (buf (get-buffer-create "*MetalEmacs PowerShell*"))
          (cmd (format
@@ -321,102 +319,108 @@ Implémentation : un PowerShell caché démarre un PowerShell visible (-Wait) et
                       "-Command" cmd)
       (ignore-errors (delete-file ps1)))))
 
-(defun metal-early--install-git-portable ()
-  "Installe MinGit (PortableGit) dans `metal-early-git-portable-dir` (Windows).
-Affiche une fenêtre PowerShell VISIBLE pour que l'utilisateur voie l'activité avant l'interface Emacs.
+(defun metal-early--winget-disponible-p ()
+  "Retourne non-nil si la commande `winget' est disponible sur le système."
+  (and (eq system-type 'windows-nt)
+       (executable-find "winget")))
 
-Cette version télécharge le *dernier* zip MinGit 64-bit depuis les versions Git for Windows
-sur GitHub (via l'API GitHub), avec une URL de secours si l'API échoue."
+(defun metal-early--install-git-winget ()
+  "Installe Git for Windows via winget, en mode silencieux (Windows).
+Affiche une fenêtre PowerShell VISIBLE pour que l'utilisateur voie l'activité
+avant l'interface Emacs.  Signale une erreur si winget est absent ou si
+l'installation échoue."
   (unless (eq system-type 'windows-nt)
-    (error "L'installation automatique de PortableGit n'est supportée que sur Windows"))
-  (let* ((fallback-url
-          "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.2/MinGit-2.47.1.2-64-bit.zip")
-         (zip-file (expand-file-name "MinGit.zip" temporary-file-directory))
-         (install-dir metal-early-git-portable-dir)
-         (zip-file-win (metal-early--win-path zip-file))
-         (install-dir-win (metal-early--win-path install-dir))
-         (ps1 (concat
-               "$ErrorActionPreference='Stop'\n"
-               "Write-Host 'Un instant... installation de Git (PortableGit)...' -ForegroundColor Yellow\n"
-               "Write-Host ''\n"
-               "Write-Host 'Résolution de la dernière version de MinGit...'\n"
-               "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12\n"
-               "$headers = @{ 'User-Agent'='MetalEmacs' }\n"
-               "$api = 'https://api.github.com/repos/git-for-windows/git/releases/latest'\n"
-               "$url = $null\n"
-               "try {\n"
-               "  $rel = Invoke-RestMethod -Uri $api -Headers $headers\n"
-               "  if ($rel -and $rel.assets) {\n"
-               "    $asset = $rel.assets | Where-Object { $_.name -match '^MinGit-.*-64-bit\\.zip$' } | Select-Object -First 1\n"
-               "    if ($asset -and $asset.browser_download_url) { $url = $asset.browser_download_url }\n"
-               "  }\n"
-               "} catch {\n"
-               "  $url = $null\n"
-               "}\n"
-               "if (-not $url) {\n"
-               "  Write-Host 'API GitHub échouée ; utilisation de l''URL de secours.' -ForegroundColor DarkYellow\n"
-               "  $url = '" fallback-url "'\n"
-               "}\n"
-               "Write-Host ('Téléchargement : ' + $url)\n"
-               "Invoke-WebRequest -Uri $url -OutFile '" zip-file-win "'\n"
-               "Write-Host 'Extraction...'\n"
-               "if (Test-Path -LiteralPath '" install-dir-win "') { Remove-Item -LiteralPath '" install-dir-win "' -Recurse -Force }\n"
-               "New-Item -ItemType Directory -Path '" install-dir-win "' -Force | Out-Null\n"
-               "Expand-Archive -Path '" zip-file-win "' -DestinationPath '" install-dir-win "' -Force\n"
-               "Remove-Item -LiteralPath '" zip-file-win "' -Force\n"
-               "Write-Host ''\n"
-               "Write-Host 'Terminé.' -ForegroundColor Green\n"
-               "exit 0\n")))
+    (error "L'installation automatique de Git n'est supportée que sur Windows"))
+  (unless (metal-early--winget-disponible-p)
+    (error "winget introuvable — installez Git manuellement depuis https://git-scm.com/download/win"))
+  (let ((ps1 (concat
+              "$ErrorActionPreference='Stop'\n"
+              "Write-Host 'Un instant... installation de Git for Windows via winget...' -ForegroundColor Yellow\n"
+              "Write-Host ''\n"
+              ;; --silent : aucune interaction ; --accept-* : pas de prompt de licence ;
+              ;; -e --id Git.Git : paquet exact officiel.
+              "winget install --id Git.Git -e --source winget "
+              "--accept-package-agreements --accept-source-agreements --silent\n"
+              "$code = $LASTEXITCODE\n"
+              ;; winget renvoie 0 (succès) ou parfois un code « déjà installé / no
+              ;; applicable upgrade » que l'on tolère.
+              "if ($code -ne 0) {\n"
+              "  Write-Host ('winget a renvoyé le code ' + $code) -ForegroundColor DarkYellow\n"
+              "}\n"
+              "Write-Host ''\n"
+              "Write-Host 'Terminé.' -ForegroundColor Green\n"
+              "exit 0\n")))
     (let ((code (metal-early--windows-run-visible-powershell-wait ps1)))
       (unless (and (numberp code) (= code 0))
-        (error "Échec de l'installation de PortableGit (code de sortie : %s). Voir *MetalEmacs PowerShell*." code)))
-    (message "MetalEmacs : PortableGit installé dans %s" install-dir)))
+        (error "Échec de l'installation de Git via winget (code de sortie : %s). Voir *MetalEmacs PowerShell*." code)))
+    (message "MetalEmacs : Git for Windows installé via winget")))
 
 (defun metal-early--add-git-to-path ()
   "Assure que Git est disponible tôt (pour straight.el).
-Si non trouvé, tente d'installer PortableGit.
+Si non trouvé, tente d'installer Git for Windows via winget.
 Génère une erreur si Git ne peut pas être rendu disponible."
   (let ((git-bin (metal-early--find-git-bin)))
     
     ;; Si Git pas trouvé, tenter installation (Windows seulement)
     (unless git-bin
       (if (eq system-type 'windows-nt)
-          ;; Windows : installation automatique de PortableGit
-          (progn
-            (message "")
-            (message "════════════════════════════════════════════════════════")
-            (message "MetalEmacs : Git non trouvé, installation de PortableGit...")
-            (message "Une fenêtre PowerShell va apparaître - veuillez patienter.")
-            (message "Cela peut prendre 2-3 minutes.")
-            (message "════════════════════════════════════════════════════════")
-            (message "")
-            
-            (condition-case err
-                (progn
-                  (metal-early--install-git-portable)
-                  ;; MinGit utilise généralement cmd/git.exe
-                  (setq git-bin (expand-file-name "cmd" metal-early-git-portable-dir))
-                  
-                  ;; Vérifier que git.exe existe bien
-                  (unless (file-exists-p (expand-file-name "git.exe" git-bin))
-                    (message "")
-                    (message "✗ ERREUR : PortableGit installé mais git.exe introuvable !")
-                    (message "  Attendu : %s" (expand-file-name "git.exe" git-bin))
-                    (message "  Dossier d'installation : %s" metal-early-git-portable-dir)
-                    (message "")
-                    (error "Installation de PortableGit incomplète - git.exe manquant")))
-              
-              (error
-               (message "")
-               (message "✗ ERREUR : Échec de l'installation de PortableGit")
-               (message "  Erreur : %s" (error-message-string err))
-               (message "")
-               (message "Solutions possibles :")
-               (message "  1. Vérifiez votre connexion Internet")
-               (message "  2. Installez Git manuellement depuis https://git-scm.com")
-               (message "  3. Vérifiez que PowerShell n'est pas bloqué")
-               (message "")
-               (error "Échec de l'installation de Git - %s" (error-message-string err)))))
+          ;; Windows : installation automatique via winget
+          (if (not (metal-early--winget-disponible-p))
+              ;; winget absent : pas d'installation automatique possible
+              (progn
+                (message "")
+                (message "════════════════════════════════════════════════════════")
+                (message "MetalEmacs : Git non trouvé et winget indisponible !")
+                (message "════════════════════════════════════════════════════════")
+                (message "")
+                (message "Installez Git for Windows par l'une de ces méthodes :")
+                (message "  • Téléchargement : https://git-scm.com/download/win")
+                (message "  • Scoop (sans admin) : scoop install git")
+                (message "")
+                (message "Redémarrez Emacs après l'installation de Git.")
+                (message "")
+                (error "Git est requis mais winget est indisponible. Voir *Messages*."))
+            ;; winget présent : installation silencieuse
+            (progn
+              (message "")
+              (message "════════════════════════════════════════════════════════")
+              (message "MetalEmacs : Git non trouvé, installation via winget...")
+              (message "Une fenêtre PowerShell va apparaître - veuillez patienter.")
+              (message "Cela peut prendre 1-2 minutes.")
+              (message "════════════════════════════════════════════════════════")
+              (message "")
+
+              (condition-case err
+                  (progn
+                    (metal-early--install-git-winget)
+                    ;; winget installe Git for Windows system-wide, mais le PATH
+                    ;; du processus Emacs courant n'est pas rafraîchi : on
+                    ;; re-scanne les emplacements standard pour retrouver git.exe.
+                    (setq git-bin (metal-early--find-git-bin))
+                    (unless git-bin
+                      ;; Repli sur l'emplacement par défaut de Git for Windows.
+                      (let ((defaut "C:/Program Files/Git/cmd"))
+                        (when (file-exists-p (expand-file-name "git.exe" defaut))
+                          (setq git-bin defaut))))
+                    (unless (and git-bin
+                                 (file-exists-p (expand-file-name "git.exe" git-bin)))
+                      (message "")
+                      (message "✗ ERREUR : Git installé via winget mais git.exe introuvable !")
+                      (message "  Redémarrez Emacs : le PATH système sera alors pris en compte.")
+                      (message "")
+                      (error "Installation winget réussie mais git.exe introuvable dans cette session")))
+
+                (error
+                 (message "")
+                 (message "✗ ERREUR : Échec de l'installation de Git via winget")
+                 (message "  Erreur : %s" (error-message-string err))
+                 (message "")
+                 (message "Solutions possibles :")
+                 (message "  1. Vérifiez votre connexion Internet")
+                 (message "  2. Installez Git manuellement depuis https://git-scm.com/download/win")
+                 (message "  3. Vérifiez que PowerShell n'est pas bloqué")
+                 (message "")
+                 (error "Échec de l'installation de Git - %s" (error-message-string err))))))
         
         ;; macOS/Linux : Git doit être installé manuellement
         (message "")

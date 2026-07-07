@@ -1,4 +1,4 @@
-;;; metal-prolog.el --- Configuration SWI-Prolog pour MetalEmacs -*- lexical-binding: t; -*-
+;;; metal-prolog.el --- Configuration SWI-Prolog pour MetalEmacs -*- coding: utf-8; lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Jacques Ladouceur
 ;; Auteur: Jacques Ladouceur
@@ -409,55 +409,30 @@ suivi de blancs ou d'un commentaire %). Ceci exclut les points dans
 
 (require 'metal-toolbar)
 
-;; Toolbar Prolog : on utilise les emojis Unicode (via metal-toolbar-emoji)
-;; au lieu des nerd-icons, pour avoir la même mécanique de rendu que les
-;; toolbars Python et Agent/Codex.
+;; Toolbar Prolog : barre déclarative via `metal-toolbar-build'.  Le module
+;; ne décrit que la liste des boutons ; tout le rendu (taille, padding,
+;; séparateurs, alignement, extension agent) vient de `metal-toolbar'.
 
 (defun metal-prolog-toolbar-format ()
-  "Construit la barre d'outils Prolog (emojis Unicode)."
-  (concat
-   (metal-toolbar-vpadding) " "
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "▶️")
-    "Consulter le programme"
-    #'prolog-save-consult)
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "🐛")
-    "Lancer le débogueur (trace)"
-    (lambda () (interactive) (metal-prolog-send-command "trace.")))
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "🪗")
-    "Plier / déplier tout"
-    #'metal-prolog-basculer-tout)
-
-   (metal-toolbar-separator)
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "⬇️➡️")
-    (format "Basculer la position du shell Prolog (actuel : %s)"
-            (if (eq metal-prolog-shell-position-defaut 'bottom)
-                "en bas" "à droite"))
-    #'metal-prolog-shell-bascule-position)
-
-   (metal-toolbar-separator)
-
-   (metal-toolbar-button
-    (metal-toolbar-emoji "📖")
-    "Documentation"
-    #'documentation-prolog)
-
-   ;; Extension optionnelle Metal-Agent.
-   ;; IMPORTANT : on protege l'appel avec `ignore-errors' pour ne jamais
-   ;; perdre toute la header-line Prolog si metal-agent.el est absent,
-   ;; incomplet ou en cours de developpement.
-   (or (and (fboundp 'metal-agent-toolbar-buttons)
-            (ignore-errors (metal-agent-toolbar-buttons)))
-       "")
-
-   " " (metal-toolbar-vpadding)))
+  "Construit la barre d'outils Prolog via `metal-toolbar-build'."
+  (metal-toolbar-build
+   `((:emoji "▶️"  :tooltip "Consulter le programme"
+             :command prolog-save-consult)
+     (:emoji "🐛"  :tooltip "Lancer le débogueur (trace)"
+             :command ,(lambda () (interactive)
+                         (metal-prolog-send-command "trace.")))
+     (:char "cl:-…"  :tooltip "Plier / déplier tout"
+            :command metal-prolog-basculer-tout)
+     (:sep)
+     (:emoji "↔️"  :tooltip ,(lambda ()
+                               (format "Basculer la position du shell Prolog (actuel : %s)"
+                                       (if (eq metal-prolog-shell-position-defaut 'bottom)
+                                           "en bas" "à droite")))
+             :command metal-prolog-shell-bascule-position)
+     (:sep)
+     (:emoji "📖"  :tooltip "Documentation"
+             :command documentation-prolog))
+   :agent t))
 
 (defun metal-prolog-header-line ()
   "Active la barre d'outils dans le tampon Prolog courant."

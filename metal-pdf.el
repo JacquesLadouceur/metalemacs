@@ -48,11 +48,6 @@
   :type 'boolean
   :group 'metal-pdf)
 
-(defcustom metal-pdf-icon-height 1.8
-  "Hauteur des icônes de la barre PDF."
-  :type 'number
-  :group 'metal-pdf)
-
 (defcustom metal-pdf-colors
   '((highlight . "#d4a017")    ; jaune surligneur
     (underline . "#2980b9")    ; bleu
@@ -71,15 +66,6 @@
   :group 'metal-pdf)
 
 ;;; --- Helpers --------------------------------------------------------------
-
-(defun metal-pdf--icon (name color-key &optional fallback raise)
-  "Icône nerd-icons NAME colorée selon COLOR-KEY (clé de `metal-pdf-colors')."
-  (metal-toolbar-icon name
-                      :color (or (alist-get color-key metal-pdf-colors)
-                                 "gray40")
-                      :height metal-pdf-icon-height
-                      :raise -0.1
-                      :fallback fallback))
 
 ;;; --- Impression -----------------------------------------------------------
 
@@ -223,91 +209,88 @@ Installer SumatraPDF (~12 Mo) pour résoudre le problème ? "))
      (call-interactively #'pdf-misc-print-document))
     (_ (user-error "Stratégie inconnue : %s" metal-pdf-print-strategy))))
 
+(defun metal-pdf-ouvrir-systeme ()
+  "Ouvre le PDF courant dans l'application système par défaut.
+Pour imprimer : ouvrir ici puis utiliser le dialogue d'impression
+natif de l'application (Cmd+P sur macOS)."
+  (interactive)
+  (unless (and buffer-file-name (file-exists-p buffer-file-name))
+    (user-error "Le tampon n'est pas associé à un fichier PDF"))
+  (let ((file (expand-file-name buffer-file-name)))
+    (pcase system-type
+      ('darwin     (start-process "metal-pdf-open" nil "open" file))
+      ('windows-nt (w32-shell-execute "open" file))
+      (_           (start-process "metal-pdf-open" nil "xdg-open" file)))
+    (message "PDF ouvert dans l'application système (Cmd+P pour imprimer)")))
+
 ;;; --- Construction de la barre --------------------------------------------
 
+(defun metal-pdf--coul (cle)
+  "Couleur associée à CLE dans `metal-pdf-colors', ou gris par défaut."
+  (or (alist-get cle metal-pdf-colors) "gray40"))
+
 (defun metal-pdf-toolbar-format ()
-  "Construit dynamiquement la barre d'outils PDF."
-  (concat
-   (metal-toolbar-vpadding) " "
-
-   ;; ----- Annotations de surface -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-marker" 'highlight "✎")
-                         "Surligner la sélection"
-                         'pdf-annot-add-highlight-markup-annotation)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-format_underline" 'underline "U")
-                         "Souligner la sélection"
-                         'pdf-annot-add-underline-markup-annotation)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-format_strikethrough" 'strikeout "S")
-                         "Biffer la sélection"
-                         'pdf-annot-add-strikeout-markup-annotation)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-vector_curve" 'squiggly "~")
-                         "Souligner en ondulé"
-                         'pdf-annot-add-squiggly-markup-annotation)
-   (metal-toolbar-separator)
-
-   ;; ----- Note collante -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-note_edit_outline" 'note "✉" -0.1)
-                         "Ajouter une note"
-                         'pdf-annot-add-text-annotation)
-   (metal-toolbar-separator)
-
-   ;; ----- Gestion des annotations -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-format_list_bulleted" 'list "≡" -0.1)
-                         "Lister toutes les annotations"
-                         'pdf-annot-list-annotations)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-delete_outline" 'delete "✗" -0.1)
-                         "Supprimer une annotation (cliquer dessus)"
-                         'pdf-annot-delete)
-   (metal-toolbar-separator)
-
-   ;; ----- Navigation -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-page_first" 'nav "⏮" -0.1)
-                         "Première page"
-                         'pdf-view-first-page)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-arrow_left" 'nav "◀" -0.1)
-                         "Page précédente"
-                         'pdf-view-previous-page-command)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-arrow_right" 'nav "▶")
-                         "Page suivante"
-                         'pdf-view-next-page-command)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-page_last" 'nav "⏭")
-                         "Dernière page"
-                         'pdf-view-last-page)
-   (metal-toolbar-separator)
-
-   ;; ----- Zoom -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-magnify_plus_outline" 'zoom "+")
-                         "Zoom avant"
-                         'pdf-view-enlarge)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-magnify_minus_outline" 'zoom "−")
-                         "Zoom arrière"
-                         'pdf-view-shrink)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-fit_to_page_outline" 'zoom "▢")
-                         "Ajuster à la page"
-                         'pdf-view-fit-page-to-window)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-arrow_expand_horizontal" 'zoom "↔")
-                         "Ajuster à la largeur"
-                         'pdf-view-fit-width-to-window)
-   (metal-toolbar-separator)
-
-   ;; ----- Recherche -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-magnify" 'search "🔍")
-                         "Rechercher dans le PDF"
-                         'isearch-forward)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-text_search" 'search "⌕")
-                         "Occurrences (pdf-occur)"
-                         'pdf-occur)
-   (metal-toolbar-separator)
-
-   ;; ----- Fichier -----
-   (metal-toolbar-button (metal-pdf--icon "nf-md-content_save_outline" 'save "💾")
-                         "Sauvegarder le PDF avec annotations"
-                         'save-buffer)
-   (metal-toolbar-button (metal-pdf--icon "nf-md-printer" 'print "⎙")
-                         "Imprimer"
-                         'metal-pdf-imprimer)
-
-   " " (metal-toolbar-vpadding)))
+  "Construit dynamiquement la barre d'outils PDF via `metal-toolbar-build'."
+  (metal-toolbar-build
+   `(;; ----- Annotations de surface -----
+     (:emoji "🖍️" :color ,(metal-pdf--coul 'highlight)
+             :tooltip "Surligner la sélection"
+             :command pdf-annot-add-highlight-markup-annotation)
+     (:char "S" :style underline :color ,(metal-pdf--coul 'underline)
+            :tooltip "Souligner la sélection"
+            :command pdf-annot-add-underline-markup-annotation)
+     (:char "B" :style strike :color ,(metal-pdf--coul 'strikeout)
+            :tooltip "Biffer la sélection"
+            :command pdf-annot-add-strikeout-markup-annotation)
+     (:emoji "〰️" :color ,(metal-pdf--coul 'squiggly)
+             :tooltip "Souligner en ondulé"
+             :command pdf-annot-add-squiggly-markup-annotation)
+     (:sep)
+     ;; ----- Note collante -----
+     (:emoji "📝" :color ,(metal-pdf--coul 'note)
+             :tooltip "Ajouter une note"
+             :command pdf-annot-add-text-annotation)
+     (:sep)
+     ;; ----- Gestion des annotations -----
+     (:emoji "📋" :color ,(metal-pdf--coul 'list)
+             :tooltip "Lister toutes les annotations"
+             :command pdf-annot-list-annotations)
+     (:emoji "🗑️" :color ,(metal-pdf--coul 'delete)
+             :tooltip "Supprimer une annotation (cliquer dessus)"
+             :command pdf-annot-delete)
+     (:sep)
+     ;; ----- Navigation -----
+     (:emoji "⏮️" :color ,(metal-pdf--coul 'nav)
+             :tooltip "Première page" :command pdf-view-first-page)
+     (:emoji "◀️" :color ,(metal-pdf--coul 'nav)
+             :tooltip "Page précédente" :command pdf-view-previous-page-command)
+     (:emoji "▶️" :color ,(metal-pdf--coul 'nav)
+             :tooltip "Page suivante" :command pdf-view-next-page-command)
+     (:emoji "⏭️" :color ,(metal-pdf--coul 'nav)
+             :tooltip "Dernière page" :command pdf-view-last-page)
+     (:sep)
+     ;; ----- Zoom -----
+     (:emoji "➕" :color ,(metal-pdf--coul 'zoom)
+             :tooltip "Zoom avant" :command pdf-view-enlarge)
+     (:emoji "➖" :color ,(metal-pdf--coul 'zoom)
+             :tooltip "Zoom arrière" :command pdf-view-shrink)
+     (:emoji "🔳" :color ,(metal-pdf--coul 'zoom)
+             :tooltip "Ajuster à la page" :command pdf-view-fit-page-to-window)
+     (:emoji "↔️" :color ,(metal-pdf--coul 'zoom)
+             :tooltip "Ajuster à la largeur" :command pdf-view-fit-width-to-window)
+     (:sep)
+     ;; ----- Recherche -----
+     (:emoji "🔍" :color ,(metal-pdf--coul 'search)
+             :tooltip "Rechercher dans le PDF" :command isearch-forward)
+     (:emoji "🔎" :color ,(metal-pdf--coul 'search)
+             :tooltip "Occurrences (pdf-occur)" :command pdf-occur)
+     (:sep)
+     ;; ----- Fichier -----
+     (:emoji "💾" :color ,(metal-pdf--coul 'save)
+             :tooltip "Sauvegarder le PDF avec annotations" :command save-buffer)
+     (:emoji "📂" :color ,(metal-pdf--coul 'print)
+             :tooltip "Ouvrir dans l'application système (Cmd+P pour imprimer)"
+             :command metal-pdf-ouvrir-systeme))))
 
 ;;; --- Mode mineur ---------------------------------------------------------
 

@@ -25,6 +25,12 @@
   "Largeur courante de Treemacs (persistée dans metal-prefs.el).
 Modifiée automatiquement quand l'utilisateur redimensionne manuellement.")
 
+(defvar metal-treemacs-icones-taille 20
+  "Taille des icônes PNG natives de Treemacs, en pixels.
+Persistée dans metal-prefs.el.  Appliquée via `treemacs-resize-icons'.
+Réglable à la volée par `M-x treemacs-resize-icons' (un conseil ci-après
+sauvegarde alors la nouvelle valeur).")
+
 (use-package treemacs
   :straight t
   :defer t
@@ -39,9 +45,19 @@ Modifiée automatiquement quand l'utilisateur redimensionne manuellement.")
         treemacs-collapse-dirs 0
         treemacs-display-in-side-window t
         treemacs-position 'left
-        treemacs-no-png-images t
+        treemacs-no-png-images nil
         treemacs-is-never-other-window t)
   (treemacs-git-mode -1)
+  ;; --- Taille des icônes PNG natives ---
+  ;; Appliquer la taille persistée et la maintenir à jour quand l'utilisateur
+  ;; règle via `M-x treemacs-resize-icons'.
+  (treemacs-resize-icons metal-treemacs-icones-taille)
+  (defun metal-treemacs--save-icon-size (size &rest _)
+    "Mémoriser et persister la taille d'icône SIZE choisie par l'utilisateur."
+    (setq metal-treemacs-icones-taille size)
+    (when (fboundp 'metal-prefs-save)
+      (metal-prefs-save)))
+  (advice-add 'treemacs-resize-icons :after #'metal-treemacs--save-icon-size)
   ;; --- Bordure douce et épaisse (facilite le drag) ---
   (setq window-divider-default-right-width 6
         window-divider-default-places 'right-only)
@@ -85,394 +101,17 @@ Modifiée automatiquement quand l'utilisateur redimensionne manuellement.")
 ;;; Thème et rafraîchissement
 ;;; ═══════════════════════════════════════════════════════════════════
 
-;;; Thème nerd-icons — icônes vectorielles épurées, multi-plateforme
 ;;; ═══════════════════════════════════════════════════════════════════
+;;; Icônes : thème natif « Default » de Treemacs (PNG intégrés)
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; MetalEmacs n'utilise plus nerd-icons.  Treemacs s'appuie sur son thème
+;; natif « Default » (images PNG incluses dans le paquet treemacs), activé
+;; via `treemacs-no-png-images nil' dans le bloc `use-package treemacs'
+;; ci-dessus.  La taille des icônes est réglée par `treemacs-resize-icons'
+;; (variable `metal-treemacs-icones-taille', persistée).  Aucune police ni
+;; paquet externe n'est requis.
 
-;; nerd-icons + treemacs-nerd-icons : rendu épuré et identique partout
-;; nerd-icons + treemacs-nerd-icons : rendu épuré et identique partout
-;; (use-package nerd-icons
-;;   :straight t
-;;   :config
-;;   ;; Sous Windows : court-circuiter le read-directory-name interactif
-;;   ;; et enregistrer la police dans HKCU sans droits admin
-;;   (when (eq system-type 'windows-nt)
-;;     (defun metal--install-nerd-font-windows ()
-;;       "Enregistre NFM.ttf dans HKCU\\...\\Fonts sans droits administrateur."
-;;       (let* ((font-dir (expand-file-name "AppData/Local/Microsoft/Windows/Fonts"
-;;                                          (getenv "USERPROFILE")))
-;;              (font-file (expand-file-name "NFM.ttf" font-dir)))
-;;         (when (file-exists-p font-file)
-;;           (call-process "reg" nil nil nil
-;;                         "add"
-;;                         "HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
-;;                         "/v" "Symbols Nerd Font Mono (TrueType)"
-;;                         "/t" "REG_SZ"
-;;                         "/d" font-file
-;;                         "/f"))))
-;;     (advice-add 'nerd-icons-install-fonts :around
-;;                 (lambda (orig &optional pfx)
-;;                   (cl-letf (((symbol-function 'read-directory-name)
-;;                              (lambda (&rest _)
-;;                                (expand-file-name
-;;                                 "AppData/Local/Microsoft/Windows/Fonts"
-;;                                 (getenv "USERPROFILE")))))
-;;                     (funcall orig pfx)
-;;                     (metal--install-nerd-font-windows)))
-;;                 '((name . metal--nerd-icons-no-dialog))))  ; ← ferme le when
-;;   ;; Installer la police automatiquement si absente (tous les OS)
-;;   (unless (or (find-font (font-spec :family "Symbols Nerd Font Mono"))
-;;               (and (eq system-type 'windows-nt)
-;;                    (file-exists-p
-;;                     (expand-file-name "AppData/Local/Microsoft/Windows/Fonts/NFM.ttf"
-;;                                       (getenv "USERPROFILE")))))
-;;     (nerd-icons-install-fonts t)
-;;     ;; Message bloquant : arrête le chargement d'Emacs tant que
-;;     ;; l'utilisateur n'a pas lu le message et confirmé.
-;;     (with-output-to-temp-buffer "*MetalEmacs — Redémarrage requis*"
-;;       (princ "╔══════════════════════════════════════════════════════════════════╗\n")
-;;       (princ "║                                                                  ║\n")
-;;       (princ "║   📦  Polices Nerd Fonts installées                              ║\n")
-;;       (princ "║                                                                  ║\n")
-;;       (princ "║   Pour que les icônes s'affichent correctement,                  ║\n")
-;;       (princ "║   fermez Emacs et relancez-le.                                   ║\n")
-;;       (princ "║                                                                  ║\n")
-;;       (princ "╚══════════════════════════════════════════════════════════════════╝\n"))
-;;     (read-from-minibuffer
-;;      "Appuyez sur Entrée pour continuer le démarrage (icônes affichées comme carrés jusqu'au redémarrage)... ")))
-
-
-;; (use-package nerd-icons
-;;   :straight t
-;;   :config
-
-;;   ;; ─── Helper multi-plateforme : installer Hack Nerd Font Mono ───
-;;   (defun metal--install-hack-nerd-font ()
-;;     "Installe Hack Nerd Font Mono dans le dossier de fontes utilisateur.
-;; Mapping de codepoints conforme à `nerd-icons.el', contrairement à
-;; Symbols Nerd Font Mono 3.4.x téléchargée par `nerd-icons-install-fonts'.
-;; Retourne le chemin du fichier installé, ou nil en cas d'échec."
-;;     (let* ((url "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/Hack.zip")
-;;            (font-dir (cond ((eq system-type 'darwin)
-;;                             (expand-file-name "~/Library/Fonts"))
-;;                            ((eq system-type 'gnu/linux)
-;;                             (expand-file-name "~/.local/share/fonts"))
-;;                            ((eq system-type 'windows-nt)
-;;                             (expand-file-name "AppData/Local/Microsoft/Windows/Fonts"
-;;                                               (getenv "USERPROFILE")))))
-;;            (zip-file (expand-file-name "Hack.zip" temporary-file-directory))
-;;            (target-font (expand-file-name "HackNerdFontMono-Regular.ttf" font-dir)))
-;;       (unless (file-directory-p font-dir)
-;;         (make-directory font-dir t))
-;;       (message "Téléchargement de Hack Nerd Font Mono...")
-;;       (url-copy-file url zip-file t)
-;;       ;; Extraction avec tar (disponible sur macOS, Linux, Windows 10+)
-;;       (let ((default-directory font-dir))
-;;         (call-process "tar" nil nil nil "-xf" zip-file
-;;                       "HackNerdFontMono-Regular.ttf"))
-;;       (delete-file zip-file)
-;;       ;; Linux : rafraîchir le cache fontconfig
-;;       (when (eq system-type 'gnu/linux)
-;;         (call-process "fc-cache" nil nil nil "-f"))
-;;       ;; Windows : enregistrer dans HKCU pour utilisation sans droits admin
-;;       (when (and (eq system-type 'windows-nt) (file-exists-p target-font))
-;;         (call-process "reg" nil nil nil
-;;                       "add"
-;;                       "HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
-;;                       "/v" "Hack Nerd Font Mono (TrueType)"
-;;                       "/t" "REG_SZ"
-;;                       "/d" target-font
-;;                       "/f"))
-;;       (and (file-exists-p target-font) target-font)))
-
-;;   ;; ─── Migration : supprimer NFM.ttf (Symbols Nerd Font Mono) si présent ───
-;;   ;; Cette ancienne fonte 3.4.0 a un mapping incompatible avec nerd-icons.el.
-;;   (let ((legacy-fonts
-;;          (cond ((eq system-type 'darwin)
-;;                 (list (expand-file-name "~/Library/Fonts/NFM.ttf")))
-;;                ((eq system-type 'gnu/linux)
-;;                 (list (expand-file-name "~/.local/share/fonts/NFM.ttf")))
-;;                ((eq system-type 'windows-nt)
-;;                 (list (expand-file-name "AppData/Local/Microsoft/Windows/Fonts/NFM.ttf"
-;;                                         (getenv "USERPROFILE")))))))
-;;     (dolist (f legacy-fonts)
-;;       (when (file-exists-p f)
-;;         (delete-file f)
-;;         (message "Ancienne fonte Symbols Nerd Font Mono supprimée : %s" f))))
-
-;;   ;; ─── Installer Hack Nerd Font Mono si absente ───
-;;   (unless (find-font (font-spec :family "Hack Nerd Font Mono"))
-;;     (metal--install-hack-nerd-font)
-;;     (with-output-to-temp-buffer "*MetalEmacs — Redémarrage requis*"
-;;       (princ "╔══════════════════════════════════════════════════════════════════╗\n")
-;;       (princ "║                                                                  ║\n")
-;;       (princ "║   📦  Hack Nerd Font Mono installée                              ║\n")
-;;       (princ "║                                                                  ║\n")
-;;       (princ "║   Pour que les icônes s'affichent correctement,                  ║\n")
-;;       (princ "║   fermez Emacs et relancez-le.                                   ║\n")
-;;       (princ "║                                                                  ║\n")
-;;       (princ "╚══════════════════════════════════════════════════════════════════╝\n"))
-;;     (read-from-minibuffer
-;;      "Appuyez sur Entrée pour continuer le démarrage (icônes affichées comme carrés jusqu'au redémarrage)... "))
-
-;;   ;; ─── Mapper la zone Unicode privée vers Hack Nerd Font Mono ───
-;;   ;; Sans cela, Emacs ne sait pas afficher les glyphes nerd-icons (zones
-;;   ;; U+E000–U+F8FF et U+F0000–U+FFFFF) même si la fonte est installée :
-;;   ;; il les rend comme des boîtes hexadécimales de secours.
-;;   (when (find-font (font-spec :family "Hack Nerd Font Mono"))
-;;     (set-fontset-font t '(#xe000 . #xf8ff)   "Hack Nerd Font Mono" nil 'prepend)
-;;     (set-fontset-font t '(#xf0000 . #xfffff) "Hack Nerd Font Mono" nil 'prepend)))
-
-;; ;; ─── Garde-fou : appliquer le mapping fontset hors du :config ───
-;; ;; Le :config de use-package peut être mis en cache par straight.el et ne
-;; ;; pas se réexécuter à chaque démarrage. On duplique donc le mapping ici
-;; ;; pour garantir son application. C'est idempotent — si le :config a déjà
-;; ;; appliqué le mapping, ce second appel n'a aucun effet visible.
-;; (when (find-font (font-spec :family "Hack Nerd Font Mono"))
-;;   (set-fontset-font t '(#xe000 . #xf8ff)   "Hack Nerd Font Mono" nil 'prepend)
-;;   (set-fontset-font t '(#xf0000 . #xfffff) "Hack Nerd Font Mono" nil 'prepend))
-
-
-(use-package nerd-icons
-  :straight t
-  :config
-
-  (defun metal--extraire-zip (zip-file fichier-cible dest-dir)
-    "Extrait FICHIER-CIBLE de ZIP-FILE vers DEST-DIR, à plat.
-Essaie unzip, puis bsdtar, puis python3.  Retourne t si succès, nil sinon."
-    (let ((default-directory dest-dir)
-          (journal (get-buffer-create "*MetalEmacs Journal*")))
-      (cond
-       ;; unzip : standard sur Linux et macOS.  -o écrase, -j ignore les sous-dossiers
-       ((executable-find "unzip")
-        (zerop (call-process "unzip" nil journal nil
-                             "-o" "-j" zip-file fichier-cible)))
-       ;; bsdtar : présent sur macOS, lit les zips via libarchive
-       ((executable-find "bsdtar")
-        (zerop (call-process "bsdtar" nil journal nil
-                             "-xf" zip-file fichier-cible)))
-       ;; python3 : fallback universel (toujours présent sur Ubuntu/Debian moderne)
-       ((executable-find "python3")
-        (zerop (call-process
-                "python3" nil journal nil "-c"
-                (format
-                 "import zipfile; zipfile.ZipFile(r'%s').extract(r'%s', r'%s')"
-                 zip-file fichier-cible dest-dir))))
-       (t
-        (message "MetalEmacs : aucun outil d'extraction zip trouve (unzip, bsdtar, python3)")
-        nil))))
-
-  (defun metal--install-hack-nerd-font ()
-    "Installe Hack Nerd Font Mono dans le dossier de fontes utilisateur.
-Retourne le chemin du fichier installé si succès, nil si échec."
-    (let* ((url "https://github.com/ryanoasis/nerd-fonts/releases/download/v3.4.0/Hack.zip")
-           (font-dir (cond ((eq system-type 'darwin)
-                            (expand-file-name "~/Library/Fonts"))
-                           ((eq system-type 'gnu/linux)
-                            (expand-file-name "~/.local/share/fonts"))
-                           ((eq system-type 'windows-nt)
-                            (expand-file-name
-                             "AppData/Local/Microsoft/Windows/Fonts"
-                             (getenv "USERPROFILE")))))
-           (zip-file (expand-file-name "Hack.zip" temporary-file-directory))
-           (target-font (expand-file-name "HackNerdFontMono-Regular.ttf" font-dir))
-           (journal (get-buffer-create "*MetalEmacs Journal*")))
-      (unless (file-directory-p font-dir)
-        (make-directory font-dir t))
-      (message "Telechargement de Hack Nerd Font Mono...")
-      ;; Téléchargement avec gestion d'erreur
-      (let ((telechargement-ok
-             (condition-case err
-                 (progn (url-copy-file url zip-file t) t)
-               (error
-                (message "MetalEmacs : echec du telechargement : %s"
-                         (error-message-string err))
-                nil))))
-        (when telechargement-ok
-          ;; Extraction (remplace l'ancien `tar -xf` qui échoue sur Linux)
-          (let ((extraction-ok
-                 (metal--extraire-zip zip-file
-                                      "HackNerdFontMono-Regular.ttf"
-                                      font-dir)))
-            (when (file-exists-p zip-file)
-              (delete-file zip-file))
-            (cond
-             ((not extraction-ok)
-              (message "MetalEmacs : echec de l'extraction du zip — voir *MetalEmacs Journal*")
-              nil)
-             ((not (file-exists-p target-font))
-              (message "MetalEmacs : extraction signalee OK mais %s introuvable"
-                       target-font)
-              nil)
-             (t
-              ;; Linux : rafraîchir le cache fontconfig explicitement
-              (when (eq system-type 'gnu/linux)
-                (call-process "fc-cache" nil journal nil "-f" font-dir))
-              ;; Windows : enregistrement registre comme avant
-              (when (eq system-type 'windows-nt)
-                (call-process
-                 "reg" nil nil nil "add"
-                 "HKCU\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts"
-                 "/v" "Hack Nerd Font Mono (TrueType)"
-                 "/t" "REG_SZ" "/d" target-font "/f"))
-              target-font)))))))
-
-  ;; Supprimer l'ancienne fonte incompatible si elle existe.
-  (let ((legacy-fonts
-         (cond ((eq system-type 'darwin)
-                (list (expand-file-name "~/Library/Fonts/NFM.ttf")))
-               ((eq system-type 'gnu/linux)
-                (list (expand-file-name "~/.local/share/fonts/NFM.ttf")))
-               ((eq system-type 'windows-nt)
-                (list
-                 (expand-file-name
-                  "AppData/Local/Microsoft/Windows/Fonts/NFM.ttf"
-                  (getenv "USERPROFILE")))))))
-    (dolist (f legacy-fonts)
-      (when (file-exists-p f)
-        (delete-file f)
-        (message "Ancienne fonte Symbols Nerd Font Mono supprimee : %s" f))))
-
-  ;; Installer Hack Nerd Font Mono si elle est absente.
-  ;; N'affiche « Redemarrage requis » QUE si l'installation a vraiment reussi.
-  (unless (find-font (font-spec :family "Hack Nerd Font Mono"))
-    (let ((resultat (metal--install-hack-nerd-font)))
-      (cond
-       (resultat
-        (with-output-to-temp-buffer "*MetalEmacs - Redemarrage requis*"
-          (princ "Hack Nerd Font Mono installee.\n\n")
-          (princ "Fermez Emacs et relancez-le pour que les icones s'affichent correctement.\n"))
-        (read-from-minibuffer
-         "Appuyez sur Entree pour continuer le demarrage... "))
-       (t
-        (message "MetalEmacs : installation de Hack Nerd Font Mono echouee. Consultez *MetalEmacs Journal* pour les details.")))))
-
-  ;; nerd-icons-scale-factor reste a sa valeur par defaut (1.0) car
-  ;; il affecte TOUTES les icones nerd-icons globalement, ce qui
-  ;; deformerait les barres d'outils mixtes (ex : Python toolbar).
-  ;; La taille des icones Treemacs est ajustee via treemacs-text-scale
-  ;; (voir le bloc use-package treemacs au debut du fichier).
-  )
-
-(defun metal-nerd-icons-appliquer-fontset ()
-  "Mapper les glyphes Nerd Icons vers Hack Nerd Font Mono."
-  (when (and (display-graphic-p)
-             (find-font (font-spec :family "Hack Nerd Font Mono")))
-    (set-fontset-font t '(#xe000 . #xf8ff)
-                       "Hack Nerd Font Mono" nil 'prepend)
-    (set-fontset-font t '(#xf0000 . #xfffff)
-                       "Hack Nerd Font Mono" nil 'prepend)
-    (message "MetalEmacs: fontset Nerd Icons applique.")))
-
-;; Cas normal : apres creation du frame graphique principal.
-(add-hook 'window-setup-hook #'metal-nerd-icons-appliquer-fontset)
-
-;; Nouveaux frames, utile avec emacsclient.
-(add-hook 'after-make-frame-functions
-          (lambda (_frame)
-            (metal-nerd-icons-appliquer-fontset)))
-
-;; Windows : la fonte peut etre disponible avec retard.
-(when (eq system-type 'windows-nt)
-  (run-at-time 1 nil #'metal-nerd-icons-appliquer-fontset)
-  (run-at-time 3 nil #'metal-nerd-icons-appliquer-fontset))
-
-;; macOS/Linux : application immediate si possible.
-(unless (eq system-type 'windows-nt)
-  (metal-nerd-icons-appliquer-fontset))
-
-(use-package treemacs-nerd-icons
-  :straight t
-  :after (treemacs nerd-icons)
-  :config
-  (treemacs-load-theme "nerd-icons")
-
-  ;; ── Personnalisations Metal : palette Finder épurée ──
-
-  ;; Dossiers bleu Finder au lieu de marron
-  (treemacs-create-icon
-   :icon (concat " "
-                 (nerd-icons-faicon "nf-fa-chevron_down"
-                                    :face '(:foreground "#8E8E93" :height 0.7))
-                 " "
-                 (nerd-icons-faicon "nf-fa-folder_open"
-                                    :face '(:foreground "#64B5F6"))
-                 " ")
-   :extensions (dir-open)
-   :fallback 'same-as-icon)
-
-  (treemacs-create-icon
-   :icon (concat " "
-                 (nerd-icons-faicon "nf-fa-chevron_right"
-                                    :face '(:foreground "#8E8E93" :height 0.7))
-                 " "
-                 (nerd-icons-faicon "nf-fa-folder"
-                                    :face '(:foreground "#64B5F6"))
-                 " ")
-   :extensions (dir-closed)
-   :fallback 'same-as-icon)
-
-  ;; Root : chevrons discrets
-  (treemacs-create-icon
-   :icon (concat " "
-                 (nerd-icons-faicon "nf-fa-chevron_down"
-                                    :face '(:foreground "#8E8E93" :height 0.8))
-                 " ")
-   :extensions (root-open)
-   :fallback 'same-as-icon)
-
-  (treemacs-create-icon
-   :icon (concat " "
-                 (nerd-icons-faicon "nf-fa-chevron_right"
-                                    :face '(:foreground "#8E8E93" :height 0.8))
-                 " ")
-   :extensions (root-closed)
-   :fallback 'same-as-icon)
-
-  ;; Images : icône photo propre au lieu de "PNG" rouge
-  (dolist (ext '("png" "jpg" "jpeg" "gif" "bmp" "svg" "ico" "webp" "tiff" "tif"))
-    (treemacs-create-icon
-     :icon (concat " "
-                   (nerd-icons-faicon "nf-fa-file_image_o"
-                                      :face '(:foreground "#AF52DE"))
-                   " ")
-     :extensions (ext)
-     :fallback 'same-as-icon))
-
-  ;; Fichiers Prolog (.pl) — icône code au lieu de Perl
-  (treemacs-create-icon
-   :icon (concat " "
-                 (nerd-icons-faicon "nf-fa-code"
-                                    :face '(:foreground "#007AFF"))
-                 " ")
-   :extensions ("pl" "pro" "prolog")
-   :fallback 'same-as-icon)
-
-  ;; Fichiers Org — vert distinctif
-  (treemacs-create-icon
-   :icon (concat " "
-                 (nerd-icons-sucicon "nf-custom-orgmode"
-                                     :face '(:foreground "#34C759"))
-                 " ")
-   :extensions ("org")
-   :fallback 'same-as-icon)
-
-  ;; PDF — rouge vif
-  (treemacs-create-icon
-   :icon (concat " "
-                 (nerd-icons-faicon "nf-fa-file_pdf_o"
-                                    :face '(:foreground "#FF3B30"))
-                 " ")
-   :extensions ("pdf")
-   :fallback 'same-as-icon)
-
-  ;; Quarto
-  (treemacs-create-icon
-   :icon (concat " "
-                 (nerd-icons-faicon "nf-fa-file_text_o"
-                                    :face '(:foreground "#FF9500"))
-                 " ")
-   :extensions ("qmd")
-   :fallback 'same-as-icon))
 
 (with-eval-after-load 'treemacs
   ;; Rafraîchissement automatique après certaines opérations
@@ -1029,6 +668,6 @@ Ouvre Treemacs si nécessaire et, si possible, se place sur le volume ajouté."
       (toggle-frame-fullscreen))))  ;; Active le mode plein écran
 
 
-(provide 'metal-treemacs)
+(provide 'metal-explorateur)
 
 ;;; metal-treemacs.el ends here

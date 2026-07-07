@@ -246,6 +246,164 @@ demander immédiatement un nom pour créer la première."
         (switch-to-buffer buffer)))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
+;;; Signets : buffer dédié pour gérer plusieurs fichiers de signets
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defcustom metal-dashboard-signets-tri 'date
+  "Critère de tri par défaut dans le buffer « Signets ».
+Valeurs possibles :
+  - `date' : par date de modification, plus récente en premier
+  - `nom'  : par ordre alphabétique du nom de fichier"
+  :type '(choice (const :tag "Par date" date)
+                 (const :tag "Par nom" nom))
+  :group 'metal-dashboard)
+
+(defun metal-dashboard--signets-dir ()
+  "Retourne le dossier des signets défini dans `metal-org.el'.
+Fournit une valeur de repli si le module n'est pas encore chargé."
+  (if (boundp 'metal-org-signets-dir)
+      metal-org-signets-dir
+    (expand-file-name "~/Documents/MetalEmacs/Signets/")))
+
+(defun metal-dashboard--signets-creer-template (filepath)
+  "Insérer un en-tête Org standard dans le fichier de signets FILEPATH.
+Le titre est dérivé du nom de fichier (sans extension) et une première
+section « Général » est ajoutée."
+  (let ((titre (file-name-base filepath)))
+    (insert (format "#+TITLE: %s\n\n* Général\n" titre))))
+
+(defun metal-dashboard--signets-creer-nouvelle ()
+  "Demander un nom de fichier de signets et le créer dans le dossier.
+Si l'utilisateur n'a pas tapé l'extension .org, elle est ajoutée
+automatiquement. Le fichier créé devient le fichier de signets actif."
+  (interactive)
+  (let* ((dir (metal-dashboard--signets-dir))
+         (nom (read-string "Nom de la nouvelle liste de signets : "))
+         (nom-avec-ext (if (string-suffix-p ".org" nom)
+                           nom
+                         (concat nom ".org")))
+         (filepath (expand-file-name nom-avec-ext dir))
+         (nouveau (not (file-exists-p filepath))))
+    (when (string-empty-p nom)
+      (user-error "Nom de fichier de signets vide"))
+    (make-directory dir t)
+    (when (fboundp 'metal-org-selectionner-signets)
+      (metal-org-selectionner-signets filepath))
+    (find-file filepath)
+    (when (and nouveau (= (buffer-size) 0))
+      (metal-dashboard--signets-creer-template filepath)
+      (save-buffer))))
+
+(defun metal-dashboard--signets-liste-fichiers ()
+  "Retourner la liste des fichiers .org du dossier des signets.
+Chaque élément est un cons (FILEPATH . MTIME) où MTIME est le
+moment de la dernière modification."
+  (let ((dir (metal-dashboard--signets-dir)))
+    (when (file-directory-p dir)
+      (mapcar (lambda (f)
+                (cons f (file-attribute-modification-time
+                         (file-attributes f))))
+              (directory-files dir t "\\.org\\'" t)))))
+
+(defun metal-dashboard--signets-trier (fichiers critere)
+  "Trier la liste FICHIERS selon CRITERE (`date' ou `nom').
+Pour `date', les plus récents apparaissent en premier."
+  (cond
+   ((eq critere 'nom)
+    (sort fichiers (lambda (a b)
+                     (string< (file-name-nondirectory (car a))
+                              (file-name-nondirectory (car b))))))
+   (t  ; date par défaut
+    (sort fichiers (lambda (a b)
+                     (time-less-p (cdr b) (cdr a)))))))
+
+(defun metal-dashboard--signets-bouton-ouvrir (filepath)
+  "Construire l'action qui ouvre FILEPATH comme fichier de signets actif.
+Remplace le buffer de sélection courant."
+  (lambda (_button)
+    (let ((buffer-signets (current-buffer)))
+      (when (fboundp 'metal-org-selectionner-signets)
+        (metal-org-selectionner-signets filepath))
+      (find-file filepath)
+      (kill-buffer buffer-signets))))
+
+(defun metal-dashboard--signets-bouton-creer ()
+  "Construire l'action qui crée un nouveau fichier de signets."
+  (lambda (_button)
+    (let ((buffer-signets (current-buffer)))
+      (call-interactively #'metal-dashboard--signets-creer-nouvelle)
+      (when (buffer-live-p buffer-signets)
+        (kill-buffer buffer-signets)))))
+
+(defun metal-dashboard--signets-changer-tri ()
+  "Basculer le critère de tri entre date et nom, puis rafraîchir le buffer."
+  (interactive)
+  (setq metal-dashboard-signets-tri
+        (if (eq metal-dashboard-signets-tri 'date) 'nom 'date))
+  (metal-dashboard-signets-ouvrir))
+
+(defun metal-dashboard-signets-ouvrir ()
+  "Ouvrir le buffer `*Signets*' listant les fichiers de signets du dossier.
+Si le dossier n'existe pas, le créer. Si aucun fichier n'existe,
+demander immédiatement un nom pour créer le premier."
+  (interactive)
+  (let ((dir (metal-dashboard--signets-dir)))
+    (make-directory dir t)
+    (let ((fichiers (metal-dashboard--signets-liste-fichiers)))
+      (if (null fichiers)
+          ;; Aucun fichier : on demande directement un nom.
+          (call-interactively #'metal-dashboard--signets-creer-nouvelle)
+        ;; Au moins un fichier : afficher le buffer dédié.
+        (let ((buffer (get-buffer-create "*Signets*"))
+              (fichiers-tries (metal-dashboard--signets-trier
+                               fichiers metal-dashboard-signets-tri)))
+          (with-current-buffer buffer
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              ;; En-tête
+              (insert (propertize "Signets\n"
+                                  'face '(:height 1.5 :weight bold)))
+              (insert "\n")
+              ;; Indication de tri + bouton de bascule
+              (insert (format "Tri : %s  "
+                              (if (eq metal-dashboard-signets-tri 'date)
+                                  "par date"
+                                "par nom")))
+              (insert-button "[changer le tri]"
+                             'action (lambda (_b)
+                                       (metal-dashboard--signets-changer-tri))
+                             'follow-link t)
+              (insert "\n\n")
+              (insert "Listes de signets existantes :\n\n")
+              ;; Liste des fichiers de signets
+              (dolist (entree fichiers-tries)
+                (let* ((filepath (car entree))
+                       (mtime (cdr entree))
+                       (nom (file-name-nondirectory filepath))
+                       (date-relative
+                        (metal-dashboard--notes-format-date-relative mtime)))
+                  (insert "  ")
+                  (insert-button (format "🔖 %s" nom)
+                                 'action (metal-dashboard--signets-bouton-ouvrir filepath)
+                                 'follow-link t
+                                 'help-echo (format "Ouvrir %s" filepath))
+                  (insert (format "    %s\n" date-relative))))
+              (insert "\n  ")
+              (insert-button "➕ Créer une nouvelle liste de signets..."
+                             'action (metal-dashboard--signets-bouton-creer)
+                             'follow-link t
+                             'help-echo "Demander un nom et créer une liste de signets")
+              (insert "\n\n")
+              (insert (format "Dossier : %s\n"
+                              (abbreviate-file-name
+                               (metal-dashboard--signets-dir)))))
+            (setq buffer-read-only t)
+            (setq-local tab-line-exclude nil)
+            (tab-line-mode 1)
+            (goto-char (point-min)))
+          (switch-to-buffer buffer))))))
+
+;;; ═══════════════════════════════════════════════════════════════════
 ;;; Fonctions auxiliaires
 ;;; ═══════════════════════════════════════════════════════════════════
 
@@ -274,14 +432,18 @@ demander immédiatement un nom pour créer la première."
                       'follow-link t
                       'pointer 'hand)))
 
-(defun metal-dashboard--mdicon (name color &optional height fallback v-adjust)
-  "Retourner une icône Material Design stable pour le dashboard."
-  (if (fboundp 'nerd-icons-mdicon)
-      (nerd-icons-mdicon name
-                         :face `(:foreground ,color)
-                         :height (or height 1.2)
-                         :v-adjust (or v-adjust -0.05))
-    (or fallback "")))
+(defun metal-dashboard--mdicon (emoji color &optional height fallback v-adjust)
+  "Retourner un EMOJI dimensionné pour le dashboard.
+Signature conservée pour compatibilité avec les appels existants, mais
+le rendu se fait désormais via un emoji Unicode (plus de nerd-icons).
+EMOJI est le glyphe à afficher ; COLOR et FALLBACK sont ignorés (les
+emojis portent leur propre couleur) ; HEIGHT règle la taille ; V-ADJUST
+décale verticalement."
+  (ignore color fallback)
+  (let ((s (propertize emoji 'face `(:height ,(or height 1.2)))))
+    (if v-adjust
+        (propertize s 'display `((raise ,(- v-adjust))))
+      s)))
 
 (defun metal-dashboard--insert-to-column (column)
   "Insérer des espaces jusqu'à COLUMN.
@@ -416,52 +578,22 @@ Elle est plus stable entre macOS et Windows pour ce dashboard."
 (defun metal-dashboard--header-buttons ()
   "Créer la barre de boutons d'en-tête."
   (let* ((icon-folder
-          (if (fboundp 'nerd-icons-mdicon)
-              (nerd-icons-mdicon "nf-md-folder_open"
-                                 :face '(:foreground "#8B4513")
-                                 :height 2.0
-                                 :v-adjust -0.1)
-            "📁"))
+          (propertize "📂" 'face '(:height 1.6)))
 
          (icon-calendar
-          (if (fboundp 'nerd-icons-mdicon)
-              (nerd-icons-mdicon "nf-md-calendar"
-                                 :face '(:foreground "#006400")
-                                 :height 1.8
-                                 :v-adjust -0.05)
-            "📅"))
+          (propertize "📅" 'face '(:height 1.5)))
 
          (icon-notes
-          (if (fboundp 'nerd-icons-mdicon)
-              (nerd-icons-mdicon "nf-md-note_text"
-                                 :face '(:foreground "#DAA520")
-                                 :height 1.8
-                                 :v-adjust -0.05)
-            "📝"))
+          (propertize "📝" 'face '(:height 1.5)))
 
          (icon-signets
-          (if (fboundp 'nerd-icons-mdicon)
-              (nerd-icons-mdicon "nf-md-bookmark"
-                                 :face '(:foreground "#B22222")
-                                 :height 1.5
-                                 :v-adjust -0.05)
-            "🔖"))
+          (propertize "🔖" 'face '(:height 1.4)))
 
          (icon-news
-          (if (fboundp 'nerd-icons-mdicon)
-              (nerd-icons-mdicon "nf-md-newspaper"
-                                 :face '(:foreground "#4169E1")
-                                 :height 1.8
-                                 :v-adjust -0.05)
-            "📰"))
+          (propertize "📰" 'face '(:height 1.5)))
 
          (icon-assistant
-          (if (fboundp 'nerd-icons-mdicon)
-              (nerd-icons-mdicon "nf-md-wrench"
-                                 :face '(:foreground "#FF6600")
-                                 :height 1.8
-                                 :v-adjust -0.05)
-            "🔧"))
+          (propertize "🔧" 'face '(:height 1.5)))
 
          (text-face '(:foreground "#0066cc" :weight bold)))
     (concat
@@ -493,9 +625,7 @@ Elle est plus stable entre macOS et Windows pour ce dashboard."
       "Ouvrir les signets web"
       (lambda ()
         (interactive)
-        (if (fboundp 'metal-org-ouvrir-signets)
-            (metal-org-ouvrir-signets)
-          (find-file (expand-file-name "~/Documents/MetalEmacs/Signets.org")))))
+        (metal-dashboard-signets-ouvrir)))
      "  "
      (metal-dashboard--make-action-button
       (concat icon-news " " (propertize "Actualités" 'face text-face))
@@ -802,23 +932,17 @@ Sinon, affiche un message d'erreur."
       (insert "◼ Nouveaux fichiers\n")
 
       (let* ((icon-presentation
-              (metal-dashboard--mdicon "nf-md-file_powerpoint"
-                                       "#8B0000" 1.2 "▣"))
+              (metal-dashboard--mdicon "📊" nil 1.2))
              (icon-document
-              (metal-dashboard--mdicon "nf-md-file_document_outline"
-                                       "#8B0000" 1.2 "□"))
+              (metal-dashboard--mdicon "📄" nil 1.2))
              (icon-python
-              (metal-dashboard--mdicon "nf-md-language_python"
-                                       "#3776AB" 1.2 "Py"))
+              (metal-dashboard--mdicon "🐍" nil 1.2))
              (icon-prolog
-              (metal-dashboard--mdicon "nf-md-lambda"
-                                       "#000000" 1.2 "λ"))
+              (metal-dashboard--mdicon "λ" nil 1.2))
              (icon-org
-              (metal-dashboard--mdicon "nf-md-file_document_edit_outline"
-                                       "#77AA99" 1.2 "Org"))
+              (metal-dashboard--mdicon "📋" nil 1.2))
              (icon-drawio
-              (metal-dashboard--mdicon "nf-md-sitemap"
-                                       "#F08705" 1.2 "▦"))
+              (metal-dashboard--mdicon "🗂️" nil 1.2))
              (left-key-column 3)
              (right-key-column 42))
         (metal-dashboard--insert-new-file-row
