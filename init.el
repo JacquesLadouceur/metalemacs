@@ -929,6 +929,9 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 (with-eval-after-load 'metal-deps
   (require 'metal-agents-catalogue-externe))
 
+(with-eval-after-load 'metal-agents-catalogue-externe
+  (require 'metal-agents-formulaire))
+
 ;; ===============================
 ;;  TREEMACS [EXTERNE]
 ;; ===============================

@@ -337,38 +337,6 @@ la front matter du `.qmd' concerné."
          "  warning: false\n"
          "  message: false\n")))))
 
-(defun metal-quarto-rendre-fichier ()
-  "Rendre le fichier Quarto courant avec 'quarto render'.
-Vérifie TinyTeX avant le rendu. Si TinyTeX doit être mis à jour,
-le rendu est relancé automatiquement après."
-  (interactive)
-  (when buffer-file-name
-    (let ((buf (current-buffer)))
-      (if (metal-quarto--ensure-tinytex
-           (lambda ()
-             (when (buffer-live-p buf)
-               (with-current-buffer buf
-                 (metal-quarto-rendre-fichier)))))
-          ;; TinyTeX OK → procéder au rendu
-          (progn
-            (save-buffer)
-            (let* ((file buffer-file-name)
-                   (dir  (file-name-directory file))
-                   (name (file-name-nondirectory file)))
-              (let ((default-directory dir))
-                (message "Quarto: rendu de %s..." name)
-                (let* ((output-buf (get-buffer-create "*Quarto Render*"))
-                       (exit-code (call-process "quarto" nil output-buf t
-                                                "render" name)))
-                  (if (zerop exit-code)
-                      (progn
-                        (kill-buffer output-buf)
-                        (message "Quarto: rendu terminé pour %s" name))
-                    (message "Quarto: ERREUR (code %d) pour %s" exit-code name)
-                    (display-buffer output-buf))))))
-        ;; TinyTeX en cours de mise à jour → message déjà affiché
-        nil))))
-
 (defun metal-quarto--detect-output-format ()
   "Détecte le format de sortie depuis le YAML front-matter."
   (save-excursion
@@ -382,37 +350,109 @@ le rendu est relancé automatiquement après."
      ((re-search-forward "^  html:" nil t) 'html)
      (t nil))))
 
-(defun metal-quarto-render ()
-  "Rendu Quarto adapté au format détecté (beamer/pdf/html).
-Vérifie TinyTeX avant le rendu. Relance automatiquement après mise à jour."
+(defun metal-quarto-produire-document ()
+  "Produire le document à partir du fichier Quarto courant.
+Détecte le format de sortie dans l'en-tête YAML (beamer/pdf/html) et
+force `quarto render' vers ce format ; à défaut, laisse Quarto décider.
+Vérifie TinyTeX avant le rendu : si une mise à jour est nécessaire, le
+rendu est relancé automatiquement après.
+
+Le rendu est asynchrone (Emacs reste disponible). À la fin, le code de
+sortie est vérifié : en cas de succès, le buffer `*Quarto Render*' est
+fermé et un message de confirmation s'affiche ; en cas d'échec, le
+buffer reste visible avec le code d'erreur."
   (interactive)
-  (let ((buf (current-buffer)))
-    (if (metal-quarto--ensure-tinytex
-         (lambda ()
-           (when (buffer-live-p buf)
-             (with-current-buffer buf
-               (metal-quarto-render)))))
-        ;; TinyTeX OK → procéder au rendu
-        (progn
-          (save-buffer)
-          (let* ((format (metal-quarto--detect-output-format))
-                 (cmd (pcase format
-                        ('beamer (format "quarto render \"%s\" --to beamer" buffer-file-name))
-                        ('pdf    (format "quarto render \"%s\" --to pdf" buffer-file-name))
-                        ('html   (format "quarto render \"%s\" --to html" buffer-file-name))
-                        (_       (format "quarto render \"%s\"" buffer-file-name)))))
-            (message "Rendu Quarto en cours (%s)..." format)
-            (async-shell-command cmd "*Quarto Render*")))
-      ;; TinyTeX en cours de mise à jour
-      nil)))
+  (when buffer-file-name
+    (let ((buf (current-buffer)))
+      (if (metal-quarto--ensure-tinytex
+           (lambda ()
+             (when (buffer-live-p buf)
+               (with-current-buffer buf
+                 (metal-quarto-produire-document)))))
+          ;; TinyTeX OK → procéder au rendu
+          (progn
+            (save-buffer)
+            (let* ((file   buffer-file-name)
+                   (dir    (file-name-directory file))
+                   (name   (file-name-nondirectory file))
+                   (format (metal-quarto--detect-output-format))
+                   (args   (append (list "render" name)
+                                   (pcase format
+                                     ('beamer '("--to" "beamer"))
+                                     ('pdf    '("--to" "pdf"))
+                                     ('html   '("--to" "html"))
+                                     (_       nil))))
+                   (default-directory dir)
+                   (output-buf (get-buffer-create "*Quarto Render*")))
+              (with-current-buffer output-buf
+                (let ((inhibit-read-only t)) (erase-buffer)))
+              (message "Quarto: rendu de %s (%s)..."
+                       name (or format "format par défaut"))
+              (make-process
+               :name "quarto-render"
+               :buffer output-buf
+               :command (cons "quarto" args)
+               :sentinel
+               (lambda (proc _event)
+                 (when (memq (process-status proc) '(exit signal))
+                   (let ((code (process-exit-status proc)))
+                     (if (zerop code)
+                         (progn
+                           (when (buffer-live-p output-buf)
+                             (kill-buffer output-buf))
+                           (message "Quarto: rendu terminé pour %s" name))
+                       (message "Quarto: ERREUR (code %d) pour %s" code name)
+                       (when (buffer-live-p output-buf)
+                         (display-buffer output-buf)))))))))
+        ;; TinyTeX en cours de mise à jour → message déjà affiché
+        nil))))
+
+(defun metal-quarto-produire-manuscrit-pul ()
+  "Produire la version Word (manuscrit PUL) du fichier Quarto courant.
+Force `quarto render --to docx', ce qui ignore tout format PDF hérité
+d'un en-tête de document ou d'un fichier de projet (`_quarto.yml',
+`_metadata.yml'). LuaLaTeX n'est donc jamais appelé : le manuscrit Word
+est produit sans dépendre de TinyTeX.
+
+Le rendu est asynchrone. À la fin, le code de sortie est vérifié : en
+cas de succès, le buffer `*Quarto Render*' est fermé et un message de
+confirmation s'affiche ; en cas d'échec, le buffer reste visible avec
+le code d'erreur."
+  (interactive)
+  (when buffer-file-name
+    (save-buffer)
+    (let* ((file       buffer-file-name)
+           (dir        (file-name-directory file))
+           (name       (file-name-nondirectory file))
+           (default-directory dir)
+           (output-buf (get-buffer-create "*Quarto Render*")))
+      (with-current-buffer output-buf
+        (let ((inhibit-read-only t)) (erase-buffer)))
+      (message "Quarto: production du manuscrit Word (%s)..." name)
+      (make-process
+       :name "quarto-render-docx"
+       :buffer output-buf
+       :command (list "quarto" "render" name "--to" "docx")
+       :sentinel
+       (lambda (proc _event)
+         (when (memq (process-status proc) '(exit signal))
+           (let ((code (process-exit-status proc)))
+             (if (zerop code)
+                 (progn
+                   (when (buffer-live-p output-buf)
+                     (kill-buffer output-buf))
+                   (message "Quarto: manuscrit Word terminé pour %s" name))
+               (message "Quarto: ERREUR (code %d) pour %s" code name)
+               (when (buffer-live-p output-buf)
+                 (display-buffer output-buf))))))))))
 
 ;; Raccourcis clavier
 (with-eval-after-load 'quarto-mode
   (define-key poly-quarto-mode-map (kbd "<S-f8>") #'quarto-preview)
-  (define-key poly-quarto-mode-map (kbd "<f8>") #'metal-quarto-rendre-fichier))
+  (define-key poly-quarto-mode-map (kbd "<f8>") #'metal-quarto-produire-document))
 
 ;; Raccourci global F8
-(global-set-key (kbd "<f8>") #'metal-quarto-render)
+(global-set-key (kbd "<f8>") #'metal-quarto-produire-document)
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Formatage : helpers
@@ -907,7 +947,7 @@ emoji."
      (:emoji "🔗" :tooltip "Références (note, citation, image, renvoi)" :command metal-quarto-references)
      (:sep)
      (:emoji "📄" :tooltip "Produire le document (F8)"
-             :command metal-quarto-rendre-fichier)
+             :command metal-quarto-produire-document)
      (:sep)
      (:emoji "📖" :tooltip "Wiktionnaire" :command search-wiktionary)
      (:emoji "🌐" :tooltip "Wikipédia" :command search-wikipedia)
