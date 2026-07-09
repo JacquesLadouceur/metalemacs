@@ -111,7 +111,7 @@ fichier soit recuperable."
   :commande    \"agy\"
   :couleur     \"#4285F4\"
   :format      claude-style
-  :args        (\"-p\" \"--print-timeout\" \"10m\")
+  :args        (\"--print-timeout\" \"10m\" \"-p\")
   :via-process t
   ;; agy est un agent EXPLORATOIRE : sans isolation, il fouille le
   ;; repertoire du fichier au lieu de reviser.  :isoler-fichier t le
@@ -126,7 +126,7 @@ fichier soit recuperable."
   :install-manuelle
   ((darwin    . \"Installez le CLI Antigravity :\\n  curl -fsSL https://antigravity.google/cli/install.sh | bash\\nPuis assurez-vous que ~/.local/bin est dans le PATH.\")
    (gnu/linux . \"Installez le CLI Antigravity :\\n  curl -fsSL https://antigravity.google/cli/install.sh | bash\\nPuis assurez-vous que ~/.local/bin est dans le PATH.\")
-   (windows-nt . \"Téléchargez l'installeur Antigravity depuis https://antigravity.google\\net suivez les instructions.\")
+   (windows-nt . \"Installez le CLI Antigravity (agy) dans PowerShell :\\n  irm https://antigravity.google/cli/install.ps1 | iex\\nLe binaire agy est place dans %LOCALAPPDATA%\\\\agy\\\\bin ; ouvrez un nouveau terminal pour que le PATH soit pris en compte.\")
    (t          . \"Voir https://antigravity.google pour installer le CLI agy.\")))
 
  ;; ─────────────────────────────────────────────────────────────────
@@ -148,7 +148,7 @@ fichier soit recuperable."
   ;; la reponse depuis ce fichier propre au lieu de parser la sortie brute.
   :dernier-message t
   :auth-args   (\"login\")
-  :auth-aide   \"Choisissez « Sign in with ChatGPT » (OAuth via navigateur) — fonctionne avec ChatGPT Free.  Ou « Sign in with API key » pour une clé OpenAI.  Une fois connecté, fermez ce buffer (C-x k).\"
+:auth-aide   \"Dans le TERMINAL qui vient de s'ouvrir, choisissez « Sign in with ChatGPT » puis appuyez sur Entree : le navigateur s'ouvre sur la page de connexion ChatGPT habituelle (courriel, ou Google / Apple / Microsoft).  Connectez-vous avec votre compte ChatGPT (fonctionne avec ChatGPT Free) ; il n'y a PAS de bouton « Sign in with ChatGPT » sur la page web elle-meme.  Alternative : « Sign in with API key » pour une cle OpenAI.  Une fois connecte, fermez ce buffer (C-x k).\"
   :auth-fichiers (\"~/.codex/auth.json\" \"~/.codex/config.toml\"))
 
  ;; ─────────────────────────────────────────────────────────────────
@@ -184,7 +184,7 @@ fichier soit recuperable."
      :nom "Antigravity" :commande "agy"
      :description "Inclus avec un abonnement Google AI (Pro/Ultra)"
      :gratuit "compte Google AI" :couleur "#4285F4" :format claude-style
-     :args ("-p" "--print-timeout" "10m") :via-process t
+     :args ("--print-timeout" "10m" "-p") :via-process t
      :isoler-fichier t
      :auth-mode externe)
     (codex
