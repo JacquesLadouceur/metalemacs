@@ -229,9 +229,14 @@ agent connu via l'Assistant.")
   t)
 
 (defun metal-deps--valider-catalogue (data)
-  "Verifie que DATA est une liste d'entrees d'agents valides."
+  "Verifie que DATA est une liste d'entrees d'agents valides.
+Une liste VIDE est rejetee : elle signale un fichier ecrase ou
+corrompu, pas un catalogue legitime.  Cela permet a
+`metal-deps--charger-catalogue' de regenerer le seed."
   (unless (listp data)
     (error "Le catalogue doit etre une liste d'agents"))
+  (when (null data)
+    (error "Catalogue vide : fichier ecrase ou corrompu, re-seed requis"))
   (let (ids)
     (dolist (entry data)
       (metal-deps--valider-entree-agent entry)
@@ -240,56 +245,92 @@ agent connu via l'Assistant.")
       (push (car entry) ids)))
   t)
 
+(defun metal-deps--lire-catalogue-fichier (f)
+  "Lit et renvoie la structure Lisp du fichier catalogue F.
+Renvoie nil si le fichier est illisible, vide, ou ne contient pas de
+donnees lisibles (par ex. uniquement l'en-tete de commentaires)."
+  (ignore-errors
+    (with-temp-buffer
+      (insert-file-contents f)
+      (goto-char (point-min))
+      (read (current-buffer)))))
+
+(defun metal-deps--ecrire-seed-catalogue (f)
+  "Ecrit le seed par defaut dans le fichier catalogue F.
+Cree le repertoire parent au besoin.  Signale un message en cas
+d'echec plutot que de lever une erreur seche."
+  (condition-case err
+      (progn
+        (make-directory (file-name-directory f) t)
+        (with-temp-file f (insert (metal-deps--catalogue-seed)))
+        (metal-deps--journaliser "Catalogue d'agents (re)cree : %s" f)
+        t)
+    (error
+     (message "⚠ Impossible de creer le catalogue d'agents (%s) : %s"
+              f (error-message-string err))
+     nil)))
+
 (defun metal-deps--charger-catalogue (&optional _force)
-  "Charge le catalogue depuis le fichier ; cree le seed si absent.
-En cas de fichier illisible ou invalide, conserve l'ancien catalogue
-et signale clairement (pas de backtrace cryptique)."
+  "Charge le catalogue depuis le fichier ; (re)cree le seed si absent,
+vide ou invalide.
+
+Robustesse : si le fichier existe mais que sa lecture ou sa validation
+echoue (fichier vide, liste `()' ecrasee, contenu corrompu), le seed est
+regenere UNE fois puis relu, au lieu de conserver silencieusement un
+catalogue nil (ce qui faisait disparaitre la section Agents IA).  En
+dernier recours seulement, l'ancien catalogue est conserve."
   (let ((f metal-deps-agents-catalogue-fichier))
+    ;; 1) Fichier absent : ecrire le seed.
     (unless (file-exists-p f)
-      (condition-case err
-          (progn
-            (make-directory (file-name-directory f) t)
-            (with-temp-file f (insert (metal-deps--catalogue-seed)))
-            (metal-deps--journaliser "Catalogue d'agents cree : %s" f))
-        (error
-         (message "⚠ Impossible de creer le catalogue d'agents (%s) : %s"
-                  f (error-message-string err)))))
+      (metal-deps--ecrire-seed-catalogue f))
+    ;; 2) Lire + valider.  En cas d'echec, regenerer le seed puis relire.
     (when (file-exists-p f)
-      (condition-case err
-          (let ((data (with-temp-buffer
-                        (insert-file-contents f)
-                        (goto-char (point-min))
-                        (read (current-buffer)))))
-            (metal-deps--valider-catalogue data)
-            (setq metal-deps-agents-catalogue data))
-        (error
-         (message "⚠ Catalogue d'agents illisible (%s) : %s — version precedente conservee"
-                  f (error-message-string err)))))
+      (let ((data (metal-deps--lire-catalogue-fichier f)))
+        (if (ignore-errors (metal-deps--valider-catalogue data))
+            (setq metal-deps-agents-catalogue data)
+          ;; Fichier present mais vide/invalide : re-seed puis relecture.
+          (metal-deps--journaliser
+           "Catalogue illisible ou vide — regeneration du seed : %s" f)
+          (when (metal-deps--ecrire-seed-catalogue f)
+            (let ((data2 (metal-deps--lire-catalogue-fichier f)))
+              (if (ignore-errors (metal-deps--valider-catalogue data2))
+                  (setq metal-deps-agents-catalogue data2)
+                (message
+                 "⚠ Catalogue d'agents irrecuperable (%s) — version precedente conservee"
+                 f)))))))
     metal-deps-agents-catalogue))
 
 (defun metal-deps--sauver-catalogue ()
   "Ecrit `metal-deps-agents-catalogue' dans le fichier, en preservant
-l'en-tete de commentaires existant (au-dessus de la 1re parenthese)."
-  (let* ((f metal-deps-agents-catalogue-fichier)
-         (entete
-          (when (file-exists-p f)
-            (with-temp-buffer
-              (insert-file-contents f)
-              (goto-char (point-min))
-              ;; en-tete = tout avant la 1re '(' en colonne 0
-              (if (re-search-forward "^(" nil t)
-                  (buffer-substring (point-min) (match-beginning 0))
-                "")))))
-    (make-directory (file-name-directory f) t)
-    (with-temp-file f
-      (when (and entete (> (length entete) 0))
-        (insert entete))
-      (insert "(\n")
-      (dolist (entry metal-deps-agents-catalogue)
-        (insert (format " %S\n" entry)))
-      (insert ")\n"))
-    (metal-deps--journaliser "Catalogue d'agents sauvegarde (%d agents)"
-                             (length metal-deps-agents-catalogue))))
+l'en-tete de commentaires existant (au-dessus de la 1re parenthese).
+
+REFUSE d'ecrire une liste vide : cela ecraserait le seed et ferait
+disparaitre les agents par defaut (Antigravity, ChatGPT, Claude).  Un
+catalogue nil au moment d'une sauvegarde signale un etat transitoire
+(chargement incomplet), pas une suppression legitime de tous les agents."
+  (if (null metal-deps-agents-catalogue)
+      (metal-deps--journaliser
+       "Sauvegarde du catalogue ignoree : catalogue vide (protection anti-ecrasement)")
+    (let* ((f metal-deps-agents-catalogue-fichier)
+           (entete
+            (when (file-exists-p f)
+              (with-temp-buffer
+                (insert-file-contents f)
+                (goto-char (point-min))
+                ;; en-tete = tout avant la 1re '(' en colonne 0
+                (if (re-search-forward "^(" nil t)
+                    (buffer-substring (point-min) (match-beginning 0))
+                  "")))))
+      (make-directory (file-name-directory f) t)
+      (with-temp-file f
+        (when (and entete (> (length entete) 0))
+          (insert entete))
+        (insert "(\n")
+        (dolist (entry metal-deps-agents-catalogue)
+          (insert (format " %S\n" entry)))
+        (insert ")\n"))
+      (metal-deps--journaliser "Catalogue d'agents sauvegarde (%d agents)"
+                               (length metal-deps-agents-catalogue)))))
 
 ;;; ──────────────────────────────────────────────────────────────────
 ;;;  Detection d'authentification revisee

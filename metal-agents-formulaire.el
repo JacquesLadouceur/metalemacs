@@ -333,17 +333,26 @@ section n'a donc pas besoin d'être dépliée pour que sa saisie compte."
           (append metal-deps-agents-catalogue (list entry)))
     (metal-deps--sauver-catalogue)
     (metal-deps-recharger-catalogue)
-    (let ((buf (get-buffer metal-deps--form-buffer-nom)))
-      (when buf (kill-buffer buf)))
+    (let ((buf (get-buffer metal-deps--form-buffer-nom))
+          (assistant (get-buffer metal-deps--assistant-buffer-nom)))
+      (when buf (kill-buffer buf))
+      ;; Revenir à l'Assistant dans la même fenêtre avant son re-rendu.
+      (when (buffer-live-p assistant)
+        (switch-to-buffer assistant)))
     (message "Agent « %s » ajouté et catalogue rechargé. Aucun redémarrage requis."
              nom)
     (when (fboundp 'metal-deps-afficher-etat)
       (run-with-timer 0.2 nil #'metal-deps-afficher-etat))))
 
 (defun metal-deps--form-annuler (&rest _)
-  "Ferme le formulaire sans enregistrer."
-  (let ((buf (get-buffer metal-deps--form-buffer-nom)))
-    (when buf (kill-buffer buf)))
+  "Ferme le formulaire sans enregistrer et revient à l'onglet Assistant."
+  (let ((buf (get-buffer metal-deps--form-buffer-nom))
+        (assistant (get-buffer metal-deps--assistant-buffer-nom)))
+    (when buf (kill-buffer buf))
+    ;; Revenir à l'Assistant dans la même fenêtre (l'onglet formulaire
+    ;; a disparu de la tab-line avec le kill-buffer).
+    (when (buffer-live-p assistant)
+      (switch-to-buffer assistant)))
   (message "Ajout d'agent annulé."))
 
 ;;; ──────────────────────────────────────────────────────────────────
@@ -434,8 +443,17 @@ encore à l'écran."
       (use-local-map widget-keymap)
       ;; Aide à la demande : echo area au focus clavier.
       (add-hook 'post-command-hook #'metal-deps--form-echo-aide nil t)
+      ;; Activer la tab-line localement pour garantir l'onglet, que ta
+      ;; config utilise `global-tab-line-mode' ou une activation par
+      ;; buffer.  Sans effet si la tab-line globale est déjà active.
+      (when (featurep 'tab-line)
+        (setq-local tab-line-exclude nil)
+        (tab-line-mode 1))
       (goto-char (point-min))
       (widget-forward 1))
+    ;; `switch-to-buffer' dans la fenêtre courante : le buffer rejoint
+    ;; automatiquement la tab-line de cette fenêtre, aux côtés des
+    ;; autres onglets (*scratch*, *Tableau-de-bord*, Assistant…).
     (switch-to-buffer buf)))
 
 ;;; ──────────────────────────────────────────────────────────────────
@@ -461,6 +479,22 @@ Propose un modèle connu (pré-rempli), sinon ouvre le formulaire compact."
     (if modele
         (metal-deps--ajouter-depuis-modele modele-id modele)
       (metal-deps-formulaire-nouvel-agent))))
+
+;;; ──────────────────────────────────────────────────────────────────
+;;;  Onglets (tab-line) : Assistant et Nouvel agent
+;;;
+;;;  On n'impose PAS de regroupement custom : le formulaire et
+;;;  l'Assistant apparaissent dans la tab-line NORMALE de la fenêtre,
+;;;  aux côtés des autres buffers (*scratch*, *Tableau-de-bord*, …).
+;;;  Le seul soin nécessaire : s'assurer que ces buffers au nom entre
+;;;  astérisques ne soient pas filtrés hors de la tab-line, et qu'ils
+;;;  s'ouvrent dans la fenêtre qui porte déjà cette tab-line.
+;;; ──────────────────────────────────────────────────────────────────
+
+(require 'tab-line nil t)
+
+(defconst metal-deps--assistant-buffer-nom "*MetalEmacs Assistant*"
+  "Nom du buffer de l'Assistant MetalEmacs (défini dans `metal-deps').")
 
 (provide 'metal-agents-formulaire)
 

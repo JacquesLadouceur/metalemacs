@@ -1607,7 +1607,7 @@ Ouvre un sélecteur de fichiers pour choisir le .deb."
       (pcase system-type
         ('darwin
          (if (and (metal-deps--brew-present-p)
-                  (file-exists-p "/Applications/draw.io.app"))
+                  (= 0 (call-process "brew" nil nil nil "list" "--cask" "drawio")))
              (async-shell-command "brew uninstall --cask drawio" "*draw.io Uninstall*")
            (message "draw.io installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('windows-nt
@@ -1634,7 +1634,18 @@ dans les fichiers de projet."
     (pcase system-type
       ('darwin
        (if (metal-deps--brew-present-p)
-           (async-shell-command "brew install ripgrep" "*ripgrep Install*")
+           (let ((buf-name "*ripgrep Install*"))
+             (message "📦 Installation de ripgrep via Homebrew...")
+             (set-process-sentinel
+              (start-process-shell-command "ripgrep-install" buf-name
+                                           "brew install ripgrep")
+              (lambda (proc _event)
+                (when (eq (process-status proc) 'exit)
+                  (if (= (process-exit-status proc) 0)
+                      (message "✅ ripgrep installé avec succès")
+                    (message "❌ Erreur lors de l'installation de ripgrep. Voir %s"
+                             buf-name)))))
+             (display-buffer buf-name))
          (browse-url "https://github.com/BurntSushi/ripgrep/releases")
          (message "Téléchargez ripgrep depuis le site web")))
       ('windows-nt
@@ -2758,8 +2769,13 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
               (widget-insert "\n   ")
               (widget-create 'push-button
                              :notify (lambda (&rest _)
-                                       (call-interactively
-                                        #'metal-deps--ajouter-agent-personnalise))
+                                       ;; Ouvrir directement le formulaire
+                                       ;; (onglet tab-line) si disponible ;
+                                       ;; sinon, repli sur l'ancien flux.
+                                       (if (fboundp 'metal-deps-formulaire-nouvel-agent)
+                                           (metal-deps-formulaire-nouvel-agent)
+                                         (call-interactively
+                                          #'metal-deps--ajouter-agent-personnalise)))
                              "+ Ajouter un autre agent…")
               (widget-insert "\n   ")
               (widget-insert
@@ -2802,6 +2818,9 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
           (goto-char (min point-precedent (point-max)))
         (goto-char (point-min)))
       (read-only-mode 1)
+      ;; Tab-line NORMALE : l'Assistant apparaît comme onglet de la
+      ;; fenêtre, aux côtés des autres buffers (*scratch*,
+      ;; *Tableau-de-bord*, Nouvel agent…).  Pas de regroupement custom.
       (setq-local tab-line-exclude nil)
       (tab-line-mode 1))
     ;; Affichage du buffer.  Si l'Assistant a déjà une fenêtre (cas d'un
