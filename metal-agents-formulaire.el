@@ -281,7 +281,10 @@ section n'a donc pas besoin d'être dépliée pour que sa saisie compte."
                 (metal-deps--form-liste-de :args)))
          spec)
     (unless id (user-error "Le champ « ID » est requis (section Identité)"))
-    (when (assq id metal-deps-agents-catalogue)
+    ;; En mode ÉDITION, l'ID existe forcément : ne pas le rejeter comme
+    ;; doublon (l'enregistrement fera un remplacement en place).
+    (when (and (assq id metal-deps-agents-catalogue)
+               (not (eq metal-deps--form-mode-edition id)))
       (user-error "L'ID « %s » existe déjà dans le catalogue" id-str))
     (unless nom (user-error "Le champ « Nom » est requis (section Identité)"))
     (unless commande (user-error "Le champ « Commande » est requis (section Invocation)"))
@@ -329,8 +332,19 @@ section n'a donc pas besoin d'être dépliée pour que sa saisie compte."
                        commande))
         (user-error "Annulé")))
     (metal-deps--charger-catalogue)
-    (setq metal-deps-agents-catalogue
-          (append metal-deps-agents-catalogue (list entry)))
+    ;; Upsert par ID : si un agent de même ID existe déjà (cas édition),
+    ;; on REMPLACE son entrée en place ; sinon (cas ajout) on l'ajoute à
+    ;; la fin.  Cela permet au même formulaire de servir à créer ET à
+    ;; éditer un agent, sans dupliquer les entrées.
+    (let* ((id (car entry))
+           (existe (assq id metal-deps-agents-catalogue)))
+      (if existe
+          (setq metal-deps-agents-catalogue
+                (mapcar (lambda (e)
+                          (if (eq (car e) id) entry e))
+                        metal-deps-agents-catalogue))
+        (setq metal-deps-agents-catalogue
+              (append metal-deps-agents-catalogue (list entry)))))
     (metal-deps--sauver-catalogue)
     (metal-deps-recharger-catalogue)
     (let ((buf (get-buffer metal-deps--form-buffer-nom))
@@ -339,7 +353,7 @@ section n'a donc pas besoin d'être dépliée pour que sa saisie compte."
       ;; Revenir à l'Assistant dans la même fenêtre avant son re-rendu.
       (when (buffer-live-p assistant)
         (switch-to-buffer assistant)))
-    (message "Agent « %s » ajouté et catalogue rechargé. Aucun redémarrage requis."
+    (message "Agent « %s » enregistré et catalogue rechargé. Aucun redémarrage requis."
              nom)
     (when (fboundp 'metal-deps-afficher-etat)
       (run-with-timer 0.2 nil #'metal-deps-afficher-etat))))
@@ -422,6 +436,83 @@ encore à l'écran."
                (beginning-of-line))
       (ignore-errors (widget-forward 1)))))
 
+(defvar-local metal-deps--form-mode-edition nil
+  "Non-nil quand le formulaire édite un agent EXISTANT (vs en créer un).
+Contient alors l'ID (symbole) de l'agent édité.  Utilisé pour ne pas
+rejeter l'ID comme un doublon, et pour verrouiller le champ ID.")
+
+(defun metal-deps--form-valeurs-depuis-spec (id spec)
+  "Convertit ID + SPEC (plist du catalogue) en alist `metal-deps--form-valeurs'.
+Inverse des conversions faites par `metal-deps--form-construire-spec' :
+- listes (:args, :auth-args…) → chaîne d'éléments séparés par des espaces ;
+- symboles (:format, :auth-verifier) → chaîne ;
+- booléens (:via-process…) → t/nil ;
+- :auth-mode 'externe → case à cocher :auth-mode-externe."
+  (let ((v (list (cons :id (symbol-name id)))))
+    (cl-flet ((mv (cle val) (push (cons cle val) v)))
+      ;; Champs texte simples.
+      (dolist (k '(:nom :commande :description :couleur :auth-aide
+                        :paquet-npm :paquet-brew :paquet-pipx))
+        (let ((x (plist-get spec k)))
+          (when x (mv k (format "%s" x)))))
+      ;; Format et auth-verifier : symbole → chaîne.
+      (let ((f (plist-get spec :format)))
+        (when f (mv :format (format "%s" f))))
+      (let ((av (plist-get spec :auth-verifier)))
+        (when av (mv :auth-verifier (format "%s" av))))
+      ;; Listes → chaîne séparée par espaces.
+      (dolist (k '(:args :auth-args :auth-fichiers :auth-env :auth-commande))
+        (let ((lst (plist-get spec k)))
+          (when lst
+            (mv k (mapconcat (lambda (x) (format "%s" x)) lst " ")))))
+      ;; Booléens / mode.
+      (when (eq (plist-get spec :auth-mode) 'externe)
+        (mv :auth-mode-externe t))
+      (dolist (k '(:via-process :isoler-fichier :dernier-message
+                                :prompt-via-stdin))
+        (when (plist-get spec k) (mv k t)))
+      ;; Sentinelle stdin (texte).
+      (let ((s (plist-get spec :stdin-sentinelle)))
+        (when s (mv :stdin-sentinelle (format "%s" s)))))
+    (nreverse v)))
+
+;;;###autoload
+(defun metal-deps-formulaire-editer-agent (id)
+  "Ouvre le formulaire pré-rempli pour ÉDITER l'agent existant ID.
+À la sauvegarde, l'entrée de même ID est remplacée en place (upsert)."
+  (interactive
+   (list (let ((ids (mapcar (lambda (e) (symbol-name (car e)))
+                            metal-deps-agents-catalogue)))
+           (unless ids (user-error "Aucun agent dans le catalogue"))
+           (intern (completing-read "Éditer quel agent ? " ids nil t)))))
+  (require 'metal-agent nil t)
+  (metal-deps--charger-catalogue)
+  (let ((spec (cdr (assq id metal-deps-agents-catalogue))))
+    (unless spec (user-error "Agent « %s » introuvable dans le catalogue" id))
+    (let ((buf (get-buffer-create metal-deps--form-buffer-nom)))
+      (with-current-buffer buf
+        (kill-all-local-variables)
+        (setq metal-deps--form-widgets nil)
+        (setq metal-deps--form-mode-edition id)
+        ;; Pré-remplir depuis la spec de l'agent existant.
+        (setq metal-deps--form-valeurs
+              (metal-deps--form-valeurs-depuis-spec id spec))
+        (setq metal-deps--form-derniere-section nil)
+        ;; Ouvrir toutes les sections : l'utilisateur voit d'emblée les
+        ;; champs déjà remplis, sans avoir à déplier.
+        (setq metal-deps--form-sections-ouvertes
+              (mapcar (lambda (s) (cons (nth 0 s) t))
+                      metal-deps--form-sections))
+        (metal-deps--form-rendre)
+        (use-local-map widget-keymap)
+        (add-hook 'post-command-hook #'metal-deps--form-echo-aide nil t)
+        (when (featurep 'tab-line)
+          (setq-local tab-line-exclude nil)
+          (tab-line-mode 1))
+        (goto-char (point-min))
+        (widget-forward 1))
+      (switch-to-buffer buf))))
+
 ;;;###autoload
 (defun metal-deps-formulaire-nouvel-agent ()
   "Ouvre un formulaire compact et repliable pour ajouter un agent.
@@ -434,6 +525,7 @@ encore à l'écran."
       (kill-all-local-variables)
       (setq metal-deps--form-widgets nil)
       (setq metal-deps--form-valeurs nil)
+      (setq metal-deps--form-mode-edition nil)
       (setq metal-deps--form-derniere-section nil)
       ;; État initial des sections : d'après la colonne « ouverte-par-défaut ».
       (setq metal-deps--form-sections-ouvertes

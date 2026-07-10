@@ -729,6 +729,53 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
                    (insert (format "\n⚠ Problème : %s\n" (string-trim event))))))
              (run-with-timer 1 nil #'metal-deps-afficher-etat))))))))
 
+(defun metal-deps--ajouter-au-path (dir)
+  "Ajoute DIR à `exec-path' et au PATH de la session s'il existe.
+Idempotente : n'ajoute rien si DIR est déjà présent (comparaison par
+chemin absolu).  Retourne t si DIR a été ajouté ou était déjà là, nil
+s'il n'existe pas.  Rend un binaire fraîchement installé visible par
+`executable-find' sans redémarrer Emacs."
+  (when (and dir (file-directory-p dir))
+    (add-to-list 'exec-path dir)
+    (let ((path (or (getenv "PATH") ""))
+          (sep (if (eq system-type 'windows-nt) ";" ":")))
+      (unless (cl-find dir (split-string path sep t)
+                       :test (lambda (a b)
+                               (string-equal (expand-file-name a)
+                                             (expand-file-name b))))
+        (setenv "PATH" (concat dir sep path))
+        (metal-deps--journaliser "PATH rafraîchi : %s ajouté à la session" dir)))
+    t))
+
+(defun metal-deps--rafraichir-path-scoop ()
+  "Ajoute le dossier des shims Scoop à `exec-path' et au PATH de la session.
+Sur Windows, un paquet fraîchement installé via Scoop (node, npm…) crée
+son shim dans `~/scoop/shims', mais Emacs a capturé son environnement au
+démarrage : `executable-find' ne le voit donc pas avant un redémarrage.
+Cette fonction rend le shim visible IMMÉDIATEMENT, sans redémarrer.
+Idempotente : n'ajoute rien si le dossier est déjà présent."
+  (when (eq system-type 'windows-nt)
+    (metal-deps--ajouter-au-path
+     (expand-file-name "shims" (metal-deps--scoop-path)))))
+
+(defun metal-deps--rafraichir-path-agent (spec)
+  "Rafraîchit le PATH de session pour l'agent décrit par SPEC.
+Couvre les emplacements d'installation courants selon l'OS, afin que la
+commande de l'agent (`:commande') soit visible sans redémarrer Emacs :
+- shims Scoop (Windows) ;
+- ~/.local/bin (installeurs curl/bash macOS/Linux, ex. agy) ;
+- %LOCALAPPDATA%/agy/bin (installeur PowerShell d'Antigravity) ;
+- prefix npm utilisateur ~/.npm-global/bin (Linux)."
+  (ignore spec)
+  (metal-deps--rafraichir-path-scoop)
+  (metal-deps--ajouter-au-path (expand-file-name "~/.local/bin"))
+  (metal-deps--ajouter-au-path (expand-file-name "~/.npm-global/bin"))
+  (when (eq system-type 'windows-nt)
+    (let ((localappdata (or (getenv "LOCALAPPDATA")
+                            (expand-file-name "AppData/Local" "~"))))
+      (metal-deps--ajouter-au-path
+       (expand-file-name "agy/bin" localappdata)))))
+
 (defun metal-deps-installer-nodejs ()
   "Installe Node.js (et npm) selon l'OS (et la version sur macOS).
 - macOS >= 14 (Sonoma+) : Homebrew (brew install node — bottle, rapide),
@@ -800,7 +847,25 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
         (progn
           (metal-deps--journaliser "Installation de Node.js via Scoop")
           (when (yes-or-no-p "Installer Node.js via Scoop (scoop install nodejs) ? ")
-            (compile "scoop install nodejs" t)))
+            (let ((buf (compile "scoop install nodejs" t)))
+              ;; `compile' est asynchrone : rafraîchir le PATH de la
+              ;; session et re-rendre l'Assistant UNE FOIS l'installation
+              ;; terminée, pour que `node' apparaisse installé sans
+              ;; redémarrer Emacs.
+              (when (bufferp buf)
+                (with-current-buffer buf
+                  (setq-local
+                   compilation-finish-functions
+                   (list
+                    (lambda (_compil-buf _msg)
+                      (metal-deps--rafraichir-path-scoop)
+                      (if (metal-deps--nodejs-present-p)
+                          (metal-deps--journaliser
+                           "Node.js détecté après installation (sans redémarrage)")
+                        (metal-deps--journaliser
+                         "Node.js installé mais non détecté ; redémarrage peut être requis"))
+                      (when (fboundp 'metal-deps-afficher-etat)
+                        (run-with-timer 0.5 nil #'metal-deps-afficher-etat))))))))))
       (metal-deps--afficher-aide
        "Installer Node.js sur Windows"
        (concat
@@ -810,7 +875,7 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
         "   de l'Assistant, puis revenez ici cliquer sur Installer.\n\n"
         "2. Installateur officiel :\n"
         "   https://nodejs.org/en/download/\n\n"
-        "Une fois Node.js installé, redémarrez Emacs puis revenez à l'Assistant."))))
+        "Une fois Node.js installé, cliquez « Rafraîchir » dans l'Assistant."))))
    (t (user-error "OS non supporté pour l'installation automatique de Node.js"))))
 
 (defun metal-deps-desinstaller-nodejs ()
@@ -896,19 +961,39 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
           (shell-command "scoop bucket add extras"))))))
 
 (defun metal-deps-desinstaller-scoop ()
-  "Désinstalle Scoop sur Windows."
+  "Affiche les instructions de désinstallation de Scoop sur Windows.
+
+`scoop uninstall scoop' exige une confirmation interactive (Read-Host)
+qu'un processus lancé par Emacs ne peut pas fournir, et une suppression
+manuelle par `Remove-Item' échoue sur les jonctions que Scoop crée.  On
+dirige donc l'utilisateur vers la commande officielle, à lancer lui-même
+dans une invite de commandes (cmd) ou PowerShell."
   (interactive)
   (unless (eq system-type 'windows-nt)
     (user-error "Scoop n'est disponible que sur Windows"))
   (if (not (metal-deps--scoop-present-p))
       (message "Scoop n'est pas installé")
-    (when (yes-or-no-p "⚠ Ceci supprimera Scoop et tous les paquets installés. Continuer ? ")
-      (metal-deps--journaliser "Désinstallation de Scoop")
-      (let ((scoop-dir (metal-deps--scoop-path)))
-        (message "⏳ Désinstallation de Scoop en cours...")
-        (shell-command
-         (format "powershell -Command \"Remove-Item -Recurse -Force '%s'\"" scoop-dir))
-        (message "✓ Scoop désinstallé")))))
+    (let ((buf-name "*Désinstaller Scoop*"))
+      (with-current-buffer (get-buffer-create buf-name)
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert "Désinstallation de Scoop\n")
+          (insert "════════════════════════\n\n")
+          (insert "Ouvrez une invite de commandes (cmd) ou PowerShell,\n")
+          (insert "puis lancez cette commande :\n\n")
+          (insert "    scoop uninstall scoop\n\n")
+          (insert "Répondez « y » lorsque Scoop demande confirmation.\n")
+          (insert "Ceci supprimera Scoop ainsi que tous les paquets\n")
+          (insert "installés via Scoop.\n"))
+        (goto-char (point-min))
+        (view-mode 1)
+        ;; Afficher le buffer comme onglet dans la tab-line de la fenêtre.
+        (when (featurep 'tab-line)
+          (setq-local tab-line-exclude nil)
+          (tab-line-mode 1)))
+      (switch-to-buffer buf-name)
+      (metal-deps--journaliser "Instructions de désinstallation de Scoop affichées")
+      (message "Pour désinstaller Scoop, lancez « scoop uninstall scoop » dans cmd."))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Installateurs - Git for Windows (via winget)
@@ -2081,12 +2166,32 @@ affiche un buffer d'aide avec les instructions manuelles (champ
                    (format "Installer « %s » via %s ?  Commande : %s "
                            (plist-get spec :nom) (car cmd) cmdline))
               (metal-deps--journaliser "Installation CLI : %s" cmdline)
-              (let ((buf (compile cmdline t)))
+              (let ((buf (compile cmdline t))
+                    (agent-spec spec))
                 (when (buffer-live-p buf)
                   (with-current-buffer buf
                     (when (fboundp 'ansi-color-compilation-filter)
                       (add-hook 'compilation-filter-hook
-                                'ansi-color-compilation-filter nil t)))))
+                                'ansi-color-compilation-filter nil t))
+                    ;; `compile' est asynchrone : à la fin, rafraîchir le
+                    ;; PATH de session (le binaire de l'agent vient d'être
+                    ;; posé dans un dossier qu'Emacs ne connaît pas encore)
+                    ;; et re-rendre l'Assistant, pour que l'agent apparaisse
+                    ;; installé SANS redémarrer Emacs.
+                    (setq-local
+                     compilation-finish-functions
+                     (list
+                      (lambda (_compil-buf _msg)
+                        (metal-deps--rafraichir-path-agent agent-spec)
+                        (if (metal-deps--agent-cli-installee-p agent-spec)
+                            (metal-deps--journaliser
+                             "Agent « %s » : CLI détectée après installation (sans redémarrage)"
+                             (plist-get agent-spec :nom))
+                          (metal-deps--journaliser
+                           "Agent « %s » : CLI installée mais non détectée ; un nouveau terminal / redémarrage peut être requis"
+                           (plist-get agent-spec :nom)))
+                        (when (fboundp 'metal-deps-afficher-etat)
+                          (run-with-timer 0.5 nil #'metal-deps-afficher-etat))))))))
               (message
                "Installation lancée.  Une fois terminée, utiliser le bouton « Authentifier » ou « M-x metal-agent-authentifier-cli »."))))
          ;; Cas 2 : pas de gestionnaire mais des instructions manuelles.
@@ -2556,6 +2661,11 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
 (defun metal-deps-afficher-etat ()
   "Affiche l'état des dépendances avec interface graphique."
   (interactive)
+  ;; Rafraîchir le PATH de session : un binaire installé manuellement
+  ;; depuis le dernier rendu (ex. le CLI agy déposé dans
+  ;; %LOCALAPPDATA%/agy/bin ou ~/.local/bin) doit être détecté au clic
+  ;; « Rafraîchir » sans redémarrer Emacs.
+  (metal-deps--rafraichir-path-agent nil)
   ;; Nettoyer les anciens agents qui ne sont plus dans le catalogue.
   ;; Idempotent : si déjà nettoyé, ne fait rien.
   (metal-deps--migration-nettoyage-agents-legacy)
@@ -2759,7 +2869,22 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                          'help-echo "Afficher la procédure d'authentification"))))
                     (when desc
                       (widget-insert
-                       (propertize (concat " : " desc) 'face 'shadow)))))
+                       (propertize (concat " : " desc) 'face 'shadow)))
+                    ;; --- Bouton « éditer » (agents du catalogue) ---
+                    ;; Ouvre le formulaire pré-rempli pour modifier cet
+                    ;; agent (args, commande, auth…) sans éditer le
+                    ;; fichier catalogue à la main.
+                    (when (and (assq agent-id metal-deps-agents-catalogue)
+                               (fboundp 'metal-deps-formulaire-editer-agent))
+                      (widget-insert "  ")
+                      (let ((aid agent-id))
+                        (insert-text-button
+                         "éditer"
+                         'action (lambda (_)
+                                   (metal-deps-formulaire-editer-agent aid))
+                         'face '(:foreground "#0366d6" :underline t)
+                         'follow-link t
+                         'help-echo "Modifier cet agent dans le formulaire")))))
                  ;; Cas non-agent : "— description" (si description)
                  (desc
                   (widget-insert (propertize (concat "— " desc) 'face 'shadow))))
@@ -2909,7 +3034,22 @@ conflits entre gestionnaires de paquets."
     (let ((git-bin (metal-deps--find-git-bin)))
       (when git-bin
         (add-to-list 'exec-path git-bin)
-        (setenv "PATH" (concat git-bin ";" (getenv "PATH"))))))
+        (setenv "PATH" (concat git-bin ";" (getenv "PATH")))
+        ;; `diff.exe' (requis par Ediff, donc par la revue Metal Agent)
+        ;; ne vit PAS dans Git/cmd ni Git/bin, mais dans le `usr/bin'
+        ;; frère (ex. C:/Program Files/Git/usr/bin).  Sans lui,
+        ;; `(executable-find "diff")' renvoie nil et Ediff plante avec
+        ;; « No such file or directory, diff ».  On dérive ce dossier
+        ;; depuis git-bin et on l'ajoute s'il contient bien diff.exe.
+        (let* ((git-racine (directory-file-name
+                            (file-name-directory
+                             (directory-file-name git-bin))))
+               (usr-bin (expand-file-name "usr/bin" git-racine)))
+          (when (file-exists-p (expand-file-name "diff.exe" usr-bin))
+            (add-to-list 'exec-path usr-bin)
+            (setenv "PATH" (concat usr-bin ";" (getenv "PATH")))
+            (metal-deps--journaliser
+             "diff.exe trouvé et ajouté au PATH : %s" usr-bin))))))
   
   ;; Homebrew sur macOS : Apple Silicon (/opt/homebrew) ou Intel (/usr/local)
   (when (eq system-type 'darwin)

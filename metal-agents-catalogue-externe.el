@@ -192,14 +192,14 @@ fichier soit recuperable."
 (defvar metal-deps-agents-modeles-connus
   '((antigravity
      :nom "Antigravity" :commande "agy"
-     :description "Inclus avec un abonnement Google AI (Pro/Ultra)"
+     :description "Avec abonnement Google AI (Pro/Ultra)"
      :gratuit "compte Google AI" :couleur "#4285F4" :format claude-style
      :args ("--print-timeout" "10m" "-p") :via-process t
      :isoler-fichier t
      :auth-mode externe)
     (codex
      :nom "ChatGPT" :commande "codex"
-     :description "Gratuit avec ChatGPT Free ou abonnement Plus/Pro"
+     :description "Gratuit avec ChatGPT Free"
      :gratuit t :paquet-npm "@openai/codex" :paquet-brew "codex"
      :couleur "#10A37F" :format codex-style
      :args ("-p")
