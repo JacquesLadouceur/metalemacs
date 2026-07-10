@@ -147,6 +147,12 @@ fichier soit recuperable."
   ;; :dernier-message t, metal-agent insere -o/--output-last-message et lit
   ;; la reponse depuis ce fichier propre au lieu de parser la sortie brute.
   :dernier-message t
+  ;; codex consulte stdin meme quand un prompt est passe en argument.
+  ;; Lance via make-process (stdin = pipe non-TTY), il se bloque en
+  ;; attente sur Windows et ne traite jamais l'argument.  On passe donc
+  ;; le prompt PAR stdin, avec la sentinelle `-' que codex exec exige.
+  :prompt-via-stdin t
+  :stdin-sentinelle \"-\"
   :auth-args   (\"login\")
 :auth-aide   \"Dans le TERMINAL qui vient de s'ouvrir, choisissez « Sign in with ChatGPT » puis appuyez sur Entree : le navigateur s'ouvre sur la page de connexion ChatGPT habituelle (courriel, ou Google / Apple / Microsoft).  Connectez-vous avec votre compte ChatGPT (fonctionne avec ChatGPT Free) ; il n'y a PAS de bouton « Sign in with ChatGPT » sur la page web elle-meme.  Alternative : « Sign in with API key » pour une cle OpenAI.  Une fois connecte, fermez ce buffer (C-x k).\"
   :auth-fichiers (\"~/.codex/auth.json\" \"~/.codex/config.toml\"))
@@ -165,6 +171,10 @@ fichier soit recuperable."
   :format      claude-style
   :args        (\"-p\" \"--output-format\" \"text\")
   :via-process t
+  ;; claude lit stdin nativement avec -p quand stdin est un pipe.
+  ;; Meme motif que codex : on lui passe le prompt par stdin pour
+  ;; eviter le blocage sous Windows.  Pas de sentinelle requise.
+  :prompt-via-stdin t
   :auth-args   (\"auth\" \"login\")
   :auth-aide   \"Le navigateur va s'ouvrir pour l'OAuth Anthropic.  Si rien ne s'ouvre, appuyez sur « c » pour copier l'URL et collez-la dans votre navigateur.  Revenez ici après autorisation, puis fermez le buffer (C-x k).\"
   :auth-fichiers (\"~/.claude/.credentials.json\")
@@ -192,7 +202,7 @@ fichier soit recuperable."
      :description "Gratuit avec ChatGPT Free ou abonnement Plus/Pro"
      :gratuit t :paquet-npm "@openai/codex" :paquet-brew "codex"
      :couleur "#10A37F" :format codex-style
-     :args ("exec" "--sandbox" "read-only" "--skip-git-repo-check")
+     :args ("-p")
      :dernier-message t
      :auth-args ("login")
      :auth-fichiers ("~/.codex/auth.json" "~/.codex/config.toml"))

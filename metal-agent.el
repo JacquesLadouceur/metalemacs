@@ -152,6 +152,29 @@ et pour les clés purement runtime (`:extract-fn', etc.)."
   "Arguments CLI du provider courant pour proposer."
   (metal-agent--provider-prop :args))
 
+(defun metal-agent--current-prompt-via-stdin-p ()
+  "Non-nil si le provider courant reçoit son prompt sur STDIN.
+
+Certaines CLI (Claude Code, Codex) consultent stdin même lorsqu'un
+prompt est fourni en argument.  Sous Windows, lancées via `make-process'
+(stdin = pipe non-TTY), elles se bloquent en attente de stdin et ne
+traitent jamais l'argument : l'agent ne reçoit alors que le début du
+contexte.  Pour ces providers, on passe le prompt PAR stdin plutôt qu'en
+argument.  Déclaré dans le catalogue par `:prompt-via-stdin t'.
+
+`agy' (Antigravity) NE lit pas stdin : il exige le prompt en argument
+collé à `-p'.  Il ne porte donc pas cette clé et reste inchangé."
+  (metal-agent--provider-prop :prompt-via-stdin))
+
+(defun metal-agent--current-stdin-sentinelle ()
+  "Argument marqueur à ajouter pour forcer la lecture stdin, ou nil.
+
+Certaines CLI exigent un argument sentinelle pour lire le prompt sur
+stdin : Codex utilise `-' (`codex exec … -').  Claude, lui, lit stdin
+nativement avec `-p' et n'a pas de sentinelle.  Déclaré dans le
+catalogue par `:stdin-sentinelle \"-\"' le cas échéant."
+  (metal-agent--provider-prop :stdin-sentinelle))
+
 (defun metal-agent--current-extract-fn ()
   "Fonction d'extraction du provider courant."
   (metal-agent--provider-prop :extract-fn))
@@ -715,13 +738,26 @@ laissés intacts."
 Si FICHIER-SORTIE est fourni et que le provider le réclame
 (`:dernier-message t'), on insère `--output-last-message FICHIER-SORTIE'
 avant le prompt afin que la CLI y écrive SA RÉPONSE FINALE, au lieu de
-la noyer dans une sortie verbeuse (raisonnement, commandes exec, etc.)."
-  (append (list (metal-agent--current-command))
-          (metal-agent--expanser-tilde-args args)
-          (when (and fichier-sortie
-                     (metal-agent--provider-veut-dernier-message))
-            (list "--output-last-message" fichier-sortie))
-          (list prompt)))
+la noyer dans une sortie verbeuse (raisonnement, commandes exec, etc.).
+
+Si le provider reçoit son prompt sur STDIN (`:prompt-via-stdin'), le
+PROMPT n'est PAS ajouté aux arguments : il sera envoyé sur stdin par
+`metal-agent--run-codex'.  On ajoute alors la sentinelle stdin
+(`:stdin-sentinelle', ex. `-' pour Codex) si le provider en exige une."
+  (let ((stdin-p (metal-agent--current-prompt-via-stdin-p))
+        (sentinelle (metal-agent--current-stdin-sentinelle)))
+    (append (list (metal-agent--current-command))
+            (metal-agent--expanser-tilde-args args)
+            (when (and fichier-sortie
+                       (metal-agent--provider-veut-dernier-message))
+              (list "--output-last-message" fichier-sortie))
+            (cond
+             ;; Mode stdin : pas de prompt en argument ; sentinelle si requise.
+             (stdin-p
+              (when sentinelle (list sentinelle)))
+             ;; Mode argument classique : le prompt est le dernier argument.
+             (t
+              (list prompt))))))
 
 (declare-function metal-agent--progress-start "metal-agent" (&optional texte))
 (declare-function metal-agent--progress-stop "metal-agent" ())
@@ -891,6 +927,12 @@ Robustesse :
                (funcall nettoyer)
                (message "⏱ Requête %s interrompue après %d s (délai dépassé). Réessayez ou réduisez la taille du contenu."
                         label metal-agent-timeout)))))
+    ;; STDIN : pour les providers `:prompt-via-stdin' (Claude, Codex), le
+    ;; prompt n'a pas été mis en argument ; on l'envoie sur stdin ici,
+    ;; puis on ferme.  Pour les autres (agy…), on ferme simplement stdin
+    ;; (EOF immédiat), ce qui évite tout blocage si la CLI le consulte.
+    (when (metal-agent--current-prompt-via-stdin-p)
+      (process-send-string proc prompt))
     (process-send-eof proc)
     proc))
 
