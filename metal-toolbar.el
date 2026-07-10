@@ -45,6 +45,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'metal-icones nil t)
 
 (defgroup metal-toolbar nil
   "Primitives partagées pour barres d'outils header-line."
@@ -91,7 +92,22 @@ ligne de base ; sans ajustement, les boutons-lettres (G, I, S, B, </>)
 « flottent » par rapport aux boutons-emoji voisins.  Ce décalage les
 recale sur la même ligne.  Par défaut identique à `metal-toolbar-emoji-raise'
 pour que lettres et emoji s'alignent.  Négatif = vers le bas.  Ajustez
-finement si le rendu diffère sur votre système."
+finement si le rendu diffère sur votre système.
+
+Utilisé UNIQUEMENT en mode texte (quand les icônes ne sont pas rendues
+comme images).  En mode image, voir `metal-toolbar-char-raise-image'."
+  :type 'number
+  :group 'metal-toolbar)
+
+(defcustom metal-toolbar-char-raise-image 0.0
+  "Décalage vertical des lettres stylées quand les icônes sont des IMAGES.
+Lorsque les emoji sont rendus comme images SVG couleur (via
+`metal-icones'), elles sont centrées verticalement sur la ligne
+(`:ascent center') et ne « flottent » plus.  Les lettres n'ont donc plus
+besoin du décalage prévu pour le mode texte : ce réglage (0 par défaut)
+les laisse sur la ligne de base naturelle, alignée sur le centre des
+images.  Ajustez de quelques centièmes (positif = vers le haut, négatif =
+vers le bas) si vos lettres restent légèrement décalées."
   :type 'number
   :group 'metal-toolbar)
 
@@ -186,11 +202,16 @@ chaîne `header-line-format'."
 (defun metal-toolbar-separator (&optional char)
   "Séparateur vertical entre groupes de boutons.
 CHAR peut surcharger le caractère utilisé (défaut : \"|\").
-Le séparateur reçoit la même hauteur (taille des icônes) et le même
-décalage vertical que les lettres (`metal-toolbar-char-raise'), afin de
-rester aligné avec les boutons voisins (lettres et emoji)."
+Le séparateur reçoit la même hauteur (taille des icônes) et un décalage
+vertical cohérent avec les autres boutons : `metal-toolbar-char-raise-image'
+quand les icônes sont des images (elles ne flottent pas), sinon
+`metal-toolbar-char-raise' (mode texte)."
   (let* ((h (/ (metal-toolbar-emoji-size) 100.0))
-         (r metal-toolbar-char-raise)
+         (mode-image (and (fboundp 'metal-icones-disponible-p)
+                          (metal-icones-disponible-p)))
+         (r (if mode-image
+                metal-toolbar-char-raise-image
+              metal-toolbar-char-raise))
          (s (propertize (format " %s " (or char "|"))
                         'face `(:weight bold :foreground "gray" :height ,h))))
     (if (and r (not (zerop r)))
@@ -215,11 +236,25 @@ Mots-clés :
             les autres boutons voisins."
   (let* ((h (or height (/ (metal-toolbar-emoji-size) 100.0)))
          (r (or raise metal-toolbar-emoji-raise))
-         (face `(:height ,h ,@(when color `(:foreground ,color))))
-         (s (propertize emoji 'face face)))
-    (if (and r (not (zerop r)))
-        (propertize s 'display `((raise ,r)))
-      s)))
+         ;; Taille cible en pixels pour le rendu SVG : le multiplicateur h
+         ;; (1.6 par défaut) est converti en pixels via le même facteur que
+         ;; le tableau de bord (≈ 12.5 px par unité de multiplicateur), de
+         ;; sorte que h=1.6 → ~20 px.
+         (px (max 12 (round (* h 12.5))))
+         (image (and (fboundp 'metal-icones-image)
+                     (metal-icones-image emoji px))))
+    (if image
+        ;; Rendu SVG couleur (identique Windows / macOS).  L'option
+        ;; `:ascent center' de l'image gère déjà l'alignement vertical sur
+        ;; la ligne ; le `raise' (prévu pour recaler les emoji-texte qui
+        ;; flottent) est donc inutile ici et n'est pas appliqué.
+        (propertize emoji 'display image 'rear-nonsticky t)
+      ;; Repli : emoji Unicode dimensionné par :height (comportement d'origine).
+      (let* ((face `(:height ,h ,@(when color `(:foreground ,color))))
+             (s (propertize emoji 'face face)))
+        (if (and r (not (zerop r)))
+            (propertize s 'display `((raise ,r)))
+          s)))))
 
 (cl-defun metal-toolbar-char (texte &key style color height raise)
   "Rendre TEXTE (souvent une lettre) comme bouton, avec un STYLE de format.
@@ -231,10 +266,17 @@ STYLE : un symbole parmi `bold', `italic', `underline', `strike', ou nil.
 COLOR : couleur de premier plan optionnelle.
 HEIGHT : multiplicateur de taille (défaut : taille emoji courante, pour
          rester cohérent avec les autres boutons de la barre).
-RAISE : décalage vertical ; si nil, `metal-toolbar-char-raise' (pour
-        aligner la lettre sur les emoji voisins)."
+RAISE : décalage vertical ; si nil, choisi automatiquement selon le mode
+        d'affichage : `metal-toolbar-char-raise-image' quand les icônes
+        sont des images (elles ne flottent pas), sinon
+        `metal-toolbar-char-raise' (mode texte)."
   (let* ((h (or height (/ (metal-toolbar-emoji-size) 100.0)))
-         (r (or raise metal-toolbar-char-raise))
+         (mode-image (and (fboundp 'metal-icones-disponible-p)
+                          (metal-icones-disponible-p)))
+         (r (or raise
+                (if mode-image
+                    metal-toolbar-char-raise-image
+                  metal-toolbar-char-raise)))
          (attrs (pcase style
                   ('bold      '(:weight bold))
                   ('italic    '(:slant italic))

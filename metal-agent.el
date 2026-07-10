@@ -3397,7 +3397,7 @@ l'emplacement d'affichage du bouton Agent."
    (metal-agent--padding)
    (metal-toolbar-separator)
    (metal-agent--toolbar-button
-    (metal-toolbar-emoji "🤖" :color (metal-agent--current-color))
+    (metal-toolbar-emoji "👤" :color (metal-agent--current-color))
     #'metal-agent-toggle-active
     (format "Activer les boutons %s (Agent)" (metal-agent--current-label)))
    (metal-agent--padding)))
@@ -3468,7 +3468,7 @@ et des descriptifs s'adapte au type de document : code ou texte (prose)."
      (metal-toolbar-separator)
      ;; Toggle (commun)
      (metal-agent--toolbar-button
-      (metal-toolbar-emoji "🤖" :color color)
+      (metal-toolbar-emoji "👤" :color color)
       #'metal-agent-toggle-active
       (format "Réduire la toolbar %s (revenir au mode compact)" label))
      "   "
