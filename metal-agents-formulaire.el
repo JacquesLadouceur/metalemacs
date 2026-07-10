@@ -39,11 +39,14 @@
     (:nom           . "Nom affiché dans la toolbar et les menus (ex: GitHub Copilot).")
     (:description   . "Texte court affiché à côté de l'agent dans l'Assistant.")
     (:couleur       . "Couleur hex de l'icône robot (ex: #4285F4). À choisir distincte des autres agents.")
+    (:gratuit       . "Indication de gratuité : « oui »/« t » pour gratuit, laisser vide pour ne rien préciser, ou saisir un libellé comme « compte Google AI ».")
     (:format        . "Comment extraire la réponse. claude-style : dernier bloc Markdown. codex-style : idem après avoir sauté l'en-tête de session. Chercher « <cli> non-interactive output format ».")
     (:args          . "Arguments du mode UNE REQUÊTE non interactif, séparés par des espaces. Doit contenir -p / --print / --prompt / exec. Ex Claude: -p --output-format text. Chercher « <cli> non-interactive -p prompt ».")
     (:via-process   . "Coché : lancé via make-process (recommandé, robuste). Décoché : via un shell.")
     (:isoler-fichier . "Coché pour un agent AUTONOME qui explore le disque / exécute des outils (type agy, Copilot). Le lance dans un dossier temporaire vide + préambule anti-agentique. À ÉVITER pour la révision de prose (court-circuite le harnais Ediff).")
     (:dernier-message . "Coché si le CLI est verbeux mais sait écrire sa réponse finale seule via un drapeau type --output-last-message. Chercher « <cli> output last message / --output-format json ».")
+    (:prompt-via-stdin . "Coché : le prompt est transmis sur l’entrée standard (stdin) plutôt qu’en dernier argument de la commande. Recommandé pour Codex, notamment sous Windows.")
+    (:stdin-sentinelle . "Argument ajouté à la commande pour lui indiquer de lire le prompt sur stdin. Codex utilise « - ». Laisser vide si la CLI lit stdin automatiquement.")
     (:auth-mode-externe . "Coché : auth gérée hors CLI (app, navigateur, trousseau), non vérifiable → statut neutre. Laisser décoché si un mécanisme ci-dessous vérifie l'auth.")
     (:auth-verifier . "Nom d'une fonction Lisp sans argument retournant t si authentifié (ex: metal-deps--claude-authentifie-p). Avancé.")
     (:auth-commande . "Commande dont le code de sortie 0 signifie « authentifié », séparée par espaces (ex: gh auth status). Chercher « <cli> auth status exit code ».")
@@ -53,7 +56,10 @@
     (:auth-aide     . "Instructions affichées à l'utilisateur pendant l'auth interactive (quoi choisir, où aller).")
     (:paquet-npm    . "Nom du paquet npm pour installation auto (ex: @anthropic-ai/claude-code).")
     (:paquet-brew   . "Nom de la formule Homebrew (ex: claude-code).")
-    (:paquet-pipx   . "Nom du paquet pipx/pip."))
+    (:paquet-pipx   . "Nom du paquet pipx/pip.")
+    (:install-manuelle-macos . "Commande ou consigne d'installation manuelle pour macOS, lorsque npm/brew/pipx ne conviennent pas.")
+    (:install-manuelle-windows . "Commande ou consigne d'installation manuelle pour Windows.")
+    (:install-manuelle-linux . "Commande ou consigne d'installation manuelle pour GNU/Linux."))
   "Aide courte par champ, montrée à la demande (echo area / survol).")
 
 ;;; ──────────────────────────────────────────────────────────────────
@@ -75,7 +81,7 @@ comme valeur initiale à la re-création des widgets.  Évite le recours à
 (defvar-local metal-deps--form-derniere-section nil
   "Identifiant de la dernière section basculée, pour repositionner le point.")
 
-(defconst metal-deps--form-buffer-nom "*MetalEmacs — Nouvel agent*"
+(defconst metal-deps--form-buffer-nom "*Configurer un  agent*"
   "Nom du buffer du formulaire d'ajout d'agent.")
 
 ;; Description des sections : (clé titre ouverte-par-défaut (champs…))
@@ -86,14 +92,17 @@ comme valeur initiale à la re-création des widgets.  Évite le recours à
      ((:id          "ID *"         texte)
       (:nom         "Nom *"        texte)
       (:description "Description"   texte)
-      (:couleur    "Couleur"       texte)))
+      (:couleur    "Couleur"       texte)
+      (:gratuit    "Gratuité"      texte)))
     (invocation "Invocation"      t
      ((:commande   "Commande *"    texte)
       (:format     "Format"        menu ("claude-style" "codex-style"))
       (:args       "Arguments"     texte)
       (:via-process "via-process"   checkbox t)
       (:isoler-fichier "isoler-fichier" checkbox nil)
-      (:dernier-message "dernier-message" checkbox nil)))
+      (:dernier-message "dernier-message" checkbox nil)
+      (:prompt-via-stdin "Prompt sur stdin" checkbox nil)
+      (:stdin-sentinelle "Argument stdin" texte)))
     (auth       "Authentification (optionnel)" nil
      ((:auth-mode-externe "auth-mode externe" checkbox nil)
       (:auth-verifier "auth-verifier" texte)
@@ -105,7 +114,10 @@ comme valeur initiale à la re-création des widgets.  Évite le recours à
     (install    "Installation auto (optionnel)" nil
      ((:paquet-npm  "paquet-npm"   texte)
       (:paquet-brew "paquet-brew"  texte)
-      (:paquet-pipx "paquet-pipx"  texte))))
+      (:paquet-pipx "paquet-pipx"  texte)
+      (:install-manuelle-macos "manuel macOS" texte)
+      (:install-manuelle-windows "manuel Windows" texte)
+      (:install-manuelle-linux "manuel Linux" texte))))
   "Structure déclarative du formulaire, par sections repliables.")
 
 ;;; ──────────────────────────────────────────────────────────────────
@@ -291,6 +303,15 @@ section n'a donc pas besoin d'être dépliée pour que sa saisie compte."
     (setq spec (list :nom nom :commande commande
                      :format (intern (or format-str "claude-style"))
                      :args args))
+    ;; :gratuit accepte t, nil (champ vide/non) ou un libellé textuel.
+    (let ((v (metal-deps--form-val-str :gratuit)))
+      (when v
+        (setq spec
+              (plist-put spec :gratuit
+                         (if (member (downcase v) '("t" "oui" "true" "yes"))
+                             t
+                           (unless (member (downcase v) '("nil" "non" "false" "no"))
+                             v))))))
     (dolist (paire '((:description . :description)
                      (:couleur     . :couleur)
                      (:auth-aide   . :auth-aide)
@@ -315,6 +336,20 @@ section n'a donc pas besoin d'être dépliée pour que sa saisie compte."
       (setq spec (plist-put spec :isoler-fichier t)))
     (when (metal-deps--form-val :dernier-message)
       (setq spec (plist-put spec :dernier-message t)))
+    (when (metal-deps--form-val :prompt-via-stdin)
+      (setq spec (plist-put spec :prompt-via-stdin t)))
+    (let ((v (metal-deps--form-val-str :stdin-sentinelle)))
+      (when v
+        (setq spec (plist-put spec :stdin-sentinelle v))))
+    ;; Instructions d'installation manuelle, indexées par system-type.
+    (let ((manuelle nil))
+      (dolist (paire '((:install-manuelle-macos . darwin)
+                       (:install-manuelle-windows . windows-nt)
+                       (:install-manuelle-linux . gnu/linux)))
+        (let ((v (metal-deps--form-val-str (car paire))))
+          (when v (push (cons (cdr paire) v) manuelle))))
+      (when manuelle
+        (setq spec (plist-put spec :install-manuelle (nreverse manuelle)))))
     (cons id spec)))
 
 ;;; ──────────────────────────────────────────────────────────────────
@@ -398,7 +433,7 @@ encore à l'écran."
     (set-text-properties (point-min) (point-max) nil))
 
   (widget-insert
-   (propertize "  Nouvel agent IA — catalogue MetalEmacs\n\n"
+   (propertize "  Configurer un  agent IA — catalogue MetalEmacs\n\n"
                'face '(:height 1.2 :weight bold)))
   (widget-insert
    (propertize
@@ -455,6 +490,9 @@ Inverse des conversions faites par `metal-deps--form-construire-spec' :
                         :paquet-npm :paquet-brew :paquet-pipx))
         (let ((x (plist-get spec k)))
           (when x (mv k (format "%s" x)))))
+      ;; :gratuit peut être t ou une chaîne descriptive.
+      (let ((g (plist-get spec :gratuit)))
+        (when g (mv :gratuit (if (eq g t) "oui" (format "%s" g)))))
       ;; Format et auth-verifier : symbole → chaîne.
       (let ((f (plist-get spec :format)))
         (when f (mv :format (format "%s" f))))
@@ -473,7 +511,14 @@ Inverse des conversions faites par `metal-deps--form-construire-spec' :
         (when (plist-get spec k) (mv k t)))
       ;; Sentinelle stdin (texte).
       (let ((s (plist-get spec :stdin-sentinelle)))
-        (when s (mv :stdin-sentinelle (format "%s" s)))))
+        (when s (mv :stdin-sentinelle (format "%s" s))))
+      ;; Installation manuelle par plateforme.
+      (let ((m (plist-get spec :install-manuelle)))
+        (dolist (paire '((darwin . :install-manuelle-macos)
+                         (windows-nt . :install-manuelle-windows)
+                         (gnu/linux . :install-manuelle-linux)))
+          (let ((x (alist-get (car paire) m)))
+            (when x (mv (cdr paire) (format "%s" x)))))))
     (nreverse v)))
 
 ;;;###autoload

@@ -16,6 +16,7 @@
 
 (require 'metal-deps)
 (require 'cl-lib)
+(require 'subr-x)
 
 ;;; ──────────────────────────────────────────────────────────────────
 ;;;  Emplacement du fichier catalogue
@@ -310,9 +311,57 @@ dernier recours seulement, l'ancien catalogue est conserve."
                  f)))))))
     metal-deps-agents-catalogue))
 
+(defun metal-deps--catalogue-valeur-texte (valeur)
+  "Retourne une representation Lisp lisible et stable de VALEUR.
+Les valeurs simples et les petites listes restent sur une ligne.  Les
+structures complexes sont formatees par le pretty-printer, sans dependre
+de la largeur de la fenetre courante."
+  (let ((print-quoted t)
+        (print-level nil)
+        (print-length nil))
+    (cond
+     ;; Les valeurs atomiques, chaines et listes plates sont plus lisibles
+     ;; sur une seule ligne (notamment :args et :auth-fichiers).
+     ((or (atom valeur)
+          (and (listp valeur)
+               (cl-every (lambda (x) (or (atom x) (stringp x))) valeur)))
+      (prin1-to-string valeur))
+     ;; Les alists et structures imbriquees sont mises en forme proprement.
+     (t
+      (string-trim-right
+       (let ((pp-use-max-width 78))
+         (pp-to-string valeur)))))))
+
+(defun metal-deps--inserer-entree-catalogue (entry)
+  "Insere ENTRY avec une propriete par ligne et des colonnes alignees."
+  (let* ((id (car entry))
+         (spec (cdr entry))
+         (cles (cl-loop for (cle valeur) on spec by #'cddr collect cle))
+         (largeur (if cles
+                      (apply #'max (mapcar (lambda (cle)
+                                            (length (symbol-name cle)))
+                                          cles))
+                    0)))
+    (insert " (" (symbol-name id) "\n")
+    (while spec
+      (let* ((cle (pop spec))
+             (valeur (pop spec))
+             (texte (metal-deps--catalogue-valeur-texte valeur))
+             (lignes (split-string texte "\n" nil)))
+        (insert "  " (format (format "%%-%ds" largeur) (symbol-name cle)) " ")
+        (insert (or (car lignes) ""))
+        (dolist (ligne (cdr lignes))
+          (insert "\n" (make-string (+ 3 largeur) ?\s) ligne))
+        (insert "\n")))
+    (insert " )\n")))
+
 (defun metal-deps--sauver-catalogue ()
   "Ecrit `metal-deps-agents-catalogue' dans le fichier, en preservant
 l'en-tete de commentaires existant (au-dessus de la 1re parenthese).
+
+La mise en forme est volontairement deterministe : une propriete par
+ligne, colonnes alignees, petites listes sur une ligne.  Le resultat est
+ainsi identique sous Windows, macOS et GNU/Linux.
 
 REFUSE d'ecrire une liste vide : cela ecraserait le seed et ferait
 disparaitre les agents par defaut (Antigravity, ChatGPT, Claude).  Un
@@ -332,13 +381,14 @@ catalogue nil au moment d'une sauvegarde signale un etat transitoire
                     (buffer-substring (point-min) (match-beginning 0))
                   "")))))
       (make-directory (file-name-directory f) t)
-      (with-temp-file f
-        (when (and entete (> (length entete) 0))
-          (insert entete))
-        (insert "(\n")
-        (dolist (entry metal-deps-agents-catalogue)
-          (insert (format " %S\n" entry)))
-        (insert ")\n"))
+      (let ((coding-system-for-write 'utf-8-unix))
+        (with-temp-file f
+          (when (and entete (> (length entete) 0))
+            (insert entete))
+          (insert "(\n")
+          (dolist (entry metal-deps-agents-catalogue)
+            (metal-deps--inserer-entree-catalogue entry))
+          (insert ")\n")))
       (metal-deps--journaliser "Catalogue d'agents sauvegarde (%d agents)"
                                (length metal-deps-agents-catalogue)))))
 

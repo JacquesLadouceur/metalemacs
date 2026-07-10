@@ -190,6 +190,12 @@ catalogue par `:stdin-sentinelle \"-\"' le cas échéant."
 (defvar-local metal-agent-active nil
   "Si non nil, afficher la toolbar Codex complète dans le buffer courant.")
 
+(defvar-local metal-agent--buffer-sortie-p nil
+  "Non nil dans les buffers de SORTIE d'agent (explication, révision, etc.).
+Ces buffers ne doivent PAS recevoir la header-line/toolbar Agent
+auto-installée : ce sont des consoles de lecture, pas des documents
+éditables.  Ils affichent en revanche un onglet dans la tab-line.")
+
 (defvar metal-agent--source-buffer nil)
 (defvar metal-agent--saved-region-beg nil)
 (defvar metal-agent--saved-region-end nil)
@@ -644,12 +650,22 @@ visuel.  Configuration idempotente — n'écrase pas le mode déjà actif."
       ;; Word-wrap visuel : pas de horizontal scroll pour les longs paragraphes.
       (unless (bound-and-true-p visual-line-mode)
         (visual-line-mode 1))
-      ;; Ne PAS présenter ce buffer comme un onglet : c'est une console
-      ;; utilitaire qu'on affiche/masque via le bouton 👁, pas un document.
-      ;; `global-tab-line-mode' étant actif, on masque la tab-line LOCALEMENT
-      ;; (même procédé que pour les buffers de révision Ediff).  Sans onglet,
-      ;; pas de bouton × susceptible de tuer le buffer et d'en perdre le contenu.
-      (setq-local tab-line-format nil))
+      ;; Marquer ce buffer comme SORTIE d'agent : il ne doit pas recevoir la
+      ;; toolbar Agent auto-installée (cf. `metal-agent-auto-enable-in-buffer'),
+      ;; sans quoi une barre d'outils s'affiche dans cette console de lecture.
+      (setq-local metal-agent--buffer-sortie-p t)
+      ;; Onglet dans la tab-line : on force `tab-line-mode' LOCALEMENT plutôt
+      ;; que de compter sur `global-tab-line-mode' (qui peut être inactif ou
+      ;; ne pas s'appliquer à la fenêtre d'affichage).  Le bouton × de
+      ;; fermeture reste celui du réglage global `tab-line-close-button-show'
+      ;; (mur à mur dans MetalEmacs) : on ne le neutralise PAS ici, l'onglet de
+      ;; sortie d'agent se ferme donc comme les autres.
+      (kill-local-variable 'tab-line-format)
+      ;; Purger toute header-line/toolbar déjà posée par un hook de mode, puis
+      ;; activer l'onglet.
+      (setq-local header-line-format nil)
+      (when (fboundp 'tab-line-mode)
+        (tab-line-mode 1)))
     buf))
 
 (defun metal-agent--status-buffer ()
@@ -3631,6 +3647,7 @@ place (les modes Org/Python/Prolog/Quarto/PDF gèrent la leur, segment agent
 inclus) et que `metal-toolbar-build' est disponible."
   (when (and metal-agent-auto-integrate
              (display-graphic-p)
+             (not metal-agent--buffer-sortie-p) ; jamais dans les buffers de sortie d'agent
              (metal-agent--mode-eligible-p)
              (null header-line-format)        ; ne jamais écraser une barre existante
              (fboundp 'metal-toolbar-build))

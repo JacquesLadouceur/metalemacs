@@ -1140,7 +1140,54 @@ Hors minibuffer, demande le motif via read-string."
                           my/tab-right)))
 (setq tab-line-tab-name-function #'my/tab-line-tab-name-buffer)
 (setq tab-line-new-button-show nil)
-;; (setq tab-line-close-button-show nil)
+
+;; --- Tab-line mur à mur : afficher un onglet PARTOUT, sans exception -------
+;;
+;; `global-tab-line-mode' n'installe pas la tab-line dans tous les buffers :
+;; `tab-line-mode--turn-on' en écarte plusieurs via trois mécanismes —
+;; `tab-line-exclude-modes' (liste de modes), la variable buffer-local
+;; `tab-line-exclude', et la symbol-property `tab-line-exclude' posée sur
+;; certains major-modes (help, dired…).  On neutralise l'ensemble :
+;;   - `tab-line-exclude-modes' vidé ci-dessous ;
+;;   - `tab-line-mode--turn-on' redéfini plus bas pour ignorer toute exclusion
+;;     de mode et n'écarter que les cas techniquement obligés.
+;;
+;; Bouton × de fermeture visible sur tous les onglets (fenêtre sélectionnée
+;; ou non) — cohérent avec l'advice `tab-line-close-tab' plus bas.
+(setq tab-line-close-button-show t)
+(setq tab-line-exclude-modes nil)
+
+;; `global-tab-line-mode' n'active `tab-line-mode' que dans les buffers pour
+;; lesquels `tab-line-mode--turn-on' juge la tab-line pertinente.  Par défaut
+;; cette fonction saute aussi les buffers dont le mode porte la propriété
+;; `tab-line-exclude' (symbol-property posée par help-mode, dired, etc.) — que
+;; ni `tab-line-exclude-modes' ni la variable buffer-local ne couvrent.  On la
+;; remplace par une version qui n'exclut QUE les cas techniquement obligés :
+;;   - le minibuffer (n'affiche jamais de tab-line) ;
+;;   - les buffers internes dont le nom commence par une espace (transitoires,
+;;     invisibles à l'utilisateur — y coller une tab-line n'a pas de sens et
+;;     provoque des artefacts d'affichage).
+;; Tout le reste — help, dired, magit, compilation, side-windows — reçoit un
+;; onglet.
+;;
+;; Enveloppé dans `with-eval-after-load' : `tab-line-mode--turn-on' est défini
+;; dans `tab-line.el'.  Sans cette précaution, un chargement de `tab-line'
+;; POSTÉRIEUR à init.el restaurerait la version d'origine et annulerait
+;; l'override.
+(with-eval-after-load 'tab-line
+  (defun tab-line-mode--turn-on ()
+    "Activer `tab-line-mode' dans tout buffer utilisateur (override MetalEmacs).
+Ne conserve que les exclusions techniques indispensables : minibuffer et
+buffers internes (nom débutant par une espace)."
+    (unless (or (minibufferp)
+                (string-match-p "\\` " (buffer-name)))
+      (tab-line-mode 1)))
+  ;; Si `global-tab-line-mode' était déjà actif avec l'ancienne logique, le
+  ;; rebasculer applique l'override aux buffers déjà ouverts au démarrage.
+  (when (bound-and-true-p global-tab-line-mode)
+    (global-tab-line-mode -1)
+    (global-tab-line-mode 1)))
+;;; -------------------------------------------------------------------------
 
 (define-advice tab-line-close-tab (:override (&optional e))
   "Ferme l'onglet actif.
