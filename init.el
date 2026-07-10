@@ -68,8 +68,12 @@
 (when (eq system-type 'windows-nt)
   (add-hook 'emacs-startup-hook
             (lambda ()
+              ;; Fonte de base pour le reste de l'Unicode (monochrome, OK)
               (set-fontset-font t 'unicode (font-spec :family "Segoe UI Symbol"))
-              (set-fontset-font t '(#x1F300 . #x1FAF8) "Segoe UI Emoji" nil 'prepend)
+              ;; Emoji couleur en priorité, sur le script emoji ET les symboles
+              (set-fontset-font t 'emoji  (font-spec :family "Segoe UI Emoji") nil 'prepend)
+              (set-fontset-font t 'symbol (font-spec :family "Segoe UI Emoji") nil 'prepend)
+              ;; Nerd Font en dernier recours seulement
               (when (find-font (font-spec :family "Symbols Nerd Font Mono"))
                 (set-fontset-font t 'unicode (font-spec :family "Symbols Nerd Font Mono") nil 'append)))
             95))
