@@ -15,6 +15,151 @@
 
 (require 'recentf)
 (require 'cl-lib)
+(require 'svg nil t)
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Icônes Twemoji : téléchargement paresseux et rendu SVG couleur
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; Emacs sous Windows (backend w32) ne colore PAS les emoji Unicode : la
+;; fonte couleur est bien sélectionnée mais le moteur d'affichage rend en
+;; monochrome. Pour obtenir un rendu couleur IDENTIQUE sur macOS et
+;; Windows, on n'affiche plus les emoji comme du texte : on rend des
+;; images SVG Twemoji via librsvg (présent dans ce build : voir RSVG dans
+;; `system-configuration-features').
+;;
+;; Les SVG sont téléchargés au premier démarrage (si absents) puis mis en
+;; cache localement. En cas d'absence de réseau, on retombe proprement
+;; sur l'emoji Unicode (monochrome sous Windows, couleur sous macOS) sans
+;; jamais planter.
+;;
+;; Graphiques Twemoji © Twitter/jdecked, licence CC-BY 4.0.
+
+(defvar metal-dashboard-icones-dir
+  (expand-file-name "icones/twemoji/" user-emacs-directory)
+  "Dossier de cache local des icônes SVG Twemoji.")
+
+(defvar metal-dashboard-icones-url-base
+  "https://raw.githubusercontent.com/jdecked/twemoji/master/assets/svg/"
+  "URL de base du dépôt Twemoji (fork maintenu) pour les SVG.")
+
+(defvar metal-dashboard-icones-table
+  ;; emoji  → codepoint hexadécimal du fichier SVG Twemoji.
+  ;; Les codepoints sont en minuscules, sans U+FE0F (sélecteur de
+  ;; variante) : Twemoji nomme ses fichiers sans le VS16.
+  '(("📂" . "1f4c2")   ; dossier ouvert  — METAL
+    ("📁" . "1f4c1")   ; dossier
+    ("📅" . "1f4c5")   ; calendrier
+    ("📝" . "1f4dd")   ; mémo / notes
+    ("🔖" . "1f516")   ; signet
+    ("📰" . "1f4f0")   ; actualités
+    ("🔧" . "1f527")   ; clé / assistant
+    ("📊" . "1f4ca")   ; présentation
+    ("📄" . "1f4c4")   ; document
+    ("🐍" . "1f40d")   ; Python
+    ("📋" . "1f4cb")   ; document ORG
+    ("🗂" . "1f5c2")   ; diagramme (card index dividers)
+    ("🗂️" . "1f5c2")  ; idem, avec sélecteur de variante U+FE0F
+    ("➕" . "2795")    ; ajouter
+    ("🤖" . "1f916"))  ; robot — titre
+  "Table de correspondance emoji → nom de fichier SVG Twemoji (codepoint).")
+
+(defvar metal-dashboard-icones--cache (make-hash-table :test 'equal)
+  "Cache mémoire des images SVG déjà construites, clé = (codepoint . taille-px).")
+
+(defvar metal-dashboard-icones--telechargement-tente nil
+  "Non nil une fois la tentative de téléchargement initiale effectuée.
+Évite de retenter le réseau à chaque rafraîchissement du dashboard
+pendant une même session.")
+
+(defun metal-dashboard--icone-codepoint (emoji)
+  "Retourner le codepoint Twemoji associé à EMOJI, ou nil si inconnu."
+  (cdr (assoc emoji metal-dashboard-icones-table)))
+
+(defun metal-dashboard--icone-fichier (codepoint)
+  "Retourner le chemin local du SVG pour CODEPOINT."
+  (expand-file-name (concat codepoint ".svg") metal-dashboard-icones-dir))
+
+(defun metal-dashboard--icones-ecrire-licence ()
+  "Créer le fichier d'attribution CC-BY à côté du cache d'icônes."
+  (let ((licence (expand-file-name "ICONES-LICENCE.txt"
+                                   metal-dashboard-icones-dir)))
+    (unless (file-exists-p licence)
+      (ignore-errors
+        (with-temp-file licence
+          (insert
+           "Icônes du tableau de bord MetalEmacs\n"
+           "════════════════════════════════════\n\n"
+           "Ces images proviennent de Twemoji, l'ensemble d'emoji ouvert\n"
+           "initialement publié par Twitter, désormais maintenu par la\n"
+           "communauté (fork jdecked).\n\n"
+           "Graphiques Twemoji © Twitter, Inc. et contributeurs.\n"
+           "Licence : Creative Commons Attribution 4.0 (CC-BY 4.0)\n"
+           "https://creativecommons.org/licenses/by/4.0/\n\n"
+           "Source : https://github.com/jdecked/twemoji\n"))))))
+
+(defun metal-dashboard--icones-telecharger-manquantes ()
+  "Télécharger les SVG Twemoji absents du cache local.
+Silencieux. En cas d'échec réseau, laisse simplement les fichiers
+manquants : le rendu retombera sur l'emoji Unicode. Ne retente pas
+plus d'une fois par session."
+  (unless metal-dashboard-icones--telechargement-tente
+    (setq metal-dashboard-icones--telechargement-tente t)
+    (make-directory metal-dashboard-icones-dir t)
+    (metal-dashboard--icones-ecrire-licence)
+    (let ((codepoints (delete-dups
+                       (mapcar #'cdr metal-dashboard-icones-table))))
+      (dolist (cp codepoints)
+        (let ((fichier (metal-dashboard--icone-fichier cp)))
+          (unless (file-exists-p fichier)
+            (let ((url (concat metal-dashboard-icones-url-base cp ".svg")))
+              (ignore-errors
+                (url-copy-file url fichier t)))))))))
+
+(defun metal-dashboard--icone-taille-px ()
+  "Retourner la taille en pixels des icônes, dérivée des préférences.
+Suit `metal-toolbar-emoji-size' (échelle ~160 = 100 %) si disponible,
+sinon une valeur par défaut raisonnable."
+  (let ((base (if (fboundp 'metal-toolbar-emoji-size)
+                  (metal-toolbar-emoji-size)
+                160)))
+    ;; base ~160 correspond à ~20 px ; on garde la proportion.
+    (max 14 (round (* base 0.125)))))
+
+(defun metal-dashboard--icone-image (emoji &optional taille-px)
+  "Construire l'image SVG Twemoji pour EMOJI à TAILLE-PX pixels.
+Retourne un objet image utilisable comme propriété `display', ou nil si
+le SVG n'est pas disponible localement (le rendu retombera alors sur
+l'emoji Unicode)."
+  (let ((codepoint (metal-dashboard--icone-codepoint emoji)))
+    (when codepoint
+      (let* ((px (or taille-px (metal-dashboard--icone-taille-px)))
+             (cle (cons codepoint px))
+             (cache (gethash cle metal-dashboard-icones--cache 'absent)))
+        (if (not (eq cache 'absent))
+            cache
+          (let* ((fichier (metal-dashboard--icone-fichier codepoint))
+                 (image (when (and (display-graphic-p)
+                                   (image-type-available-p 'svg)
+                                   (file-readable-p fichier))
+                          (create-image fichier 'svg nil
+                                        :width px :height px
+                                        :ascent 'center))))
+            (puthash cle image metal-dashboard-icones--cache)
+            image))))))
+
+(defun metal-dashboard--icone (emoji &optional taille-px)
+  "Retourner une chaîne affichant EMOJI comme icône SVG couleur.
+Si le SVG Twemoji est disponible, renvoie l'emoji porteur d'une
+propriété `display' pointant vers l'image (couleur, identique sur
+Windows et macOS). Sinon, renvoie l'emoji Unicode tel quel (repli).
+
+TAILLE-PX force une taille précise ; par défaut elle suit les
+préférences de taille d'icônes du tableau de bord."
+  (let ((image (metal-dashboard--icone-image emoji taille-px)))
+    (if image
+        (propertize emoji 'display image 'rear-nonsticky t)
+      emoji)))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Variables
@@ -225,13 +370,14 @@ demander immédiatement un nom pour créer la première."
                      (date-relative
                       (metal-dashboard--notes-format-date-relative mtime)))
                 (insert "  ")
-                (insert-button (format "📝 %s" nom)
+                (insert-button (concat (metal-dashboard--icone "📝") " " nom)
                                'action (metal-dashboard--notes-bouton-ouvrir filepath)
                                'follow-link t
                                'help-echo (format "Ouvrir %s" filepath))
                 (insert (format "    %s\n" date-relative))))
             (insert "\n  ")
-            (insert-button "➕ Créer une nouvelle note..."
+            (insert-button (concat (metal-dashboard--icone "➕")
+                                   " Créer une nouvelle note...")
                            'action (metal-dashboard--notes-bouton-creer)
                            'follow-link t
                            'help-echo "Demander un nom et créer une note")
@@ -383,13 +529,14 @@ demander immédiatement un nom pour créer le premier."
                        (date-relative
                         (metal-dashboard--notes-format-date-relative mtime)))
                   (insert "  ")
-                  (insert-button (format "🔖 %s" nom)
+                  (insert-button (concat (metal-dashboard--icone "🔖") " " nom)
                                  'action (metal-dashboard--signets-bouton-ouvrir filepath)
                                  'follow-link t
                                  'help-echo (format "Ouvrir %s" filepath))
                   (insert (format "    %s\n" date-relative))))
               (insert "\n  ")
-              (insert-button "➕ Créer une nouvelle liste de signets..."
+              (insert-button (concat (metal-dashboard--icone "➕")
+                                     " Créer une nouvelle liste de signets...")
                              'action (metal-dashboard--signets-bouton-creer)
                              'follow-link t
                              'help-echo "Demander un nom et créer une liste de signets")
@@ -440,10 +587,21 @@ EMOJI est le glyphe à afficher ; COLOR et FALLBACK sont ignorés (les
 emojis portent leur propre couleur) ; HEIGHT règle la taille ; V-ADJUST
 décale verticalement."
   (ignore color fallback)
-  (let ((s (propertize emoji 'face `(:height ,(or height 1.2)))))
-    (if v-adjust
-        (propertize s 'display `((raise ,(- v-adjust))))
-      s)))
+  (let* ((echelle (or height 1.2))
+         (px (round (* (metal-dashboard--icone-taille-px) echelle)))
+         (image (metal-dashboard--icone-image emoji px)))
+    (if image
+        ;; Rendu SVG couleur (identique Windows / macOS).
+        (let ((s (propertize emoji 'display image 'rear-nonsticky t)))
+          (if v-adjust
+              (propertize s 'display
+                          (list image (list 'raise (- v-adjust))))
+            s))
+      ;; Repli : emoji Unicode dimensionné par :height (comportement d'origine).
+      (let ((s (propertize emoji 'face `(:height ,echelle))))
+        (if v-adjust
+            (propertize s 'display `((raise ,(- v-adjust))))
+          s)))))
 
 (defun metal-dashboard--insert-to-column (column)
   "Insérer des espaces jusqu'à COLUMN.
@@ -577,23 +735,13 @@ Elle est plus stable entre macOS et Windows pour ce dashboard."
 
 (defun metal-dashboard--header-buttons ()
   "Créer la barre de boutons d'en-tête."
-  (let* ((icon-folder
-          (propertize "📂" 'face '(:height 1.6)))
-
-         (icon-calendar
-          (propertize "📅" 'face '(:height 1.5)))
-
-         (icon-notes
-          (propertize "📝" 'face '(:height 1.5)))
-
-         (icon-signets
-          (propertize "🔖" 'face '(:height 1.4)))
-
-         (icon-news
-          (propertize "📰" 'face '(:height 1.5)))
-
-         (icon-assistant
-          (propertize "🔧" 'face '(:height 1.5)))
+  (let* ((px (metal-dashboard--icone-taille-px))
+         (icon-folder    (metal-dashboard--icone "📂" (round (* px 1.6))))
+         (icon-calendar  (metal-dashboard--icone "📅" (round (* px 1.5))))
+         (icon-notes     (metal-dashboard--icone "📝" (round (* px 1.5))))
+         (icon-signets   (metal-dashboard--icone "🔖" (round (* px 1.4))))
+         (icon-news      (metal-dashboard--icone "📰" (round (* px 1.5))))
+         (icon-assistant (metal-dashboard--icone "🔧" (round (* px 1.5))))
 
          (text-face '(:foreground "#0066cc" :weight bold)))
     (concat
@@ -881,6 +1029,10 @@ Sinon, affiche un message d'erreur."
   "Afficher le tableau de bord MetalEmacs dans un buffer lisible et joli."
   (interactive)
 
+  ;; Récupérer les icônes SVG couleur si elles manquent (silencieux,
+  ;; une seule tentative par session, repli sur emoji Unicode si hors-ligne).
+  (metal-dashboard--icones-telecharger-manquantes)
+
   ;; S'assurer que recentf est actif et à jour
   (recentf-mode 1)
   (ignore-errors (recentf-save-list))
@@ -905,7 +1057,8 @@ Sinon, affiche un message d'erreur."
       ;; --------------------------------------------------
       ;;  Titre encadré
       ;; --------------------------------------------------
-      (let* ((title "🤖 - MetalEmacs 1.1 – Tableau de bord ")
+      (let* ((title (concat (metal-dashboard--icone "🤖")
+                            " - MetalEmacs 1.1 – Tableau de bord "))
              (line-len (max (length title) avail-width))
              (line     (make-string line-len ?═))
              (pad-left (/ (- line-len (length title)) 2))

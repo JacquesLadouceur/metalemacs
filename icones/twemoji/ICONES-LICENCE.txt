@@ -1,0 +1,12 @@
+Icônes du tableau de bord MetalEmacs
+════════════════════════════════════
+
+Ces images proviennent de Twemoji, l'ensemble d'emoji ouvert
+initialement publié par Twitter, désormais maintenu par la
+communauté (fork jdecked).
+
+Graphiques Twemoji © Twitter, Inc. et contributeurs.
+Licence : Creative Commons Attribution 4.0 (CC-BY 4.0)
+https://creativecommons.org/licenses/by/4.0/
+
+Source : https://github.com/jdecked/twemoji
