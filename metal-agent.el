@@ -3547,7 +3547,7 @@ et des descriptifs s'adapte au type de document : code ou texte (prose)."
                  'display '(raise 0.2)
                  'help-echo "Profil agentique actif")
      (metal-agent--toolbar-button
-      (metal-toolbar-emoji "▾")
+      (metal-toolbar-char "▼")
       #'metal-agent-choisir-profil-menu
       "Changer de profil agentique")
      (metal-agent--padding))))
