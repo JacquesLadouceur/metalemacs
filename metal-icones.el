@@ -71,6 +71,15 @@ d'origine).  Permet de désactiver globalement le rendu image."
   :type 'integer
   :group 'metal-icones)
 
+(defcustom metal-icones-locales-dir
+  (expand-file-name "icones/locales/" user-emacs-directory)
+  "Dossier des icônes SVG « maison » embarquées dans MetalEmacs.
+Contrairement aux icônes Twemoji (téléchargées et nommées par codepoint),
+ces SVG sont fournis avec la distribution et désignés par un nom logique
+via `metal-icone-locale' (ex. « organigramme » → organigramme.svg)."
+  :type 'directory
+  :group 'metal-icones)
+
 (defcustom metal-icones-substituts
   '(("✚" . "➕"))   ; croix grasse U+271A → heavy plus U+2795 (a un SVG Twemoji)
   "Table de substitution pour les caractères sans SVG Twemoji.
@@ -261,6 +270,41 @@ Silencieux ; utile au démarrage pour éviter une latence au premier
 affichage.  TAILLE-PX optionnelle."
   (dolist (e emojis)
     (ignore-errors (metal-icones-image e taille-px))))
+
+;;;###autoload
+(defun metal-icone-locale (nom &optional taille-px)
+  "Retourner une chaîne affichant l'icône SVG locale NOM (sans extension).
+Cherche NOM.svg dans `metal-icones-locales-dir' et le rend en image à
+TAILLE-PX pixels.  Sert aux icônes « maison » de MetalEmacs qui n'ont pas
+d'équivalent emoji (ex. « organigramme »).  Repli : chaîne vide si l'icône
+est introuvable ou le rendu indisponible.
+
+Renvoie une chaîne d'un caractère invisible porteur de la propriété
+`display', afin de pouvoir être insérée comme un emoji dans une barre
+d'outils ou le tableau de bord."
+  (let ((image (metal-icones-image-locale nom taille-px)))
+    (if image
+        (propertize " " 'display image 'rear-nonsticky t)
+      "")))
+
+(defun metal-icones-image-locale (nom &optional taille-px)
+  "Construire l'image SVG de l'icône locale NOM à TAILLE-PX pixels.
+Retourne un objet image, ou nil si indisponible."
+  (when (metal-icones-disponible-p)
+    (let* ((px (or taille-px metal-icones-taille-defaut))
+           (cle (cons (concat "locale:" nom) px))
+           (cache (gethash cle metal-icones--cache 'absent)))
+      (if (not (eq cache 'absent))
+          cache
+        (let* ((chemin (expand-file-name (concat nom ".svg")
+                                         metal-icones-locales-dir))
+               (image (when (file-readable-p chemin)
+                        (ignore-errors
+                          (create-image chemin 'svg nil
+                                        :width px :height px
+                                        :ascent 'center)))))
+          (puthash cle image metal-icones--cache)
+          image)))))
 
 (provide 'metal-icones)
 

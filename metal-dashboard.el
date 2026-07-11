@@ -613,7 +613,7 @@ Elle est plus stable entre macOS et Windows pour ce dashboard."
 (defun metal-dashboard--header-buttons ()
   "Créer la barre de boutons d'en-tête."
   (let* ((px (metal-dashboard--icone-taille-px))
-         (icon-folder    (metal-dashboard--icone "📂" (round (* px 1.6))))
+         (icon-folder    (metal-dashboard--icone "❓" (round (* px 1.6))))
          (icon-calendar  (metal-dashboard--icone "📅" (round (* px 1.5))))
          (icon-notes     (metal-dashboard--icone "📝" (round (* px 1.5))))
          (icon-signets   (metal-dashboard--icone "🔖" (round (* px 1.4))))
@@ -910,8 +910,8 @@ Sinon, affiche un message d'erreur."
   ;; téléchargées si absentes, repli sur emoji Unicode si hors-ligne).
   (when (fboundp 'metal-icones-precharger)
     (metal-icones-precharger
-     '("👤" "📂" "📅" "📝" "🔖" "📰" "🔧"
-       "📊" "📄" "🐍" "📋" "🗂" "➕")
+     '("👤" "❓" "📅" "📝" "🔖" "📰" "🔧"
+       "📊" "📄" "🐍" "🦉" "📋" "🗂" "➕")
      (metal-dashboard--icone-taille-px)))
 
   ;; S'assurer que recentf est actif et à jour
@@ -972,11 +972,18 @@ Sinon, affiche un message d'erreur."
              (icon-python
               (metal-dashboard--mdicon "🐍" nil 1.2))
              (icon-prolog
-              (metal-dashboard--mdicon "λ" nil 1.2))
+              (metal-dashboard--mdicon "🦉" nil 1.2))
              (icon-org
               (metal-dashboard--mdicon "📋" nil 1.2))
              (icon-drawio
-              (metal-dashboard--mdicon "🗂️" nil 1.2))
+              (if (fboundp 'metal-icone-locale)
+                  (let ((s (metal-icone-locale
+                            "organigramme"
+                            (round (* (metal-dashboard--icone-taille-px) 1.2)))))
+                    (if (and s (> (length s) 0))
+                        s
+                      (metal-dashboard--mdicon "🗂️" nil 1.2)))
+                (metal-dashboard--mdicon "🗂️" nil 1.2)))
              (left-key-column 3)
              (right-key-column 42))
         (metal-dashboard--insert-new-file-row

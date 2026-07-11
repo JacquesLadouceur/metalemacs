@@ -3496,7 +3496,10 @@ et des descriptifs s'adapte au type de document : code ou texte (prose)."
           #'metal-agent-reformuler
           "Reformuler le passage (ton, concision, fluidité)")
        (metal-agent--toolbar-button
-        (metal-toolbar-emoji (if prolog-p "➕" "ƒ"))
+        ;; (metal-toolbar-emoji (if prolog-p "➕" "ƒ"))
+        (if prolog-p
+            (metal-toolbar-emoji "➕")
+          (metal-toolbar-char "ƒ"))
         #'metal-agent-ajouter-fonction
         (if prolog-p "Ajouter un prédicat" "Ajouter une fonction")))
      "   "

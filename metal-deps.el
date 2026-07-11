@@ -1903,8 +1903,19 @@ Vérifie dans l'ordre :
 
 (defun metal-deps--agent-cli-installee-p (agent-spec)
   "Retourne le chemin de la CLI si elle est installée, sinon nil.
-AGENT-SPEC est le PLIST (sans le ID) du catalogue."
-  (executable-find (plist-get agent-spec :commande)))
+AGENT-SPEC est le PLIST (sans le ID) du catalogue.
+
+La présence est testée sur l'EXÉCUTABLE, pas sur la commande complète :
+certaines commandes comportent une sous-commande (ex. \"gh copilot\", où
+l'exécutable réel est \"gh\" et \"copilot\" est une extension).  On utilise
+`:executable' si fourni, sinon le PREMIER mot de `:commande'.  Ainsi
+`executable-find' cherche bien un binaire existant plutôt qu'une chaîne
+à plusieurs mots qui ne correspond à aucun fichier."
+  (let* ((commande (plist-get agent-spec :commande))
+         (executable (or (plist-get agent-spec :executable)
+                         (and commande
+                              (car (split-string commande "[ \t]+" t))))))
+    (and executable (executable-find executable))))
 
 (defun metal-deps--agent-enregistre-p (id)
   "Retourne t si l'agent ID est dans `metal-agent-providers'."
@@ -1912,9 +1923,37 @@ AGENT-SPEC est le PLIST (sans le ID) du catalogue."
        (assq id metal-agent-providers)))
 
 (defun metal-deps--agent-complet-p (id agent-spec)
-  "Retourne t si l'agent ID est enregistré ET sa CLI est installée."
-  (and (metal-deps--agent-enregistre-p id)
-       (metal-deps--agent-cli-installee-p agent-spec)))
+  "Retourne le chemin de la CLI si l'agent ID est utilisable, sinon nil.
+
+Prédicat PUR (sans effet de bord) : le statut « installé » repose sur la
+présence réelle de la CLI (`metal-deps--agent-cli-installee-p'), et non
+sur l'enregistrement dans `metal-agent-providers' (persisté via Custom,
+peu fiable comme unique source de vérité).
+
+L'enregistrement en mémoire des agents dont la CLI est présente est géré
+séparément par `metal-deps--synchroniser-agents-installes', appelé une
+seule fois avant le rendu — jamais depuis un prédicat d'affichage."
+  (ignore id)
+  (metal-deps--agent-cli-installee-p agent-spec))
+
+(defun metal-deps--synchroniser-agents-installes ()
+  "Enregistrer en mémoire les agents du catalogue dont la CLI est présente.
+À appeler UNE FOIS avant de construire l'affichage de l'assistant.  Sans
+effet de bord pendant le rendu : évite que `metal-agent-providers' change
+au milieu de la boucle d'affichage (source de désynchronisation des
+boutons).  N'écrit pas dans Custom ; se contente de peupler la variable
+en mémoire pour que `metal-agent.el' connaisse les agents utilisables."
+  (unless (boundp 'metal-agent-providers)
+    (defvar metal-agent-providers nil))
+  (dolist (entry metal-deps-agents-catalogue)
+    (let* ((id   (car entry))
+           (spec (cdr entry)))
+      (when (and (metal-deps--agent-cli-installee-p spec)
+                 (not (metal-deps--agent-enregistre-p id))
+                 (fboundp 'metal-deps--agent-spec->provider-entry))
+        (add-to-list 'metal-agent-providers
+                     (metal-deps--agent-spec->provider-entry id spec)
+                     t)))))
 
 ;; (defun metal-deps--agent-spec->provider-entry (id spec)
 ;;   "Convertit une entrée du catalogue en entrée pour `metal-agent-providers'.
@@ -2142,17 +2181,22 @@ affiche un buffer d'aide avec les instructions manuelles (champ
     ;; 1) Enregistrer dans metal-agent-providers (persisté via Custom).
     (unless (boundp 'metal-agent-providers)
       (require 'metal-agent nil t))
-    (unless (metal-deps--agent-enregistre-p id)
+    (unless (boundp 'metal-agent-providers)
+      (defvar metal-agent-providers nil))
+    (if (metal-deps--agent-enregistre-p id)
+        (metal-deps--journaliser "Agent « %s » déjà enregistré (%s)"
+                                 (plist-get spec :nom) id)
       (customize-save-variable
        'metal-agent-providers
-       (append (and (boundp 'metal-agent-providers) metal-agent-providers)
+       (append metal-agent-providers
                (list (metal-deps--agent-spec->provider-entry id spec))))
+      (message "Agent « %s » enregistré (%s)." (plist-get spec :nom) id)
       (metal-deps--journaliser "Agent « %s » enregistré dans metal-agent-providers"
                                (plist-get spec :nom)))
     ;; 2) Installer la CLI si absente.
     (cond
      ((metal-deps--agent-cli-installee-p spec)
-      (message "Agent « %s » : déjà configuré et CLI déjà installée."
+      (message "Agent « %s » : configuré ; CLI déjà installée."
                (plist-get spec :nom)))
      (t
       (let ((cmd (metal-deps--commande-installation-cli spec)))
@@ -2576,7 +2620,7 @@ encore persister dans la configuration Custom de l'utilisateur.  Cette
 fonction est idempotente — sûre à appeler plusieurs fois.  Pour
 réutiliser un de ces agents, passer par « + Ajouter un autre agent… »."
   (when (boundp 'metal-agent-providers)
-    (let* ((ids-legacy '(opencode goose aider copilot))
+    (let* ((ids-legacy '(opencode goose aider))
            (avant metal-agent-providers)
            (apres (cl-remove-if (lambda (p) (memq (car p) ids-legacy))
                                 avant)))
@@ -2673,6 +2717,11 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
   ;; (pour propager les changements de :nom/:buffer-name aux entrées
   ;; déjà persistées dans Custom).
   (metal-deps--sync-providers-avec-catalogue)
+  ;; Enregistrer en mémoire les agents du catalogue dont la CLI est
+  ;; présente (ex. installés manuellement).  Fait UNE FOIS ici, avant le
+  ;; rendu, pour que `metal-agent-providers' soit stable pendant toute la
+  ;; boucle d'affichage (sinon les boutons ◯ se désynchronisent).
+  (metal-deps--synchroniser-agents-installes)
   (let* ((buf (get-buffer-create "*MetalEmacs Assistant*"))
          ;; Mémoriser la position d'affichage si le buffer est déjà ouvert,
          ;; pour la restaurer après le rerendu.  Sans ça, un clic sur ◯
@@ -2710,7 +2759,7 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                            (gestionnaire . "📦 Gestionnaires de paquets")
                            (logiciels . "🎓 Logiciels")
                            (pdf . "📄 Support PDF")
-                           (agents-ia . "🤖 Agents IA")))
+                           (agents-ia . "👤 Agents IA")))
         (let* ((cat-id (car categorie))
                (cat-nom (cdr categorie))
                (outils-cat (cl-remove-if-not

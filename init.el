@@ -1816,6 +1816,37 @@ fenêtre principale via `metal/fenetre-principale-p'."
       (when (fboundp 'metal-treemacs--save-icon-size)
         (advice-add 'treemacs-resize-icons :after #'metal-treemacs--save-icon-size)))))
 
+;; ------------------------------------------------------------
+;; Densité des lignes de Treemacs
+;; ------------------------------------------------------------
+;; La hauteur des lignes de Treemacs est imposée surtout par la taille des
+;; icônes (`metal-treemacs-icon-size', appliquée via `treemacs-resize-icons').
+;; On supprime en plus tout espacement inter-ligne dans le buffer Treemacs
+;; pour resserrer l'affichage au maximum permis par les icônes.
+;;
+;; Variable réglable : `metal-treemacs-line-spacing' (nil ou 0 = le plus
+;; serré ; un entier positif ajoute des pixels entre les lignes).
+(defcustom metal-treemacs-line-spacing 0
+  "Espacement inter-ligne (en pixels) dans le buffer Treemacs.
+0 ou nil = lignes au plus serré (hauteur imposée par les icônes).
+Un entier positif ajoute de l'espace vertical entre les lignes."
+  :type '(choice (const :tag "Aucun" nil) integer)
+  :group 'metal)
+
+(defun metal-treemacs--appliquer-line-spacing ()
+  "Appliquer `metal-treemacs-line-spacing' au buffer Treemacs courant."
+  (setq-local line-spacing metal-treemacs-line-spacing))
+
+(add-hook 'treemacs-mode-hook #'metal-treemacs--appliquer-line-spacing)
+
+;; Appliquer immédiatement aux buffers Treemacs déjà ouverts (rechargement
+;; de la config sans redémarrage).
+(dolist (buf (buffer-list))
+  (with-current-buffer buf
+    (when (derived-mode-p 'treemacs-mode)
+      (metal-treemacs--appliquer-line-spacing))))
+
+
 
 ;;; Intégration de metal-secretaire dans MetalEmacs -*- lexical-binding: t; -*-
 ;;
