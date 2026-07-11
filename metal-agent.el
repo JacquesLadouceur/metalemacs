@@ -3544,7 +3544,12 @@ et des descriptifs s'adapte au type de document : code ou texte (prose)."
      (metal-toolbar-separator)
      (propertize (format "Profil : %s " (or (metal-agent--profil-prop :nom) "?"))
                  'face 'metal-agent-profil-indicateur-face
-                 'display '(raise 0.2)
+                 'display (let ((r (if (and (fboundp 'metal-icones-disponible-p)
+                                            (metal-icones-disponible-p))
+                                       (if (boundp 'metal-toolbar-char-raise-image)
+                                           metal-toolbar-char-raise-image 0.0)
+                                     0.2)))
+                            (if (and r (not (zerop r))) `(raise ,r) '(raise 0.0)))
                  'help-echo "Profil agentique actif")
      (metal-agent--toolbar-button
       (metal-toolbar-char "▼")
