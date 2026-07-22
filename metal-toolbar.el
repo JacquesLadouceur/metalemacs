@@ -180,6 +180,15 @@ Augmenter pour aérer la barre d'outils horizontalement."
   :type 'integer
   :group 'metal-toolbar)
 
+(defcustom metal-toolbar-left-margin 0
+  "Retrait horizontal ajouté APRÈS l'alignement sur la colonne du texte.
+La barre commence par défaut à l'aplomb du code (juste après la gouttière
+des numéros de ligne), grâce à un espace `:align-to'.  Ce réglage ajoute,
+le cas échéant, quelques espaces supplémentaires au-delà de cet alignement.
+0 = la première icône démarre exactement où commence le texte."
+  :type 'integer
+  :group 'metal-toolbar)
+
 (defface metal-toolbar-separator-face
   '((t :weight bold :foreground "gray"))
   "Visage du séparateur entre groupes de boutons."
@@ -198,6 +207,18 @@ chaîne `header-line-format'."
   (propertize " "
               'face `(:height ,metal-toolbar-vpadding-height)
               'display `((raise ,metal-toolbar-vpadding-raise))))
+
+(defun metal-toolbar-left-align ()
+  "Espace invisible calant la suite à l'aplomb du TEXTE du tampon.
+Mesure la largeur totale de la gouttière des numéros de ligne — marges
+comprises — via `(line-number-display-width 'columns)', et étend l'espace
+jusque-là.  Si les numéros sont éteints, retombe sur la colonne 0.
+`metal-toolbar-left-margin' ajoute, au besoin, un retrait supplémentaire."
+  (let* ((gouttiere (if (bound-and-true-p display-line-numbers)
+                        (line-number-display-width 'columns)
+                      0))
+         (cible (+ gouttiere metal-toolbar-left-margin)))
+    (propertize " " 'display `(space :align-to ,cible))))
 
 (defun metal-toolbar-separator (&optional char)
   "Séparateur vertical entre groupes de boutons.
@@ -376,7 +397,8 @@ toolbar Secrétaire (`metal-secretaire-active'), elle REMPLACE les boutons
 spécifiques au mode : ces derniers ne sont alors pas rendus, seul le segment
 spécialisé (étendu) apparaît.  À la fermeture, les boutons du mode reviennent
 automatiquement."
-  (let* ((parts (list (metal-toolbar-vpadding) " "))
+  (let* ((parts (list (metal-toolbar-vpadding)
+                      (metal-toolbar-left-align)))
          ;; L'agent « prend la barre » uniquement si ce module a demandé
          ;; l'intégration agent (:agent t) ET que l'agent est actif dans le
          ;; buffer courant.  On protège l'accès à la variable au cas où

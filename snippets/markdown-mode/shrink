@@ -1,0 +1,6 @@
+# -*- mode: snippet -*-
+# name: shrink
+# key: shrink
+# --
+
+{.shrink}

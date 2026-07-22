@@ -2611,35 +2611,6 @@ agents personnalisés (qui ne sont pas dans le catalogue)."
         (metal-deps--journaliser
          "Providers synchronisés avec le catalogue (label/buffer-name mis à jour)")))))
 
-(defun metal-deps--migration-nettoyage-agents-legacy ()
-  "Retire de `metal-agent-providers' les anciens IDs d'agents qui ne
-sont plus dans le catalogue intégré (opencode, goose, aider, copilot).
-
-Ces agents existaient dans le catalogue historiquement et peuvent
-encore persister dans la configuration Custom de l'utilisateur.  Cette
-fonction est idempotente — sûre à appeler plusieurs fois.  Pour
-réutiliser un de ces agents, passer par « + Ajouter un autre agent… »."
-  (when (boundp 'metal-agent-providers)
-    (let* ((ids-legacy '(opencode goose aider))
-           (avant metal-agent-providers)
-           (apres (cl-remove-if (lambda (p) (memq (car p) ids-legacy))
-                                avant)))
-      (unless (equal avant apres)
-        (customize-save-variable 'metal-agent-providers apres)
-        ;; Si l'agent actif était un des legacy, basculer vers un autre.
-        (when (and (boundp 'metal-agent-provider)
-                   (memq metal-agent-provider ids-legacy))
-          (customize-save-variable
-           'metal-agent-provider
-           (car-safe (car-safe apres))))
-        (metal-deps--journaliser
-         "Migration : %d ancien(s) agent(s) retiré(s) du registre (%s).  Disponibles via « + Ajouter un autre agent… »."
-         (- (length avant) (length apres))
-         (mapconcat #'symbol-name
-                    (cl-set-difference (mapcar #'car avant)
-                                       (mapcar #'car apres))
-                    ", "))))))
-
 (defun metal-deps--collecter-outils-agents ()
   "Retourne la liste des outils-agents (catalogue + personnalisés).
 Les agents personnalisés sont ceux présents dans `metal-agent-providers'
@@ -2710,9 +2681,6 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
   ;; %LOCALAPPDATA%/agy/bin ou ~/.local/bin) doit être détecté au clic
   ;; « Rafraîchir » sans redémarrer Emacs.
   (metal-deps--rafraichir-path-agent nil)
-  ;; Nettoyer les anciens agents qui ne sont plus dans le catalogue.
-  ;; Idempotent : si déjà nettoyé, ne fait rien.
-  (metal-deps--migration-nettoyage-agents-legacy)
   ;; Synchroniser les entrées du catalogue avec metal-agent-providers
   ;; (pour propager les changements de :nom/:buffer-name aux entrées
   ;; déjà persistées dans Custom).

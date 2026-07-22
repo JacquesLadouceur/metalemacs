@@ -18,6 +18,7 @@ dependencies:
   - spacy
   - pyarrow
   - fastparquet
+  - networkx
   - pip
   - pip:
     - typing-extensions==4.5.0

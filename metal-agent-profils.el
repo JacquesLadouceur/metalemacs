@@ -330,6 +330,21 @@ profil de fallback pour ne pas bloquer Emacs."
 ;; Création interactive d'un nouveau profil
 ;; ─────────────────────────────────────────────────────────────────
 
+(defun metal-agent--valider-nom-profil (nom)
+  "Vérifie que NOM est utilisable comme nom de fichier de profil.
+Signale une `user-error' explicite si le nom est vide ou contient
+un séparateur de chemin.  Retourne le nom nettoyé de ses blancs."
+  (let ((n (string-trim (or nom ""))))
+    (when (string-empty-p n)
+      (user-error "Le nom du profil ne peut pas être vide"))
+    (when (string-match-p "[/\\\\]" n)
+      (user-error "Le nom du profil ne peut pas contenir « / » ni « \\ »"))
+    (when (string-prefix-p "." n)
+      (user-error "Le nom du profil ne peut pas commencer par un point"))
+    (when (string-match-p "README" n)
+      (user-error "« README » est réservé — les fichiers README sont ignorés au chargement"))
+    n))
+
 (defun metal-agent-creer-profil (nom modes-str)
   "Crée un nouveau profil dans `metal-agent-profils-directory'.
 NOM est le nom du profil (et le nom du fichier).
@@ -339,8 +354,7 @@ pour tous les modes."
    (list (read-string "Nom du profil : ")
          (read-string "Modes (séparés par espaces, ou « t » pour tous) : "
                       "t")))
-  (when (string-empty-p (string-trim nom))
-    (user-error "Le nom du profil ne peut pas être vide"))
+  (setq nom (metal-agent--valider-nom-profil nom))
   (metal-agent--initialiser-dossier-utilisateur)
   (let ((chemin (expand-file-name (concat nom ".org")
                                   metal-agent-profils-directory)))
@@ -364,6 +378,65 @@ pour tous les modes."
     (find-file chemin)
     (message "Profil créé : %s.  Édite, sauvegarde, puis M-x metal-agent-recharger-profils"
              (file-name-nondirectory chemin))))
+
+;; ─────────────────────────────────────────────────────────────────
+;; Création d'un profil à partir du profil actuel
+;; ─────────────────────────────────────────────────────────────────
+
+;; `metal-agent--profil' est défini dans metal-agent.el, qui charge ce
+;; module.  Déclaration pour éviter un avertissement à la compilation.
+(declare-function metal-agent--profil "metal-agent" (&optional id))
+(declare-function metal-agent--profil-est-defaut-p "metal-agent" (profil))
+
+(defun metal-agent-copier-profil (nouveau-nom)
+  "Créer un nouveau profil personnel à partir du profil actuel.
+NOUVEAU-NOM est le nom du profil créé (et de son fichier, sans
+l'extension).  Le profil actuel sert de point de départ : son
+fichier .org est recopié tel quel dans `metal-agent-profils-directory',
+avec ses commentaires et sa mise en forme, prêt à être remanié.
+
+Le nom donné détermine l'identifiant du profil créé.  Reprendre le
+nom du profil actuel n'est pas le geste attendu ici : la copie
+éclipserait alors l'original au lieu de s'y ajouter.  Pour
+personnaliser un profil livré en gardant son nom, utiliser plutôt
+`metal-agent-sauvegarder-etat'."
+  (interactive
+   (let* ((profil (metal-agent--profil))
+          (nom (and profil (plist-get profil :nom))))
+     (unless profil
+       (user-error "Aucun profil actif"))
+     (unless (plist-get profil :chemin)
+       (user-error "Le profil « %s » n'a pas de fichier source" nom))
+     (list (read-string
+            (format "Nom du nouveau profil (à partir de « %s ») : " nom)))))
+  (let* ((profil (metal-agent--profil))
+         (source (plist-get profil :chemin))
+         (nom-source (plist-get profil :nom))
+         (est-defaut (metal-agent--profil-est-defaut-p profil)))
+    (unless (and source (file-exists-p source))
+      (user-error "Fichier source introuvable pour le profil « %s »" nom-source))
+    (setq nouveau-nom (metal-agent--valider-nom-profil nouveau-nom))
+    (metal-agent--initialiser-dossier-utilisateur)
+    (let ((dest (expand-file-name (concat nouveau-nom ".org")
+                                  metal-agent-profils-directory)))
+      ;; `file-equal-p' n'est fiable que si les deux fichiers existent ;
+      ;; on ne teste donc l'identité source/destination que dans ce cas.
+      (when (and (file-exists-p dest) (file-equal-p source dest))
+        (user-error "Le profil « %s » est déjà ce fichier personnel" nom-source))
+      (when (file-exists-p dest)
+        (unless (yes-or-no-p
+                 (format "Le fichier %s existe déjà dans le dossier personnel.  Écraser ? "
+                         (file-name-nondirectory dest)))
+          (user-error "Création annulée")))
+      (copy-file source dest t)
+      (metal-agent-recharger-profils)
+      (find-file dest)
+      (if (and est-defaut (string= nouveau-nom nom-source))
+          (message
+           "Profil créé : %s — portant le nom du profil livré, il l'éclipse désormais."
+           (abbreviate-file-name dest))
+        (message "Profil « %s » créé à partir de « %s » : %s"
+                 nouveau-nom nom-source (abbreviate-file-name dest))))))
 
 ;; ─────────────────────────────────────────────────────────────────
 ;; Chargement automatique au require

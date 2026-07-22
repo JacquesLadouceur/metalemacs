@@ -21,6 +21,7 @@ dependencies:
   - spacy
   - pyarrow
   - fastparquet
+  - networkx
   - pip
   - pip:
       - tensorflow-macos

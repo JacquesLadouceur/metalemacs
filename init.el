@@ -31,6 +31,9 @@
             (lambda (context cipher)
               cipher))
 
+(advice-remove 'command-error-default-function
+               'help-command-error-confusable-suggestions)
+
 (when (eq system-type 'windows-nt)
   (let ((emacs-bin (expand-file-name "bin" (getenv "EMACS_DIR"))))
     ;; ou directement :
@@ -40,6 +43,7 @@
 
 (setq epg-gpg-program "")
 (setq org-gcal-token-file "~/.emacs.d/org-gcal-token.el")
+
 
 ;; Forcer UTF-8 partout
 (set-language-environment "UTF-8")
@@ -1864,6 +1868,8 @@ Un entier positif ajoute de l'espace vertical entre les lignes."
   (define-key global-map (kbd "C-c é r") #'metal-secretaire-renommer-intervenant)
   (define-key global-map (kbd "C-c é k") #'metal-secretaire-interrompre)
   (define-key global-map (kbd "C-c é b") #'metal-secretaire-toggle-active))
+
+(setq flymake-start-on-save-buffer nil)
 
 (server-start)
 

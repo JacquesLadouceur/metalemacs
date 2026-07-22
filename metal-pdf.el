@@ -281,7 +281,7 @@ natif de l'application (Cmd+P sur macOS)."
      (:sep)
      ;; ----- Recherche -----
      (:emoji "🔍" :color ,(metal-pdf--coul 'search)
-             :tooltip "Rechercher dans le PDF" :command isearch-forward)
+             :tooltip "Rechercher dans le PDF (C-s: suivant, C-r: précédent)" :command isearch-forward)
      (:emoji "🔎" :color ,(metal-pdf--coul 'search)
              :tooltip "Occurrences (pdf-occur)" :command pdf-occur)
      (:sep)

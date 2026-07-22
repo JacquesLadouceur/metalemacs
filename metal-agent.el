@@ -3178,6 +3178,8 @@ d'état et non d'un bouton."
     (define-key map (kbd "o") #'metal-agent-basculer-options-interactif)
     (define-key map (kbd "r") #'metal-agent--reinitialiser-options)
     (define-key map (kbd "s") #'metal-agent-sauvegarder-etat)
+    (define-key map (kbd "n") #'metal-agent-creer-profil)
+    (define-key map (kbd "c") #'metal-agent-copier-profil)
     (define-key map (kbd "M") #'metal-deps-afficher-etat)
     (define-key map (kbd "e") #'metal-agent-editer-instructions-libres)
     (define-key map (kbd "E") #'metal-agent--effacer-instructions-libres)
@@ -3285,6 +3287,14 @@ Doit être appelé dans le buffer du panneau, en mode lecture-écriture."
      "s" "Définir comme options par défaut" #'metal-agent-sauvegarder-etat)
     (insert "\n")
 
+    ;; PROFILS
+    (insert (propertize "Profils\n" 'face '(:weight bold :height 1.1)))
+    (metal-agent-panneau--inserer-bouton
+     "n" "Créer un nouveau profil…" #'metal-agent-creer-profil)
+    (metal-agent-panneau--inserer-bouton
+     "c" "Créer un profil à partir du profil actuel…" #'metal-agent-copier-profil)
+    (insert "\n")
+
     ;; ASSISTANT METALEMACS
     (insert (propertize "Assistant MetalEmacs\n" 'face '(:weight bold :height 1.1)))
     (metal-agent-panneau--inserer-bouton
@@ -3374,6 +3384,8 @@ Utilisé comme advice :after sur les commandes qui modifient l'état."
                metal-agent-choisir-profil
                metal-agent--reinitialiser-options
                metal-agent-sauvegarder-etat
+               metal-agent-creer-profil
+               metal-agent-copier-profil
                metal-agent-editer-instructions-libres
                metal-agent--effacer-instructions-libres))
   (when (fboundp cmd)
@@ -3514,7 +3526,7 @@ et des descriptifs s'adapte au type de document : code ou texte (prose)."
      "   "
      ;; Analyse (commun)
      (metal-agent--toolbar-button
-      (metal-toolbar-emoji "🔍")
+      (metal-toolbar-emoji "🔬")
       #'metal-agent-demande-libre-analyse
       (format "Formuler une demande d'analyse à %s (réponse texte, sans modification)" label))
      "   "

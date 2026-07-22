@@ -803,6 +803,7 @@ Sinon, affiche un message d'erreur."
    ".org"
    "Document Org-mode: "
    (concat
+    ":HEADER: \n"
     "#+TITLE: \n"
     "#+SUBTITLE: \n"
     "#+AUTHOR: \n"
@@ -813,6 +814,7 @@ Sinon, affiche un message d'erreur."
     "#+LATEX_HEADER: \\usepackage[margin=1in]{geometry}\n"
     "#+LATEX_HEADER: \\usepackage{listings}\n"
     "#+LATEX_HEADER: \\lstset{basicstyle=\\ttfamily\\small, breaklines=true, frame=single, columns=fullflexible, keepspaces=true, showstringspaces=false}\n"
+    ":END: \n"
     "\n")))
 
 (defun metal-dashboard-new-drawio ()
