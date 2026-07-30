@@ -19,6 +19,7 @@ dependencies:
   - pyarrow
   - fastparquet
   - networkx
+  - streamlit
   - pip
   - pip:
     - typing-extensions==4.5.0

@@ -130,6 +130,38 @@ sans le #+ ni les deux-points."
   (let ((v (downcase (string-trim (or valeur "")))))
     (not (member v '("f" "nil" "false" "non" "" "no")))))
 
+(defconst metal-agent--boutons-configurables
+  '("CORRIGER" "REFORMULER" "FONCTION" "EXPLIQUER" "DEMANDE" "ANALYSE")
+  "Suffixes de métadonnées #+BTN_<ID>: reconnus pour piloter la toolbar.
+Chaque suffixe correspond à un bouton d'action de la toolbar agent.")
+
+(defun metal-agent--parser-boutons (meta)
+  "Construit le plist :boutons à partir de l'alist META (#+CLE: valeur).
+Chaque clé BTN_<ID> devient l'entrée (:id-minuscule SPEC) où SPEC est
+soit (:visible nil) si la valeur désactive le bouton, soit
+(:visible t :aide \"…\") si la valeur redéfinit l'infobulle.
+
+Convention de valeur :
+  « off »/« nil »/« non »/« f »/« false »/« no »/« 0 »/vide → masqué ;
+  toute autre valeur → visible, l'infobulle devient cette valeur.
+
+Retourne nil si aucune clé BTN_* n'est présente (→ comportement natif)."
+  (let ((boutons nil))
+    (dolist (id metal-agent--boutons-configurables)
+      (let* ((cle (concat "BTN_" id))
+             (val (cdr (assoc cle meta))))
+        (when val
+          (let* ((v (string-trim val))
+                 (masque (member (downcase v)
+                                 '("off" "nil" "non" "f" "false" "no" "" "0"))))
+            (setq boutons
+                  (plist-put boutons
+                             (intern (concat ":" (downcase id)))
+                             (if masque
+                                 (list :visible nil)
+                               (list :visible t :aide v))))))))
+    boutons))
+
 (defun metal-agent--parser-titre-option (titre)
   "Extrait (NOM-AFFICHAGE . DEFAUT) d'un titre d'option Org.
 Format attendu : « * Nom de l'option :: t-ou-f ».
@@ -137,6 +169,13 @@ Retourne nil si le format n'est pas reconnu."
   (when (string-match "\\(.*?\\)[ \t]*::[ \t]*\\([a-zA-Z]+\\)[ \t]*$" titre)
     (cons (string-trim (match-string 1 titre))
           (metal-agent--parser-bool (match-string 2 titre)))))
+
+(defun metal-agent--titre-tache-p (titre)
+  "Retourne t si TITRE désigne la section spéciale [Tâche].
+Reconnaît « [Tâche] », « [Tache] », « [TÂCHE] » etc. en tête du titre,
+avec ou sans suffixe « :: t/f » (qui est ignoré pour cette section)."
+  (let ((debut (string-trim titre)))
+    (string-match-p "\\`\\[[ \t]*[Tt][âÂaA][Cc][Hh][Ee][ \t]*\\]" debut)))
 
 (defun metal-agent--parser-fichier-profil (chemin &optional origine)
   "Lit le fichier .org CHEMIN et retourne un plist de profil.
@@ -178,7 +217,13 @@ Retourne nil si le fichier ne peut pas être parsé."
                             (or debut-options (length contenu)))))
                ;; Options : on extrait chaque titre niveau 1 + son corps
                (options-disponibles nil)
-               (options-defaut nil))
+               (options-defaut nil)
+               ;; Section spéciale [Tâche] : son corps surcharge le
+               ;; gabarit de tâche codé en dur (cf. prompt-final-code).
+               ;; Reconnue par un titre dont le nom commence par « [Tâche] »
+               ;; (variantes de casse/accent tolérées).  Extraite ici puis
+               ;; exclue des options cochables.
+               (tache nil))
 
           ;; Parcours des options
           (when debut-options
@@ -192,19 +237,24 @@ Retourne nil si le fichier ne peut pas être parsé."
                         (or (string-match "^\\*[ \t]+" reste debut-corps)
                             (length reste)))
                        (corps (string-trim
-                               (substring reste debut-corps fin-corps)))
-                       (parsed (metal-agent--parser-titre-option titre-ligne)))
-                  (when parsed
-                    (let* ((nom-opt (car parsed))
-                           (defaut (cdr parsed))
-                           (id-opt (metal-agent--slugify nom-opt)))
-                      (push (list :id id-opt
-                                  :nom nom-opt
-                                  :fragment corps)
-                            options-disponibles)
-                      (when defaut
-                        (setq options-defaut
-                              (plist-put options-defaut id-opt t)))))
+                               (substring reste debut-corps fin-corps))))
+                  (if (metal-agent--titre-tache-p titre-ligne)
+                      ;; Section [Tâche] : on capte son corps, sans en
+                      ;; faire une option cochable.
+                      (setq tache corps)
+                    ;; Sinon : option normale (cochable).
+                    (let ((parsed (metal-agent--parser-titre-option titre-ligne)))
+                      (when parsed
+                        (let* ((nom-opt (car parsed))
+                               (defaut (cdr parsed))
+                               (id-opt (metal-agent--slugify nom-opt)))
+                          (push (list :id id-opt
+                                      :nom nom-opt
+                                      :fragment corps)
+                                options-disponibles)
+                          (when defaut
+                            (setq options-defaut
+                                  (plist-put options-defaut id-opt t)))))))
                   (setq start fin-corps)))))
 
           ;; Construire le plist final
@@ -215,6 +265,8 @@ Retourne nil si le fichier ne peut pas être parsé."
                 :systeme preambule
                 :options-defaut options-defaut
                 :options-disponibles (nreverse options-disponibles)
+                :boutons (metal-agent--parser-boutons meta)
+                :tache tache
                 :origine (or origine 'personnel)
                 :chemin chemin)))
     (error

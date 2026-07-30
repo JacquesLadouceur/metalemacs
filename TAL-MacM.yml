@@ -22,6 +22,7 @@ dependencies:
   - pyarrow
   - fastparquet
   - networkx
+  - streamlit
   - pip
   - pip:
       - tensorflow-macos

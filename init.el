@@ -1067,7 +1067,12 @@ Hors minibuffer, demande le motif via read-string."
 ;; Configuration CSV mode
 
 (use-package csv-mode
-  :mode (".tsv" ".csv" ".tabular" ".vcf"))
+  :mode (".tsv" ".csv" ".tabular" ".vcf")
+  :config
+  (add-hook 'csv-mode-hook
+            (lambda ()
+              (visual-line-mode -1)      ; désactive le Wrap
+              (setq truncate-lines t))))  ; active la troncature
 
 (use-package vlf
   :ensure t

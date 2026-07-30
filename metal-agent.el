@@ -573,6 +573,24 @@ opérations par défaut visent la rédaction."
                                    buffer-file-name))))
       nil)))
 
+(defun metal-agent--bouton-spec (bouton-id)
+  "Retourne la spec (plist) du BOUTON-ID pour le profil actif, ou nil.
+BOUTON-ID est un mot-clé, ex. :corriger.  La spec provient de la clé
+:boutons du profil, alimentée par les métadonnées #+BTN_<ID>: du .org."
+  (plist-get (metal-agent--profil-prop :boutons) bouton-id))
+
+(defun metal-agent--bouton-visible-p (bouton-id)
+  "Retourne t si BOUTON-ID doit être affiché pour le profil actif.
+Sans spec dans le profil → visible (comportement natif)."
+  (let ((spec (metal-agent--bouton-spec bouton-id)))
+    (if spec (plist-get spec :visible) t)))
+
+(defun metal-agent--bouton-aide (bouton-id aide-defaut)
+  "Retourne l'infobulle de BOUTON-ID.
+Utilise l'aide redéfinie par le profil si présente, sinon AIDE-DEFAUT."
+  (let ((spec (metal-agent--bouton-spec bouton-id)))
+    (or (and spec (plist-get spec :aide)) aide-defaut)))
+
 (defun metal-agent--code-block-language ()
   "Retourne le nom du langage pour les blocs Markdown."
   (let ((lang (downcase (metal-agent--source-language))))
@@ -1178,6 +1196,30 @@ Indépendant du provider."
      (format "Proposition réduite à ~%d %% de l'original (effondrement probable). Ouvrir tout de même la révision Ediff ? "
              pourcent))))
 
+(defun metal-agent--afficher-resultat-analyse (proposed)
+  "Afficher PROPOSED (résultat d'un profil [Tâche]) en lecture seule.
+Écrit le contenu extrait dans le buffer de sortie de l'agent et
+l'affiche, sans passer par Ediff : un profil d'analyse produit un
+artefact NEUF, pas une correction du contenu source à réviser."
+  (let ((buf (metal-agent--codex-buffer)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert proposed)
+        (goto-char (point-min))))
+    (display-buffer buf))
+  ;; Nettoyer l'éventuel buffer d'état résiduel.
+  (when-let ((status (get-buffer metal-agent-status-buffer-name)))
+    (when-let ((win (get-buffer-window status t)))
+      (ignore-errors (delete-window win)))
+    (ignore-errors (kill-buffer status)))
+  (message nil)
+  (let ((buf-name (metal-agent--current-buffer-name))
+        (label (or (metal-agent--current-label) "Agent")))
+    (metal-agent--show-status-message
+     (format "🔬 Analyse %s terminée — voir %s.%s"
+             label buf-name (metal-agent--suffixe-duree)))))
+
 (defun metal-agent--handle-codex-code-response (code raw)
   "Traiter la réponse Codex RAW.
 Si une proposition est obtenue et qu'elle diffère du code original,
@@ -1228,6 +1270,15 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
                          buf-name)))
               (metal-agent--suffixe-duree)))
             (display-buffer (metal-agent--codex-buffer)))
+        ;; ── Profil [Tâche] : la réponse est un artefact NEUF, pas une
+        ;; correction du source.  On l'affiche en lecture seule au lieu
+        ;; d'ouvrir Ediff (qui comparerait la sortie au contenu source,
+        ;; sans rapport).  Bascule symétrique de celle de prompt-final-code.
+        (if (let ((tc (metal-agent--profil-prop :tache)))
+              (and (stringp tc) (not (string-empty-p (string-trim tc)))))
+            (progn
+              (setq metal-agent--last-proposed proposed)
+              (metal-agent--afficher-resultat-analyse proposed))
         (if (and metal-agent--last-original
                  (string= (string-trim proposed)
                           (string-trim metal-agent--last-original)))
@@ -1256,7 +1307,7 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
                 (when-let ((win (get-buffer-window status t)))
                   (ignore-errors (delete-window win)))
                 (ignore-errors (kill-buffer status)))
-              (metal-agent--reviser-via-ediff metal-agent--last-original proposed)))))))))
+              (metal-agent--reviser-via-ediff metal-agent--last-original proposed))))))))))
 
 ;;; --- Révision interactive via ediff (hunk par hunk) -------------------
 
@@ -2208,14 +2259,73 @@ le texte est une erreur.
 Injecte les fragments des options actives et les instructions libres.
 La réponse doit être encadrée par des marqueurs sentinelles (et non un
 bloc Markdown ```), afin de gérer les fichiers contenant eux-mêmes des
-blocs de code."
+blocs de code.
+
+Si le profil actif définit une section [Tâche] (clé :tache), son corps
+REMPLACE le verbe de tâche codé en dur et la « Règle de modification
+minimale » (qui n'a de sens qu'en correction).  Restent invariants dans
+les deux cas : l'en-tête de contexte, le blindage anti-agentique et le
+contrat de marqueurs — un profil ne peut pas les désactiver.
+Sans section [Tâche], on garde le gabarit de correction par défaut,
+adapté au type de fichier (texte → révision, code → correction)."
   (let ((fragments (metal-agent--fragments-actifs))
         (blindage (metal-agent--blindage-anti-agentique))
+        (tache (let ((tc (metal-agent--profil-prop :tache)))
+                 (and (stringp tc)
+                      (not (string-empty-p (string-trim tc)))
+                      tc)))
         (libre (and (stringp metal-agent--instructions-libres)
                     (not (string-empty-p
                           (string-trim metal-agent--instructions-libres)))
                     metal-agent--instructions-libres)))
-    (format
+    (let ((bloc-contraintes-profil
+           (if fragments
+               (concat "\nContraintes du profil :\n"
+                       (mapconcat (lambda (f) (concat "- " f)) fragments "\n")
+                       "\n")
+             ""))
+          (bloc-libre
+           (if libre
+               (format "\nInstructions supplémentaires :\n%s\n" libre)
+             "")))
+      (if tache
+          ;; ── Profil avec section [Tâche] : la tâche du profil pilote. ──
+          (format
+"%s%s
+Tâche :
+%s
+
+Contraintes obligatoires :
+- Ne modifie AUCUN fichier sur le disque. Ne demande PAS la permission
+  d'écrire ou d'éditer un fichier. Tu ne fais qu'analyser le texte fourni
+  ci-dessous et RETOURNER le résultat comme texte dans ta réponse.
+- Ne donne aucun préambule ni aucune question hors de ce qui est demandé.
+- Encadre %s STRICTEMENT entre les deux marqueurs suivants, seuls sur
+  leur ligne, et ne place RIEN d'autre en dehors de ces marqueurs :
+%s
+(contenu ici)
+%s
+- N'utilise PAS de bloc Markdown ``` pour encadrer l'ensemble : le
+  contenu peut lui-même contenir des blocs ```, qu'il faut préserver tels
+  quels à l'intérieur des marqueurs.
+%s%s
+Contenu à traiter :
+%s
+%s
+%s"
+           (metal-agent--context-header)
+           blindage
+           tache
+           (or target-label "le résultat")
+           metal-agent--marqueur-debut
+           metal-agent--marqueur-fin
+           bloc-contraintes-profil
+           bloc-libre
+           metal-agent--marqueur-debut
+           code
+           metal-agent--marqueur-fin)
+        ;; ── Profil sans section [Tâche] : gabarit de correction par défaut. ──
+        (format
 "%s%s
 Tâche :
 %s
@@ -2249,23 +2359,17 @@ Contenu actuel :
 %s
 %s
 %s"
-            (metal-agent--context-header)
-            blindage
-            instruction
-            (or target-label "le résultat corrigé")
-            metal-agent--marqueur-debut
-            metal-agent--marqueur-fin
-            (if fragments
-                (concat "\nContraintes du profil :\n"
-                        (mapconcat (lambda (f) (concat "- " f)) fragments "\n")
-                        "\n")
-              "")
-            (if libre
-                (format "\nInstructions supplémentaires :\n%s\n" libre)
-              "")
-            metal-agent--marqueur-debut
-            code
-            metal-agent--marqueur-fin)))
+         (metal-agent--context-header)
+         blindage
+         instruction
+         (or target-label "le résultat corrigé")
+         metal-agent--marqueur-debut
+         metal-agent--marqueur-fin
+         bloc-contraintes-profil
+         bloc-libre
+         metal-agent--marqueur-debut
+         code
+         metal-agent--marqueur-fin)))))
 
 (defun metal-agent-corriger ()
   "Corriger/réviser le contenu avec l'agent IA, puis appliquer après révision.
@@ -3469,8 +3573,12 @@ l'emplacement d'affichage du bouton Agent."
 
 (defun metal-agent-toolbar-expanded ()
   "Toolbar agent complète (emoji).
-Le label des infobulles s'adapte au provider courant. Le choix des boutons
-et des descriptifs s'adapte au type de document : code ou texte (prose)."
+Le label des infobulles s'adapte au provider courant.  Le choix des
+boutons s'adapte au type de document (code / texte).  Chaque bouton
+d'action peut en outre être masqué ou voir son infobulle redéfinie par
+le profil actif via ses métadonnées #+BTN_<ID>: (cf. :boutons).  Les
+boutons d'infrastructure (toggle, config, afficher, interruption,
+sélecteur de profil) restent toujours présents."
   (let* ((label    (metal-agent--current-label))
          (color    (metal-agent--current-color))
          (texte-p  (metal-agent--texte-p))
@@ -3478,65 +3586,95 @@ et des descriptifs s'adapte au type de document : code ou texte (prose)."
     (concat
      (metal-agent--padding)
      (metal-toolbar-separator)
-     ;; Toggle (commun)
+     ;; Toggle (infrastructure — toujours présent)
      (metal-agent--toolbar-button
       (metal-toolbar-emoji "👤" :color color)
       #'metal-agent-toggle-active
       (format "Réduire la toolbar %s (revenir au mode compact)" label))
      "   "
-     ;; Corriger / Réviser — libellé adapté
-     (metal-agent--toolbar-button
-      (metal-toolbar-emoji "🪄")
-      #'metal-agent-corriger
-      (if texte-p
-          "Réviser le texte : orthographe, grammaire, style (sélection si active, sinon tout le document)"
-        "Corriger le code (sélection si active, sinon tout le fichier)"))
-     "   "
-     ;; Expliquer / Clarifier — libellé adapté
-     (metal-agent--toolbar-button
-      (metal-toolbar-emoji "💡")
-      #'metal-agent-expliquer-selection
-      (if texte-p
-          "Expliquer ou clarifier le passage sélectionné"
-        "Expliquer la sélection"))
-     "   "
-     ;; Bouton propre au type de document :
-     ;;   texte → Reformuler ; code → Ajouter fonction/prédicat
+     ;; Corriger / Réviser — configurable :corriger
+     (if (metal-agent--bouton-visible-p :corriger)
+         (concat
+          (metal-agent--toolbar-button
+           (metal-toolbar-emoji "🪄")
+           #'metal-agent-corriger
+           (metal-agent--bouton-aide
+            :corriger
+            (if texte-p
+                "Réviser le texte : orthographe, grammaire, style (sélection si active, sinon tout le document)"
+              "Corriger le code (sélection si active, sinon tout le fichier)")))
+          "   ")
+       "")
+     ;; Expliquer / Clarifier — configurable :expliquer
+     (if (metal-agent--bouton-visible-p :expliquer)
+         (concat
+          (metal-agent--toolbar-button
+           (metal-toolbar-emoji "💡")
+           #'metal-agent-expliquer-selection
+           (metal-agent--bouton-aide
+            :expliquer
+            (if texte-p
+                "Expliquer ou clarifier le passage sélectionné"
+              "Expliquer la sélection")))
+          "   ")
+       "")
+     ;; 3e position selon le type :
+     ;;   texte → Reformuler (:reformuler) ; code → Fonction/Prédicat (:fonction)
      (if texte-p
-         (metal-agent--toolbar-button
-          (metal-toolbar-emoji "✍️")
-          #'metal-agent-reformuler
-          "Reformuler le passage (ton, concision, fluidité)")
-       (metal-agent--toolbar-button
-        ;; (metal-toolbar-emoji (if prolog-p "➕" "ƒ"))
-        (if prolog-p
-            (metal-toolbar-emoji "➕")
-          (metal-toolbar-char "ƒ"))
-        #'metal-agent-ajouter-fonction
-        (if prolog-p "Ajouter un prédicat" "Ajouter une fonction")))
-     "   "
-     ;; Demande libre — libellé adapté
-     (metal-agent--toolbar-button
-      (metal-toolbar-emoji "💬")
-      #'metal-agent-demande-libre
-      (format (if texte-p
-                  "Formuler une demande de révision ou de réécriture à %s, avec révision sélective"
-                "Formuler une demande de corrections ou améliorations à %s, avec révision sélective")
-              label))
-     "   "
-     ;; Analyse (commun)
-     (metal-agent--toolbar-button
-      (metal-toolbar-emoji "🔬")
-      #'metal-agent-demande-libre-analyse
-      (format "Formuler une demande d'analyse à %s (réponse texte, sans modification)" label))
-     "   "
-     ;; Afficher/masquer (commun)
+         (if (metal-agent--bouton-visible-p :reformuler)
+             (concat
+              (metal-agent--toolbar-button
+               (metal-toolbar-emoji "✍️")
+               #'metal-agent-reformuler
+               (metal-agent--bouton-aide
+                :reformuler
+                "Reformuler le passage (ton, concision, fluidité)"))
+              "   ")
+           "")
+       (if (metal-agent--bouton-visible-p :fonction)
+           (concat
+            (metal-agent--toolbar-button
+             (if prolog-p
+                 (metal-toolbar-emoji "➕")
+               (metal-toolbar-char "ƒ"))
+             #'metal-agent-ajouter-fonction
+             (metal-agent--bouton-aide
+              :fonction
+              (if prolog-p "Ajouter un prédicat" "Ajouter une fonction")))
+            "   ")
+         ""))
+     ;; Demande libre — configurable :demande
+     (if (metal-agent--bouton-visible-p :demande)
+         (concat
+          (metal-agent--toolbar-button
+           (metal-toolbar-emoji "💬")
+           #'metal-agent-demande-libre
+           (metal-agent--bouton-aide
+            :demande
+            (format (if texte-p
+                        "Formuler une demande de révision ou de réécriture à %s, avec révision sélective"
+                      "Formuler une demande de corrections ou améliorations à %s, avec révision sélective")
+                    label)))
+          "   ")
+       "")
+     ;; Analyse — configurable :analyse
+     (if (metal-agent--bouton-visible-p :analyse)
+         (concat
+          (metal-agent--toolbar-button
+           (metal-toolbar-emoji "🔬")
+           #'metal-agent-demande-libre-analyse
+           (metal-agent--bouton-aide
+            :analyse
+            (format "Formuler une demande d'analyse à %s (réponse texte, sans modification)" label)))
+          "   ")
+       "")
+     ;; Afficher/masquer (infrastructure — toujours présent)
      (metal-agent--toolbar-button
       (metal-toolbar-emoji "👁️")
       #'metal-agent-toggle-codex-window
       (format "Afficher ou masquer %s" label))
      (metal-toolbar-separator)
-     ;; Configuration (commun)
+     ;; Configuration (infrastructure — toujours présent)
      (metal-agent--toolbar-button
       (metal-toolbar-emoji "⚙️")
       #'metal-agent-ouvrir-panneau
