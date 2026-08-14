@@ -4,6 +4,8 @@
 ;; Auteur: Jacques Ladouceur
 ;; Version: 1.1
 
+;; (setq debug-on-event 'sigusr2)
+
 (setq custom-file (expand-file-name "metal-custom.el" user-emacs-directory))
 (when (file-exists-p custom-file)
   (load custom-file))
@@ -42,7 +44,7 @@
     (add-to-list 'exec-path emacs-bin)))
 
 (setq epg-gpg-program "")
-(setq org-gcal-token-file "~/.emacs.d/org-gcal-token.el")
+;; (setq org-gcal-token-file "~/.emacs.d/org-gcal-token.el")
 
 
 ;; Forcer UTF-8 partout

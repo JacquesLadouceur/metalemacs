@@ -27,7 +27,7 @@
 
 ;; Fichiers de calendrier - UN SEUL FICHIER pour tout
 (defvar metal-calendrier-fichier-org (expand-file-name "calendrier.org" metal-calendrier-directory)
-  "Fichier Org unique pour tous les événements (personnels et Google Calendar)")
+  "Fichier Org unique pour tous les événements")
 
 ;; --- DÉSACTIVATION DU CHIFFREMENT GPG (avant tout chargement) ---
 (setq plstore-encrypt-to nil)
@@ -329,7 +329,7 @@
 
 ;; Fonction pour ajouter un événement dans le calendrier
 (defun metal-calendrier-ajouter-evenement ()
-  "Ajoute un événement Org à la date sélectionnée et le synchronise avec Google"
+  "Ajoute un événement Org à la date sélectionnée"
   (interactive)
   (let* ((mdy (calfw-cursor-to-nearest-date))
          (month (calendar-extract-month mdy))
@@ -341,15 +341,9 @@
                        (read-string "Heure fin (HH:MM): ")
                      ""))
          (date-str (format "%04d-%02d-%02d" year month day))
-         ;; Jour en anglais (requis par org-gcal)
          (day-name (let ((calendar-day-name-array
                           ["Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"]))
                      (calendar-day-name (list month day year) t)))
-         ;; org-gcal changed variable names over time. Be robust.
-         (calendar-id
-          (or (caar (bound-and-true-p org-gcal-file-alist))
-              (caar (bound-and-true-p org-gcal-fetch-file-alist))
-              (read-string "Calendar-id (email Google): ")))
          (timestamp ""))
     ;; Construire le timestamp
     (if (and time-start (not (string-empty-p time-start)))
@@ -367,22 +361,9 @@
       (with-current-buffer (find-file-noselect metal-calendrier-fichier-org)
         (goto-char (point-max))
         (insert "\n* " title "\n")
-        (insert ":PROPERTIES:\n")
-        (insert ":calendar-id: " calendar-id "\n")
-        (insert ":END:\n")
-        ;; Bloc :org-gcal: avec le timestamp (format requis par org-gcal)
-        (insert ":org-gcal:\n")
         (insert timestamp "\n")
-        (insert ":END:\n")
         (save-buffer))
-      (message "Événement '%s' créé. Synchronisation..." title)
-      ;; Publier vers Google Calendar
-      (with-current-buffer (find-file-noselect metal-calendrier-fichier-org)
-        (goto-char (point-max))
-        (re-search-backward (concat "^\\* " (regexp-quote title)) nil t)
-        ;; Désactiver temporairement le calendrier popup
-        (let ((org-read-date-popup-calendar nil))
-          (ignore-errors (org-gcal-post-at-point t nil))))
+      (message "Événement '%s' créé." title)
       (when (get-buffer "*Calendrier*")
         (switch-to-buffer "*Calendrier*")
         (calfw-refresh-calendar-buffer nil)))))
@@ -412,22 +393,18 @@
       (message "TODO '%s' ajouté avec échéance le %s" title date-str)
       (calfw-refresh-calendar-buffer nil))))
 
-;; Fonction pour synchroniser et rafraîchir le calendrier
+;; Fonction pour rafraîchir le calendrier
 (defun metal-calendrier-sync-et-rafraichir ()
-  "Synchronise Google Calendar et rafraîchit l'affichage du calendrier"
+  "Rafraîchit l'affichage du calendrier"
   (interactive)
-  (message "Synchronisation avec Google Calendar...")
-  (org-gcal-sync)
-  (run-with-timer 2 nil
-                  (lambda ()
-                    (when (get-buffer "*Calendrier*")
-                      (with-current-buffer "*Calendrier*"
-                        (calfw-refresh-calendar-buffer nil)))
-                    (message "✓ Calendrier synchronisé"))))
+  (when (get-buffer "*Calendrier*")
+    (with-current-buffer "*Calendrier*"
+      (calfw-refresh-calendar-buffer nil)))
+  (message "✓ Calendrier rafraîchi"))
 
 ;; Fonction pour modifier un événement
 (defun metal-calendrier-modifier-evenement ()
-  "Ouvre l'événement sous le curseur pour le modifier, puis synchronise avec Google"
+  "Ouvre l'événement sous le curseur pour le modifier"
   (interactive)
   (let ((date (calfw-cursor-to-nearest-date)))
     (when date
@@ -441,12 +418,12 @@
             (progn
               (org-back-to-heading)
               (org-show-subtree)
-              (message "Modifie l'événement, puis 'C-c g p' pour synchroniser avec Google"))
+              (message "Modifie l'événement, puis sauvegarde (C-x C-s)"))
           (message "Aucun événement trouvé à cette date"))))))
 
 ;; Fonction pour supprimer un événement
 (defun metal-calendrier-supprimer-evenement ()
-  "Supprime l'événement sous le curseur et le retire de Google Calendar"
+  "Supprime l'événement sous le curseur"
   (interactive)
   (let ((date (calfw-cursor-to-nearest-date)))
     (when date
@@ -467,13 +444,6 @@
                          (heading-text (org-get-heading t t t t)))
                     (org-show-subtree)
                     (when (y-or-n-p (format "Supprimer '%s' ?" heading-text))
-                      ;; Vérifier si l'événement a un entry-id (synchronisé avec Google)
-                      (let ((entry-id (org-entry-get nil "entry-id")))
-                        (when entry-id
-                          ;; Supprimer de Google Calendar (sans confirmation)
-                          (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
-                                    ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
-                            (ignore-errors (org-gcal-delete-at-point)))))
                       ;; Supprimer seulement ce sous-arbre
                       (org-cut-subtree)
                       (save-buffer)
@@ -541,7 +511,7 @@
         (goto-char (point-min))))))
 
 (defun metal-calendrier-ouvrir ()
-  "Ouvre le calendrier calfw avec tous les calendriers (personnel + Google)"
+  "Ouvre le calendrier calfw"
   (interactive)
   ;; Tuer l'ancien buffer s'il existe pour éviter les doublons
   (when (get-buffer "*Calendrier*")
@@ -564,79 +534,6 @@
 (global-set-key (kbd "C-c c") 'metal-calendrier-ouvrir)         ; Ouvrir le calendrier
 (global-set-key (kbd "C-c C-i") 'metal-calendrier-importer-ics) ; Importer un ICS
 (global-set-key (kbd "C-c C-s") 'metal-calendrier-synchroniser) ; Synchroniser le ICS
-
-;; =====================================================
-;; CONFIGURATION ORG-GCAL (Google Calendar)
-;; =====================================================
-
-(defun metal-calendrier-google-config ()
-  "Demande les identifiants org-gcal à l'utilisateur et les enregistre dans un fichier."
-  (interactive)
-  
-  (let* ((config-file (expand-file-name "org-gcal-config.el" user-emacs-directory))
-         (client-id (read-string "Votre ID Client Google (client-id) : "))
-         (client-secret (read-string "Votre Secret Client Google (client-secret) : "))
-         (calendar-id (read-string "ID du calendrier Google (adresse email) : "))
-         (content (format
-                   ";; -*- lexical-binding: t; -*-
-;; Fichier de configuration généré automatiquement pour org-gcal
-;; Calendrier unique dans: %s
-
-;; --- 1. Identifiants OAuth 2.0 ---
-(setq org-gcal-client-id \"%s\")
-(setq org-gcal-client-secret \"%s\")
-
-;; --- 2. Configuration - UN SEUL FICHIER pour tout ---
-(setq org-gcal-file-alist
-      '((\"%s\" . \"%s\")))
-
-;; Compat ancien org-gcal (si jamais)
-(unless (boundp 'org-gcal-fetch-file-alist)
-  (setq org-gcal-fetch-file-alist org-gcal-file-alist))
-"
-                   metal-calendrier-fichier-org
-                   client-id client-secret calendar-id metal-calendrier-fichier-org)))
-    
-    (with-temp-file config-file
-      (insert content))
-    
-    (load-file config-file)
-    
-    (message "Configuration org-gcal enregistrée. Fichier calendrier: %s"
-             metal-calendrier-fichier-org)))
-
-;; --- GESTION DU PACKAGE ORG-GCAL ---
-(use-package org-gcal
-  :straight t
-  :after org
-  
-  :config
-  ;; Charger la config org-gcal si elle existe (apres chargement du paquet)
-  (let ((gcal-config-file (expand-file-name "org-gcal-config.el" user-emacs-directory)))
-    (when (file-exists-p gcal-config-file)
-      (load gcal-config-file nil 'nomessage)))
-
-  ;; Supprimer automatiquement les événements annulés sans demander
-  (setq org-gcal-remove-cancelled-events t)
-  
-  :bind
-  (("C-c g s" . org-gcal-sync)          ; Synchronisation bidirectionnelle complète
-   ("C-c g f" . org-gcal-fetch)         ; Télécharge les événements de Google
-   ("C-c g p" . org-gcal-post-at-point)))
-
-;; Ne PAS synchroniser au démarrage automatiquement (évite les problèmes d'auth)
-;; Utilise 's' dans le calendrier pour synchroniser manuellement
-;; (add-hook 'emacs-startup-hook
-;;           (lambda ()
-;;             (run-with-idle-timer 5 nil
-;;                                  (lambda ()
-;;                                    (ignore-errors (org-gcal-fetch))))))
-
-;; Synchroniser à la fermeture (sans délai)
-(add-hook 'kill-emacs-hook
-          (lambda ()
-            (when (fboundp 'org-gcal-sync)
-              (ignore-errors (org-gcal-sync)))))
 
 (with-eval-after-load 'calfw
   (defun calfw--render-truncate (org limit-width &optional ellipsis)
@@ -669,21 +566,16 @@
 ;;   e           : modifier un événement
 ;;   d           : supprimer un événement
 ;;   t           : ajouter une tâche TODO
-;;   s           : synchroniser avec Google Calendar
+;;   s           : rafraîchir le calendrier
 ;;   SPC / RET   : voir les détails de l'événement
 ;;   r           : rafraîchir
 ;;   q           : quitter
 ;;   ?           : aide
 ;;
-;; Google Calendar (global) :
-;;   C-c g s     : synchroniser avec Google
-;;   C-c g f     : récupérer de Google
-;;   C-c g p     : publier vers Google
-;;
 ;; =====================================================
 
 (message "Configuration Metal-Calendrier chargée!")
 (message "Dossier calendriers: %s" metal-calendrier-directory)
-(message "Raccourcis: C-c c (calendrier) | C-c g s (sync Google)")
+(message "Raccourcis: C-c c (calendrier) | C-c C-s (sync ICS)")
 
 (provide 'Metal-Calendrier)

@@ -28,3 +28,5 @@ dependencies:
     - tensorflow==2.10.1
     - python-pptx
     - pyinstaller
+    - pyqt5
+    - qtpy

@@ -40,7 +40,7 @@ Quelle que soit la plateforme, MetalEmacs nécessite :
 - Environ **2 Go d'espace disque** (paquets Emacs, environnement Python, outils TeX)
 - Une connexion Internet pour le premier démarrage (5 à 15 minutes selon la bande passante)
 
-Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'**Assistant d'installation** intégré, présenté plus bas.
+Les outils additionnels (Miniconda, Poppler, etc.) sont gérés par l'**Assistant d'installation** intégré, présenté plus bas. Sur macOS, **Homebrew** s'installe en amont, avant Emacs (voir la section d'installation macOS).
 
 ## Installation
 
@@ -48,15 +48,22 @@ Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'
 
 > **Note** : sur macOS, la touche `Option` correspond à `M` dans Emacs (par exemple `M-x` = `Option-x`).
 
-1. Télécharger et installer **Emacs pour macOS** depuis <https://emacsformacosx.com/>
-2. Ouvrir un Terminal et cloner MetalEmacs :
+1. Ouvrir un Terminal et installer **Homebrew** :
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+   L'installateur proposera au besoin d'installer les **outils de ligne de commande Xcode** (qui incluent Git) — accepter. À la fin, suivre les instructions affichées (section *Next steps*) pour ajouter Homebrew au `PATH`, puis **fermer et rouvrir** le Terminal.
+2. Installer **Emacs** (build *emacs-plus*) :
+   ```bash
+   brew install --cask d12frosted/emacs-plus/emacs-plus-app
+   ```
+   > **Pourquoi emacs-plus ?** Ce cask fournit un binaire d'Emacs construit spécifiquement pour chaque version de macOS. Un Emacs compilé contre la version de macOS la plus proche de celle installée évite des problèmes de rendu et de stabilité observés avec des binaires compilés contre des versions plus anciennes du système.
+3. Cloner MetalEmacs :
    ```bash
    git clone https://github.com/JacquesLadouceur/metalemacs.git ~/.emacs.d
    ```
-   Si Git n'est pas installé, macOS proposera d'installer les **outils de ligne de commande Xcode** — accepter et refaire la commande précédente après l'installation.
-3. Lancer Emacs (premier démarrage : 5 à 15 minutes pour le téléchargement des paquets)
-4. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer dans l'ordre :
-   - Homebrew
+4. Lancer Emacs (premier démarrage : 5 à 15 minutes pour le téléchargement des paquets)
+5. Une fois le démarrage terminé, ouvrir l'**Assistant** et installer dans l'ordre :
    - Poppler
    - pdf-tools
 
@@ -65,6 +72,7 @@ Les outils additionnels (Homebrew, Miniconda, Poppler, etc.) sont gérés par l'
 > **Note** : sur Windows, la touche `Alt` correspond à `M` dans Emacs (par exemple `M-x` = `Alt-x`).
 
 1. Télécharger et installer **Emacs** depuis <https://ftp.gnu.org/gnu/emacs/windows/> (choisir le sous-dossier de la dernière version et lancer le fichier `emacs-XX.X-installer.exe`)
+- Ou l'obtenir via winget dans le terminal: winget install GNU.Emacs
 
 2. Ouvrir un terminal et exécuter les commandes selon le shell utilisé :
 

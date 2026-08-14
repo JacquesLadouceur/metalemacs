@@ -337,18 +337,49 @@ la front matter du `.qmd' concerné."
          "  warning: false\n"
          "  message: false\n")))))
 
+(defun metal-quarto--front-matter-end ()
+  "Position de la fin du front matter YAML (le second `---'), ou nil.
+Le front matter doit commencer à la toute première ligne du fichier."
+  (save-restriction
+    (widen)                       ; polymode : sortir du narrowing de chunk
+    (save-excursion
+      (goto-char (point-min))
+      (when (looking-at "---[ \t]*$")
+        (forward-line 1)
+        (when (re-search-forward "^\\(---\\|\\.\\.\\.\\)[ \t]*$" nil t)
+          (match-beginning 0))))))
+
 (defun metal-quarto--detect-output-format ()
-  "Détecte le format de sortie depuis le YAML front-matter."
-  (save-excursion
-    (goto-char (point-min))
-    (cond
-     ((re-search-forward "^format:[ \t]*beamer" nil t) 'beamer)
-     ((re-search-forward "^format:[ \t]*pdf" nil t) 'pdf)
-     ((re-search-forward "^format:[ \t]*html" nil t) 'html)
-     ((re-search-forward "^  beamer:" nil t) 'beamer)
-     ((re-search-forward "^  pdf:" nil t) 'pdf)
-     ((re-search-forward "^  html:" nil t) 'html)
-     (t nil))))
+  "Détecte le format de sortie depuis le YAML front-matter.
+La recherche est BORNÉE au front matter (entre les deux `---'
+initiaux) : les mentions de formats dans le corps du document —
+exemples de code, documentation — ne comptent pas.
+Si plusieurs formats sont déclarés sous `format:', c'est le PREMIER
+dans l'ordre du document qui gagne."
+  (save-restriction
+    (widen)                       ; polymode : sortir du narrowing de chunk
+    (let ((fin (metal-quarto--front-matter-end)))
+      (when fin
+        (save-excursion
+          (goto-char (point-min))
+        ;; Forme inline : format: beamer
+        (cond
+         ((re-search-forward "^format:[ \t]*beamer" fin t) 'beamer)
+         ((re-search-forward "^format:[ \t]*pdf" fin t) 'pdf)
+         ((re-search-forward "^format:[ \t]*html" fin t) 'html)
+         ;; Forme bloc : premier format déclaré dans le front matter
+         (t
+          (let ((meilleur nil) (pos-min most-positive-fixnum))
+            (dolist (paire '(("^  beamer:" . beamer)
+                             ("^  pdf:" . pdf)
+                             ("^  html:" . html)))
+              (save-excursion
+                (goto-char (point-min))
+                (when (and (re-search-forward (car paire) fin t)
+                           (< (match-beginning 0) pos-min))
+                  (setq pos-min (match-beginning 0)
+                        meilleur (cdr paire)))))
+            meilleur))))))))
 
 (defun metal-quarto-produire-document ()
   "Produire le document à partir du fichier Quarto courant.

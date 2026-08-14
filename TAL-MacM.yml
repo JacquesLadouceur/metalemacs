@@ -11,8 +11,6 @@ dependencies:
   - scikit-learn
   - joblib
   - h5py
-  - pyqt=5.15.*
-  - qtpy
   - chardet
   - tqdm
   - pyinstaller
@@ -28,3 +26,5 @@ dependencies:
       - tensorflow-macos
       - tensorflow-metal
       - python-pptx
+      - qtpy
+      - pyqt5

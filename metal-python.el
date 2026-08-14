@@ -1275,6 +1275,95 @@ style viennent uniformément de `metal-toolbar'."
 (global-set-key (kbd "M-TAB")  #'completion-at-point)
 (global-set-key (kbd "C-c C-e") #'metal-python-compile)
 
+;; ═══════════════════════════════════════════════════════════════
+;; Mise en forme d'un code Python collé depuis un PDF
+;; Le collage PDF écrase les largeurs d'indentation mais préserve
+;; la hiérarchie relative : on la reconstruit par une pile, à
+;; 4 espaces par niveau, après nettoyage des artefacts (espaces
+;; insécables, guillemets courbes, ligatures, tirets).
+;; Usage : coller, sélectionner (ou rien = tout le buffer),
+;;         M-x metal-python-mise-en-forme
+;; ═══════════════════════════════════════════════════════════════
+
+(require 'subr-x)  ; string-trim-left, string-join, string-empty-p
+
+(defconst metal-python--artefacts-pdf
+  '(("\u00A0" . " ")   ; espace insécable
+    ("\u202F" . " ")   ; espace insécable étroite
+    ("\u2007" . " ")   ; espace tabulaire
+    ("\t"     . "    ")
+    ("\u2018" . "'") ("\u2019" . "'")     ; apostrophes courbes
+    ("\u201C" . "\"") ("\u201D" . "\"")   ; guillemets courbes
+    ("\uFB01" . "fi") ("\uFB02" . "fl")   ; ligatures
+    ("\u2013" . "-") ("\u2014" . "--"))   ; tirets typographiques
+  "Remplacements des artefacts introduits par la copie depuis un PDF.")
+
+(defun metal-python--nettoyer (texte)
+  "Remplace dans TEXTE les artefacts typographiques du PDF."
+  (dolist (paire metal-python--artefacts-pdf texte)
+    (setq texte (replace-regexp-in-string
+                 (regexp-quote (car paire)) (cdr paire) texte t t))))
+
+(defun metal-python--reconstruire (texte)
+  "Réécrit les indentations de TEXTE par niveaux de 4 espaces.
+La pile suit les largeurs d'indentation rencontrées : une largeur
+plus grande ouvre un niveau, une largeur plus petite referme
+jusqu'au niveau correspondant.  Retourne (TEXTE-RÉPARÉ . MAX-IND)
+où MAX-IND est la plus grande indentation vue en entrée — zéro
+signale un code entièrement aplati."
+  (let ((pile (list 0)) (max-ind 0) (resultat nil))
+    (dolist (ligne (split-string texte "\n"))
+      (let* ((depouillee (string-trim-left ligne " "))
+             (vide (string-empty-p depouillee))
+             (ind (- (length ligne) (length depouillee))))
+        (if vide
+            (push "" resultat)
+          (setq max-ind (max max-ind ind))
+          (cond ((> ind (car pile)) (push ind pile))
+                (t (while (and (cdr pile) (> (car pile) ind))
+                     (pop pile))))
+          (push (concat (make-string (* 4 (1- (length pile))) ?\s)
+                        depouillee)
+                resultat))))
+    (cons (string-join (nreverse resultat) "\n") max-ind)))
+
+;;;###autoload
+(defun metal-python-mise-en-forme (debut fin)
+  "Répare l'indentation d'un code Python collé depuis un PDF.
+Opère sur la région active, ou sur tout le buffer sinon.
+Nettoie les artefacts typographiques, puis reconstruit les niveaux
+d'indentation d'après la hiérarchie relative des lignes.  Si le
+code est entièrement aplati, propose `indent-region' en dépannage."
+  (interactive (if (use-region-p)
+                   (list (region-beginning) (region-end))
+                 (list (point-min) (point-max))))
+  (let* ((brut (buffer-substring-no-properties debut fin))
+         (propre (metal-python--nettoyer brut))
+         (paire (metal-python--reconstruire propre))
+         (repare (car paire))
+         (max-ind (cdr paire)))
+    (delete-region debut fin)
+    (goto-char debut)
+    (insert repare)
+    (if (> max-ind 0)
+        (let ((niveaux 0))
+          (dolist (l (split-string repare "\n"))
+            (setq niveaux (max niveaux
+                               (/ (- (length l)
+                                     (length (string-trim-left l " ")))
+                                  4))))
+          (message "Indentation reconstruite (%d niveaux max). Relisez le résultat."
+                   niveaux))
+      (when (and (derived-mode-p 'python-mode 'python-ts-mode)
+                 (y-or-n-p "Aucune indentation à reconstruire — tenter indent-region ? "))
+        (indent-region debut (+ debut (length repare)))
+        (message "indent-region appliqué : résultat APPROXIMATIF, relecture obligatoire.")))))
+
+;; Raccourci suggéré, à adapter à tes conventions :
+;; (define-key python-mode-map (kbd "C-c q p") #'metal-python-mise-en-forme)
+
+
+
 (provide 'metal-python)
 
 ;;; metal-python.el ends here
