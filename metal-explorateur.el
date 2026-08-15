@@ -561,47 +561,46 @@ Ouvre Treemacs si nécessaire et, si possible, se place sur le volume ajouté."
 ;;; Création de fichiers/dossiers via dialogue graphique (c f / c d)
 ;;; ═══════════════════════════════════════════════════════════════════
 
-(defun metal-treemacs-create-file ()
-  "Créer un fichier via dialogue graphique natif."
-  (interactive)
+
+(defun metal-treemacs--dossier-courant ()
+  "Retourne le dossier associé au nœud courant de Treemacs."
   (let* ((btn (treemacs-current-button))
-         (path (when btn (treemacs-button-get btn :path)))
-         (dir (if path
-                  (if (file-directory-p path)
-                      (file-name-as-directory path)
-                    (file-name-directory path))
-                (expand-file-name "~/Documents/")))
-         (filepath (if (fboundp 'x-file-dialog)
-                       (x-file-dialog "Créer fichier" dir nil nil)
-                     (read-file-name "Créer fichier : " dir))))
-    (when (and filepath (not (string-empty-p filepath)))
-      (when (or (not (file-exists-p filepath))
-                (yes-or-no-p (format "« %s » existe déjà. Écraser ? "
-                                     (file-name-nondirectory filepath))))
-        (write-region "" nil filepath nil 'silent)
-        (treemacs-refresh)
-        (find-file filepath)))))
+         (path (when btn (treemacs-button-get btn :path))))
+    (if (and path (stringp path))
+        (if (file-directory-p path)
+            (file-name-as-directory path)
+          (file-name-directory path))
+      (expand-file-name "~/Documents/"))))
+
+(defun metal-treemacs-create-file ()
+  "Créer un fichier dans le dossier courant de Treemacs.
+Le nom est saisi dans le minibuffer, sans dialogue graphique."
+  (interactive)
+  (let* ((dir (metal-treemacs--dossier-courant))
+         (nom (string-trim (read-string "Nom du fichier : "))))
+    (unless (string-empty-p nom)
+      (let ((filepath (expand-file-name nom dir)))
+        (when (or (not (file-exists-p filepath))
+                  (yes-or-no-p (format "« %s » existe déjà. Écraser ? "
+                                       (file-name-nondirectory filepath))))
+          (make-directory (file-name-directory filepath) t)
+          (write-region "" nil filepath nil 'silent)
+          (treemacs-refresh)
+          (find-file filepath))))))
 
 (defun metal-treemacs-create-dir ()
-  "Créer un dossier via dialogue graphique natif."
+  "Créer un dossier dans le dossier courant de Treemacs.
+Le nom est saisi dans le minibuffer, sans dialogue graphique."
   (interactive)
-  (let* ((btn (treemacs-current-button))
-         (path (when btn (treemacs-button-get btn :path)))
-         (dir (if path
-                  (if (file-directory-p path)
-                      (file-name-as-directory path)
-                    (file-name-directory path))
-                (expand-file-name "~/Documents/")))
-         ;; Utiliser le mode fichier (nil) pour permettre de taper un nom
-         (new-dir (if (fboundp 'x-file-dialog)
-                      (x-file-dialog "Nom du nouveau dossier" dir nil nil)
-                    (read-file-name "Nom du nouveau dossier : " dir))))
-    (when (and new-dir (not (string-empty-p new-dir)))
-      (if (file-exists-p new-dir)
-          (message "« %s » existe déjà." (file-name-nondirectory new-dir))
-        (make-directory new-dir t)
-        (treemacs-refresh)
-        (message "Dossier créé : %s" new-dir)))))
+  (let* ((dir (metal-treemacs--dossier-courant))
+         (nom (string-trim (read-string "Nom du dossier : "))))
+    (unless (string-empty-p nom)
+      (let ((new-dir (expand-file-name nom dir)))
+        (if (file-exists-p new-dir)
+            (message "« %s » existe déjà." (file-name-nondirectory new-dir))
+          (make-directory new-dir t)
+          (treemacs-refresh)
+          (message "Dossier créé : %s" new-dir))))))
 
 (with-eval-after-load 'treemacs
   (define-key treemacs-mode-map (kbd "n") nil)
