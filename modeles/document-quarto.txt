@@ -1,0 +1,25 @@
+---
+title: "Titre"
+subtitle: "Sous-titre"
+lang: fr
+filters:
+  - metal-boites.lua
+header-includes: |
+  \usepackage{metal-tcolorbox}
+  \usepackage{booktabs}
+format:
+  pdf:
+    documentclass: scrartcl
+    papersize: letter
+    geometry:
+      - margin=2cm
+    number-sections: true
+    toc: false
+    fig-pos: "H"
+    code-block-bg: true
+    highlight-style: github
+execute:
+  enabled: false
+  echo: true
+---
+

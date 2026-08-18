@@ -31,6 +31,66 @@ Persistée dans metal-prefs.el.  Appliquée via `treemacs-resize-icons'.
 Réglable à la volée par `M-x treemacs-resize-icons' (un conseil ci-après
 sauvegarde alors la nouvelle valeur).")
 
+;;; ── Repli des dossiers à enfant unique ──────────────────────────────
+;; Treemacs regroupe sur une seule ligne les dossiers qui n'ont qu'un
+;; enfant (« 01 - LNG-Cours/LNG-3101-A2026 »).  L'indentation ainsi
+;; économisée laisse plus de place aux noms longs.  Ce mécanisme exige
+;; un interpréteur Python 3 : sans lui, Treemacs signale une erreur à
+;; chaque rafraîchissement, d'où la désactivation automatique.
+
+(defvar metal-treemacs-collapse-dirs 3
+  "Profondeur maximale de repli des dossiers à enfant unique.
+0 désactive le repli.  Une valeur positive n'a d'effet que si un
+interpréteur Python 3 est trouvé par `metal-treemacs--python3'.")
+
+(defvar metal-treemacs-python-executable nil
+  "Chemin explicite d'un interpréteur Python 3, ou nil pour détection auto.
+À renseigner si la détection automatique échoue, par exemple pour
+pointer l'interpréteur d'un environnement Conda précis.")
+
+(defun metal-treemacs--python3-p (exe)
+  "Retourne non-nil si EXE est un interpréteur Python 3 fonctionnel."
+  (and exe
+       (file-executable-p exe)
+       (string-match-p "\\`Python 3"
+                       (shell-command-to-string
+                        (concat (shell-quote-argument exe) " --version 2>&1")))))
+
+(defun metal-treemacs--python3 ()
+  "Retourne le chemin d'un interpréteur Python 3 utilisable, ou nil.
+Essaie dans l'ordre : `metal-treemacs-python-executable', l'interpréteur
+Python courant (`python-shell-interpreter', suivi de l'environnement
+Conda actif), puis « python3 » et « python » dans le PATH."
+  (seq-some (lambda (candidat)
+              (let ((exe (if (file-name-absolute-p candidat)
+                             candidat
+                           (executable-find candidat))))
+                (and (metal-treemacs--python3-p exe) exe)))
+            (delq nil (list metal-treemacs-python-executable
+                            (bound-and-true-p python-shell-interpreter)
+                            "python3"
+                            "python"))))
+
+(defun metal-treemacs-configurer-repli ()
+  "Activer le repli des dossiers si un interpréteur Python 3 est disponible.
+Sinon désactiver proprement le repli.  Appelable interactivement après
+un changement d'environnement Python."
+  (interactive)
+  (let ((python (and (> metal-treemacs-collapse-dirs 0)
+                     (metal-treemacs--python3))))
+    (setq treemacs-python-executable python
+          treemacs-collapse-dirs (if python metal-treemacs-collapse-dirs 0))
+    (when (called-interactively-p 'interactive)
+      (message (if python
+                   (format "Repli Treemacs actif (profondeur %d) — %s"
+                           treemacs-collapse-dirs python)
+                 "Repli Treemacs désactivé : aucun interpréteur Python 3 trouvé")))
+    (when (and python
+               (fboundp 'treemacs-get-local-window)
+               (treemacs-get-local-window))
+      (treemacs-refresh))
+    python))
+
 (use-package treemacs
   :straight t
   :defer t
@@ -42,12 +102,14 @@ sauvegarde alors la nouvelle valeur).")
         treemacs-width metal-treemacs-width
         treemacs-width-is-initially-locked t
         treemacs-text-scale (if (memq system-type '(gnu/linux windows-nt)) 1 0)
-        treemacs-collapse-dirs 0
+        treemacs-collapse-dirs metal-treemacs-collapse-dirs
         treemacs-display-in-side-window t
         treemacs-position 'left
         treemacs-no-png-images nil
         treemacs-is-never-other-window t)
   (treemacs-git-mode -1)
+  ;; Valider la disponibilité de Python 3 : le repli est désactivé sinon.
+  (metal-treemacs-configurer-repli)
   ;; --- Taille des icônes PNG natives ---
   ;; Appliquer la taille persistée et la maintenir à jour quand l'utilisateur
   ;; règle via `M-x treemacs-resize-icons'.
@@ -194,9 +256,61 @@ sauvegarde alors la nouvelle valeur).")
             (lambda ()
               (setq-local line-spacing
                           (round (* (metal-font-height) 0.04)))))
+  ;; Troncature des noms trop longs.
+  ;;
+  ;; Sans cela, un nom de fichier plus large que la colonne se poursuit sur
+  ;; une deuxième ligne, au ras de la marge gauche — ce qui casse
+  ;; l'alignement des icônes et décale les bandes alternées.  Treemacs s'en
+  ;; remet aux valeurs par défaut d'Emacs, insuffisantes ici : un
+  ;; `visual-line-mode' global, ou un `truncate-partial-width-windows' mis
+  ;; à nil ailleurs dans la configuration, l'emportent sur elles.
+  ;;
+  ;; Profondeur 90 pour passer APRÈS les autres hooks : un mode activé plus
+  ;; tôt rétablirait sinon l'enroulement.
+  (add-hook 'treemacs-mode-hook
+            (lambda ()
+              (setq-local truncate-lines t)
+              (setq-local truncate-partial-width-windows nil)
+              (setq-local word-wrap nil)
+              (when (bound-and-true-p visual-line-mode)
+                (visual-line-mode -1)))
+            90)
   (advice-add 'treemacs-refresh :after #'metal-treemacs--refresh-stripes)
   (advice-add 'treemacs-collapse-parent-node :after #'metal-treemacs--refresh-stripes)
   (advice-add 'treemacs-toggle-node :after #'metal-treemacs--refresh-stripes))
+
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Correctif : annotations différées sur nœuds périmés
+;;; ═══════════════════════════════════════════════════════════════════
+
+;; Treemacs arme un minuteur de 0,5 s à chaque rendu de répertoire, dans
+;; `treemacs--create-buttons' (treemacs-rendering.el).  Ce minuteur est
+;; programmé inconditionnellement, hors du `pcase treemacs--git-mode' qui
+;; le précède : le désactiver par `(treemacs-git-mode -1)' n'y change rien.
+;;
+;; Le premier argument est une position de bouton, capturée au moment du
+;; rendu.  Si l'arbre est redessiné dans le demi-seconde qui suit, la
+;; position devient périmée : `treemacs-button-get' renvoie nil, et le
+;; `(1+ (treemacs-button-get btn :depth))' de
+;; `treemacs--apply-annotations-deferred' signale
+;;   (wrong-type-argument number-or-marker-p nil)
+;;
+;; La fonction vérifie déjà que le tampon est vivant, mais jamais que le
+;; bouton l'est encore.  On complète la vérification.  L'annotation sautée
+;; est sans conséquence : elle est recalculée au rendu suivant, et
+;; `treemacs-git-mode' étant désactivé ici, la table transmise est vide.
+
+(with-eval-after-load 'treemacs
+  (define-advice treemacs--apply-annotations-deferred
+      (:around (fn btn path buffer git-future) metal-ignorer-noeuds-perimes)
+    "Ne rien faire si BTN ne désigne plus un nœud vivant de BUFFER."
+    (when (and (buffer-live-p buffer)
+               (integer-or-marker-p btn)
+               (with-current-buffer buffer
+                 (and (<= (point-min) btn (point-max))
+                      (numberp (treemacs-button-get btn :depth)))))
+      (funcall fn btn path buffer git-future))))
 
 
 (defun metal-treemacs--update-line-spacing ()
@@ -250,7 +364,7 @@ préservation de la taille de la side-window dans Emacs."
   (let ((inhibit-message t) 
         (message-log-max nil))
     (require 'treemacs)
-    (setq treemacs-python-executable nil)
+    (metal-treemacs-configurer-repli)
     ;; (when (fboundp 'treemacs-git-mode)
     ;;   (treemacs-git-mode 'simple))
     (save-selected-window

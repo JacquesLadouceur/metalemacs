@@ -128,7 +128,12 @@ fichier soit recuperable."
   ((darwin    . \"Installez le CLI Antigravity :\\n  curl -fsSL https://antigravity.google/cli/install.sh | bash\\nPuis assurez-vous que ~/.local/bin est dans le PATH.\")
    (gnu/linux . \"Installez le CLI Antigravity :\\n  curl -fsSL https://antigravity.google/cli/install.sh | bash\\nPuis assurez-vous que ~/.local/bin est dans le PATH.\")
    (windows-nt . \"Installez le CLI Antigravity (agy) dans PowerShell :\\n  irm https://antigravity.google/cli/install.ps1 | iex\\nLe binaire agy est place dans %LOCALAPPDATA%\\\\agy\\\\bin ; ouvrez un nouveau terminal pour que le PATH soit pris en compte.\")
-   (t          . \"Voir https://antigravity.google pour installer le CLI agy.\")))
+   (t          . \"Voir https://antigravity.google pour installer le CLI agy.\"))
+  :desinstall-manuelle
+  ((darwin . \"  1. Deconnecter le compte (purge le trousseau) :\\n       lancez  agy  puis la commande de deconnexion dans l'invite.\\n\\n  2. Supprimer le binaire :\\n       rm ~/.local/bin/agy\\n\\n  3. Supprimer les reglages :\\n       rm -rf ~/.gemini/antigravity-cli\\n\\n  4. Retirer de ~/.zshrc les lignes de PATH et d'alias ajoutees par\\n     l'installeur (ne retirez la ligne PATH que si ~/.local/bin ne\\n     contient rien d'autre).\\n\\n  5. Rouvrir un terminal, puis cliquer « Rafraichir » ici.\\n\\nNote : l'application de bureau Antigravity est distincte du CLI.\\nSi vous l'avez installee par Homebrew, elle se retire par\\n  brew uninstall --cask antigravity\")
+   (gnu/linux . \"  1. Deconnecter le compte depuis l'invite  agy .\\n\\n  2. rm ~/.local/bin/agy\\n\\n  3. rm -rf ~/.gemini/antigravity-cli\\n\\n  4. Retirer de ~/.bashrc les lignes de PATH et d'alias ajoutees.\")
+   (windows-nt . \"  1. Deconnecter le compte depuis l'invite  agy .\\n\\n  2. Supprimer agy.exe sous %LOCALAPPDATA%\\\\agy\\\\bin\\n\\n  3. Supprimer le dossier de reglages Antigravity CLI de votre profil.\")
+   (t . \"Supprimer le binaire agy, puis les reglages et les lignes de PATH ajoutees par l'installeur.\")))
 
  ;; ─────────────────────────────────────────────────────────────────
  ;;  ChatGPT (Codex CLI)
@@ -228,6 +233,16 @@ agent connu via l'Assistant.")
 ;; Le catalogue actif n'est plus code en dur : variable peuplee au chargement.
 (setq metal-deps-agents-catalogue nil)
 
+(defvar metal-deps-agents-base '(claude codex antigravity)
+  "Agents toujours presents dans l'Assistant.
+Ces trois agents doivent figurer dans la liste quelle que soit
+l'histoire du catalogue : s'ils ne sont pas installes, la ligne montre
+le bouton « Installer ».  Leur specification est reprise de
+`metal-deps-agents-modeles-connus' lorsqu'elle manque au catalogue.
+
+Un agent de base peut etre modifie librement dans le fichier catalogue
+(arguments, couleur, format) ; seule sa disparition est empechee.")
+
 (defun metal-deps--valider-entree-agent (entry)
   "Verifie qu'ENTRY est (ID :nom S :commande S ...).  Signale sinon."
   (unless (and (consp entry) (symbolp (car entry)))
@@ -281,6 +296,8 @@ d'echec plutot que de lever une erreur seche."
               f (error-message-string err))
      nil)))
 
+(declare-function metal-deps--assurer-agents-base "metal-agents-catalogue-externe" ())
+
 (defun metal-deps--charger-catalogue (&optional _force)
   "Charge le catalogue depuis le fichier ; (re)cree le seed si absent,
 vide ou invalide.
@@ -309,6 +326,21 @@ dernier recours seulement, l'ancien catalogue est conserve."
                 (message
                  "⚠ Catalogue d'agents irrecuperable (%s) — version precedente conservee"
                  f)))))))
+    ;; 3) Garantir la presence et la completude des agents de base, quoi
+    ;;    qu'il soit arrive au fichier (suppression manuelle, clic
+    ;;    « Desinstaller » d'une version anterieure, entree amputee).
+    ;;
+    ;;    Sous `condition-case' : ce traitement est un CONFORT, jamais une
+    ;;    condition de demarrage.  Une erreur ici doit laisser MetalEmacs
+    ;;    se charger avec le catalogue tel qu'il est, pas interrompre
+    ;;    l'initialisation au milieu.
+    (condition-case err
+        (metal-deps--assurer-agents-base)
+      (error
+       (metal-deps--journaliser
+        "Agents de base : verification impossible (%s) — catalogue laisse tel quel"
+        (error-message-string err))
+       (message "⚠ Catalogue d'agents : %s" (error-message-string err))))
     metal-deps-agents-catalogue))
 
 (defun metal-deps--catalogue-valeur-texte (valeur)
@@ -393,6 +425,119 @@ catalogue nil au moment d'une sauvegarde signale un etat transitoire
                                (length metal-deps-agents-catalogue)))))
 
 ;;; ──────────────────────────────────────────────────────────────────
+;;;  Agents de base : presence garantie
+;;; ──────────────────────────────────────────────────────────────────
+
+(defun metal-deps--seed-entree (id)
+  "Retourne la specification de l'agent ID telle que definie dans la graine.
+La graine (`metal-deps--catalogue-seed') est la source COMPLETE : elle
+porte `:install-manuelle', `:auth-args', `:auth-aide', etc., que
+`metal-deps-agents-modeles-connus' n'a pas.  Reinjecter depuis les
+modeles abreges produirait une entree amputee, et l'Assistant afficherait
+alors une aide d'installation generique et inutile.
+
+Retourne nil si la graine est illisible ou ne contient pas ID."
+  (ignore-errors
+    (with-temp-buffer
+      (insert (metal-deps--catalogue-seed))
+      (goto-char (point-min))
+      (cdr (assq id (read (current-buffer)))))))
+
+(defun metal-deps--specification-de-base (id)
+  "Specification de reference pour l'agent de base ID.
+La graine d'abord, les modeles abreges en dernier recours."
+  (or (metal-deps--seed-entree id)
+      (cdr (assq id metal-deps-agents-modeles-connus))))
+
+(defun metal-deps--catalogue-couvre-p (id modele)
+  "Non-nil si le catalogue contient deja l'agent de base ID / MODELE.
+Le test porte sur l'identifiant ET sur la commande CLI : un meme agent
+peut figurer au catalogue sous un autre identifiant (ex. ChatGPT enregistre
+sous `chatgpt' plutot que `codex').  Ne comparer que les identifiants
+creerait un doublon a chaque chargement."
+  (let ((cmd (plist-get modele :commande)))
+    (or (assq id metal-deps-agents-catalogue)
+        (and cmd
+             (cl-some (lambda (e)
+                        (equal cmd (plist-get (cdr e) :commande)))
+                      metal-deps-agents-catalogue)))))
+
+(defun metal-deps--completer-spec (spec reference)
+  "Complete SPEC par les cles de REFERENCE qui lui manquent.
+Retourne (SPEC-COMPLETEE . CLES-AJOUTEES).  Les cles deja presentes dans
+SPEC ne sont JAMAIS touchees, meme si leur valeur differe de REFERENCE :
+une personnalisation de l'utilisateur l'emporte toujours.  Seule l'absence
+d'une cle est corrigee."
+  (let ((sortie (copy-sequence spec))
+        (ajoutees nil)
+        (reste reference))
+    (while reste
+      (let ((cle (car reste))
+            (val (cadr reste)))
+        (unless (plist-member sortie cle)
+          (setq sortie (plist-put sortie cle val))
+          (push cle ajoutees)))
+      (setq reste (cddr reste)))
+    (cons sortie (nreverse ajoutees))))
+
+(defun metal-deps--assurer-agents-base ()
+  "Garantit que les agents de `metal-deps-agents-base' sont presents ET complets.
+
+Deux passes, toutes deux appuyees sur `metal-deps--specification-de-base'
+\(la graine, source complete) :
+
+1. PRESENCE — un agent de base absent du catalogue y est reinjecte.  La
+   presence est jugee par `metal-deps--catalogue-couvre-p', qui tolere un
+   identifiant different pour peu que la commande CLI soit la meme.
+
+2. COMPLETUDE — un agent de base present mais ampute (par exemple ecrit
+   par une version anterieure de cette fonction, qui puisait dans les
+   modeles abreges) recupere les cles qui lui manquent : `:install-manuelle',
+   `:paquet-npm', `:auth-args'…  Sans quoi ses boutons « Installer » et
+   « Desinstaller » n'ont aucune commande a proposer.
+
+Les valeurs deja ecrites ne sont jamais ecrasees : un agent de base
+personnalise garde ses reglages.
+
+N'ECRIT PAS dans le fichier catalogue.  La reparation vit uniquement en
+memoire, le temps de la session : c'est suffisant, puisque l'Assistant
+comme `metal-agent--provider-prop' lisent la variable, pas le fichier.
+Ecrire ici reviendrait a modifier les donnees de l'utilisateur pendant
+l'initialisation, sans qu'il l'ait demande et sans qu'il puisse le voir
+venir — et une seule ecriture fautive suffit alors a faire perdre des
+agents ajoutes a la main.  Pour materialiser la reparation dans le
+fichier, l'utilisateur dispose de `metal-deps-editer-catalogue'."
+  (let (ajoutes completes)
+    (dolist (id metal-deps-agents-base)
+      (let ((reference (metal-deps--specification-de-base id)))
+        (when reference
+          (let ((existante (assq id metal-deps-agents-catalogue)))
+            (if (null existante)
+                ;; Passe 1 : absent → reinjecter (sauf si couvert autrement).
+                (unless (metal-deps--catalogue-couvre-p id reference)
+                  (setq metal-deps-agents-catalogue
+                        (append metal-deps-agents-catalogue
+                                (list (cons id (copy-sequence reference)))))
+                  (push id ajoutes))
+              ;; Passe 2 : present → completer les cles manquantes.
+              (let* ((resultat (metal-deps--completer-spec
+                                (cdr existante) reference))
+                     (manquantes (cdr resultat)))
+                (when manquantes
+                  (setcdr existante (car resultat))
+                  (push (cons id manquantes) completes))))))))
+    (when ajoutes
+      (metal-deps--journaliser
+       "Agents de base restaures en memoire : %s"
+       (mapconcat #'symbol-name (nreverse ajoutes) ", ")))
+    (dolist (c (nreverse completes))
+      (metal-deps--journaliser
+       "Agent « %s » complete en memoire : %s"
+       (car c)
+       (mapconcat #'symbol-name (cdr c) " ")))
+    metal-deps-agents-catalogue))
+
+;;; ──────────────────────────────────────────────────────────────────
 ;;;  Detection d'authentification revisee
 ;;; ──────────────────────────────────────────────────────────────────
 
@@ -440,14 +585,35 @@ Recharge le catalogue d'abord pour refleter les editions du fichier."
   (mapcar #'metal-deps--agent-catalogue->outil metal-deps-agents-catalogue))
 
 ;;; ──────────────────────────────────────────────────────────────────
-;;;  Suppression : retire du fichier ET du registre (tout est supprimable)
+;;;  Retrait du catalogue (distinct de la desinstallation de la CLI)
 ;;; ──────────────────────────────────────────────────────────────────
 
-(defun metal-deps--desinstaller-agent-ia (id)
+(defun metal-deps--retirer-agent-du-catalogue (id)
   "Retire l'agent ID du catalogue (fichier) ET du registre actif.
-La CLI installee n'est PAS supprimee du systeme (l'utilisateur la gere)."
+La CLI installee n'est PAS supprimee du systeme (l'utilisateur la gere).
+
+A NE PAS CONFONDRE avec `metal-deps--desinstaller-agent-ia' (defini dans
+`metal-deps.el'), qui est ce que declenche le bouton « Desinstaller » de
+l'Assistant : celui-la desinstalle la CLI et CONSERVE la ligne, de sorte
+que le bouton « Installer » reapparaisse aussitot.
+
+Cette fonction-ci fait disparaitre la ligne, ce qui n'a de sens que pour
+un agent ajoute a la main — ou pour un doublon.  Elle refuse donc un
+agent de `metal-deps-agents-base' SAUF si une autre entree du catalogue
+expose la meme commande CLI : dans ce cas l'agent reste joignable et la
+suppression est legitime."
   (let* ((spec (cdr (assq id metal-deps-agents-catalogue)))
-         (nom  (or (plist-get spec :nom) (symbol-name id))))
+         (nom  (or (plist-get spec :nom) (symbol-name id)))
+         (cmd  (plist-get spec :commande))
+         (double (and cmd
+                      (cl-some (lambda (e)
+                                 (and (not (eq (car e) id))
+                                      (equal cmd (plist-get (cdr e) :commande))))
+                               metal-deps-agents-catalogue))))
+    (when (and (memq id metal-deps-agents-base) (not double))
+      (user-error
+       "« %s » est un agent de base : il reste dans l'Assistant.  Pour retirer sa CLI, utilisez le bouton « Desinstaller »"
+       nom))
     (when (yes-or-no-p
            (format "Retirer l'agent « %s » du catalogue et de la liste active ? " nom))
       ;; 1) Retirer du registre actif
@@ -587,7 +753,7 @@ Apres edition : `metal-deps-recharger-catalogue'."
                         metal-deps-agents-catalogue))
          (sel (completing-read "Supprimer quel agent ? " (mapcar #'car choix) nil t))
          (id (cdr (assoc sel choix))))
-    (when id (metal-deps--desinstaller-agent-ia id))))
+    (when id (metal-deps--retirer-agent-du-catalogue id))))
 
 (defalias 'metal-deps-catalogue-ajouter-agent
   #'metal-deps--ajouter-agent-personnalise

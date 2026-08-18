@@ -17,6 +17,14 @@
 (require 'cl-lib)
 (require 'metal-icones nil t)
 
+;; Fournies par `metal-quarto.el'.  Chargement non forcé ici : la création
+;; de document teste `fboundp' et retombe sur la front matter complète si
+;; le module n'est pas encore chargé.
+(declare-function metal-quarto-contexte-dossier "metal-quarto" (dir))
+(declare-function metal-quarto--creer-metadata "metal-quarto" (dir))
+(declare-function metal-quarto--ajouter-include "metal-quarto" (chapitre))
+(defvar metal-quarto-dossiers-chapitres)
+
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Icônes : rendu SVG couleur délégué à `metal-icones.el'
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -71,7 +79,7 @@ V-ADJUST décale verticalement le repli texte le cas échéant."
 
 (defvar metal-dashboard-quarto-ressources
   '("metal-boites.lua" "metal-tcolorbox.sty")
-  "Fichiers à copier dans le dossier de chaque nouvelle présentation Quarto.")
+  "Fichiers à copier dans le dossier de chaque nouveau document ou présentation Quarto.")
 
 (defvar metal-dashboard-quarto-ressources-dir
   (expand-file-name "quarto/" user-emacs-directory)
@@ -762,23 +770,94 @@ Sinon, affiche un message d'erreur."
      "Présentation Quarto: "
      template)
     ;; Copier les ressources Quarto dans le dossier de la présentation
-    (when buffer-file-name
+    (when (and buffer-file-name
+               (string-suffix-p ".qmd" buffer-file-name t))
       (metal-dashboard--copier-ressources-quarto
        (file-name-directory buffer-file-name)))))
 
+(defun metal-dashboard--modele-document ()
+  "Front matter complète pour un document Quarto autonome."
+  (let ((f (expand-file-name "modeles/document-quarto.txt" user-emacs-directory)))
+    (if (file-exists-p f)
+        (with-temp-buffer
+          (insert-file-contents f)
+          (buffer-string))
+      (concat "---\n"
+              "title: \"Titre\"\n"
+              "lang: fr\n"
+              "filters:\n"
+              "  - metal-boites.lua\n"
+              "header-includes: |\n"
+              "  \\usepackage{metal-tcolorbox}\n"
+              "  \\usepackage{booktabs}\n"
+              "format:\n"
+              "  pdf: default\n"
+              "---\n\n"))))
+
 (defun metal-dashboard-new-qmd-document ()
-  "Créer un document Quarto."
+  "Créer un document Quarto, avec ou sans en-tête selon le contexte du dossier.
+
+Si le dossier fournit déjà la configuration (via `_metadata.yml' complet, ou
+via un `_quarto.yml' ancêtre), le document est créé sans front matter et
+amorcé par un titre de section.  Sinon il reçoit la front matter complète du
+modèle `modeles/document-quarto.txt'.
+
+Dans un dossier entièrement vide, le minibuffer propose de basculer en
+document réparti sur plusieurs fichiers.  Le squelette écrit alors est :
+
+  _metadata.yml
+  maître.qmd
+  Chapitres/          (ou Fichiers/, au choix)
+
+Le fichier nommé à l'invite devient le document maître.  Les documents créés
+ensuite dans le sous-dossier sont détectés comme chapitres : pas de front
+matter, et leur `include' est ajouté au maître.  La question multifichiers
+n'est jamais posée si le dossier contient déjà un .qmd."
   (interactive)
-  (let* ((template-file (expand-file-name "Modèles/Modèle-Document.txt" user-emacs-directory))
-         (template (if (file-exists-p template-file)
-                       (with-temp-buffer
-                         (insert-file-contents template-file)
-                         (buffer-string))
-                     "---\ntitle: \"Titre\"\nformat:\n  pdf: default\nlang: fr\n---\n\n")))
+  (let* ((dir (metal-dashboard--treemacs-selected-dir))
+         (ctx (and (fboundp 'metal-quarto-contexte-dossier)
+                   (metal-quarto-contexte-dossier dir)))
+         (dossier-chapitres nil))
+
+    (when (and (eq ctx 'vierge)
+               (y-or-n-p "Dossier vide — document réparti sur plusieurs fichiers ? "))
+      (setq dossier-chapitres
+            (completing-read "Nom du sous-dossier des fichiers : "
+                             metal-quarto-dossiers-chapitres
+                             nil nil
+                             (car metal-quarto-dossiers-chapitres)))
+      (metal-quarto--creer-metadata dir)
+      (make-directory (expand-file-name dossier-chapitres dir) t)
+      (setq ctx 'maitre))
+
     (metal-dashboard--create-new-file
      ".qmd"
-     "Document Quarto: "
-     template)))
+     (if (eq ctx 'maitre) "Document maître: " "Document Quarto: ")
+     (if (memq ctx '(chapitre metadata maitre))
+         ""
+       (metal-dashboard--modele-document)))
+
+    (when (and buffer-file-name
+               (string-suffix-p ".qmd" buffer-file-name t))
+      (when (= (buffer-size) 0)
+        (pcase ctx
+          ;; Document maître : titre seul, le reste vient de `_metadata.yml'.
+          ('maitre
+           (insert "---\n"
+                   "title: \"" (file-name-base buffer-file-name) "\"\n"
+                   "---\n\n"
+                   "<!-- Un include par fichier, dans l'ordre de lecture.\n"
+                   "     Les documents créés dans " dossier-chapitres "/ s'ajoutent ici. -->\n\n"))
+          ;; Sans front matter : amorcer par un titre de section.
+          ((or 'chapitre 'metadata)
+           (insert "# " (file-name-base buffer-file-name) "\n\n")))
+        (save-buffer))
+
+      ;; Un chapitre s'annonce au maître ; les ressources vivent à la racine.
+      (if (eq ctx 'chapitre)
+          (metal-quarto--ajouter-include buffer-file-name)
+        (metal-dashboard--copier-ressources-quarto
+         (file-name-directory buffer-file-name))))))
 
 (defun metal-dashboard-new-python ()
   "Créer un fichier Python."

@@ -2147,6 +2147,19 @@ Les URL dans CORPS deviennent cliquables via `goto-address-mode'."
 NOM est le nom de l'agent ; CORPS est le texte des instructions."
   (metal-deps--afficher-aide (format "Installation manuelle — %s" nom) corps))
 
+(defun metal-deps--desinstall-manuelle-pour (spec)
+  "Retourne le texte de desinstallation manuelle pour SPEC.
+Cherche `:desinstall-manuelle' pour `system-type', sinon l'entree
+fallback `t', sinon nil.  Pendant du `:install-manuelle'."
+  (let ((manuelle (plist-get spec :desinstall-manuelle)))
+    (or (cdr (assq system-type manuelle))
+        (cdr (assq t           manuelle)))))
+
+(defun metal-deps--afficher-aide-desinstall (nom corps)
+  "Affiche un buffer d'aide à la désinstallation manuelle.
+NOM est le nom de l'agent ; CORPS est le texte de la procédure."
+  (metal-deps--afficher-aide (format "Désinstallation manuelle — %s" nom) corps))
+
 (defun metal-deps--afficher-procedure-auth (id)
   "Affiche la procédure d'authentification pour l'agent ID.
 Utilisé quand la CLI n'est pas installée (impossible de lancer l'auth
@@ -2277,12 +2290,54 @@ affiche un buffer d'aide avec les instructions manuelles (champ
               "nouveau sur « Installer » pour cet agent.")))))))))) 
 
 (defun metal-deps--desinstaller-agent-ia (id)
-  "Désinstalle l'agent ID : retire de `metal-agent-providers' + désinstalle CLI."
+  "Désinstalle l'agent ID : retire de `metal-agent-providers' + désinstalle CLI.
+
+Si la CLI est présente mais n'a pas été posée par un gestionnaire de
+paquets connu (npm, brew, pipx), l'Assistant ne peut rien désinstaller :
+il affiche alors la procédure manuelle et NE TOUCHE À RIEN — ni au
+registre, ni au catalogue.  Retirer l'agent du registre dans ce cas ne
+changerait pas son statut (qui reflète la présence de la CLI) et
+laisserait l'utilisateur devant un état à moitié défait."
   (let* ((spec (cdr (assq id metal-deps-agents-catalogue)))
-         (nom  (plist-get spec :nom)))
+         (nom  (plist-get spec :nom))
+         (installee (and spec (metal-deps--agent-cli-installee-p spec)))
+         ;; Non désinstallable : CLI présente, mais aucun gestionnaire de
+         ;; paquets connu ne peut la retirer.
+         (bloque (and installee
+                      (null (metal-deps--commande-desinstallation-cli spec)))))
     (unless spec
       (user-error "Agent inconnu dans le catalogue : %s" id))
-    (when (yes-or-no-p (format "Désinstaller complètement « %s » (registre + CLI) ? " nom))
+    ;; Cas « non désinstallable » : afficher la procédure et NE RIEN
+    ;; modifier — ni registre, ni catalogue, ni confirmation demandée.
+    (when bloque
+      (let ((chemin (and (plist-get spec :commande)
+                         (executable-find (plist-get spec :commande)))))
+        (metal-deps--journaliser
+         "Désinstallation impossible depuis l'Assistant pour « %s »" nom)
+        (metal-deps--afficher-aide-desinstall
+         nom
+         (concat
+          "« " nom " » ne peut pas être désinstallé depuis l'Assistant.\n\n"
+          "Sa CLI n'a pas été posée par un gestionnaire de paquets (npm,\n"
+          "Homebrew, pipx) : elle vient d'un script d'installation qui a\n"
+          "copié le binaire et modifié votre profil de shell.  Il n'existe\n"
+          "aucune commande de désinstallation à lancer.\n\n"
+          "Procédure manuelle\n"
+          "──────────────────\n\n"
+          (or (metal-deps--desinstall-manuelle-pour spec)
+              (concat
+               "  1. Supprimer le binaire :\n"
+               (if chemin
+                   (concat "       rm " chemin "\n\n")
+                 "       (binaire introuvable dans le PATH)\n\n")
+               "  2. Retirer du profil de shell (~/.zshrc, ~/.bashrc) les\n"
+               "     lignes de PATH et d'alias ajoutées par l'installeur.\n\n"
+               "  3. Rouvrir un terminal, puis cliquer « Rafraîchir » ici.\n"))
+          "\nTant que le binaire est joignable, cette ligne continuera\n"
+          "d'afficher « Désinstaller » : le statut reflète la présence de\n"
+          "la CLI sur le système."))))
+    (when (and (not bloque)
+               (yes-or-no-p (format "Désinstaller complètement « %s » (registre + CLI) ? " nom)))
       ;; 1) Désenregistrer.
       (when (metal-deps--agent-enregistre-p id)
         (customize-save-variable
@@ -2297,15 +2352,23 @@ affiche un buffer d'aide avec les instructions manuelles (champ
            (car-safe (car-safe metal-agent-providers))))
         (metal-deps--journaliser "Agent « %s » retiré de metal-agent-providers" nom))
       ;; 2) Désinstaller la CLI si présente.
-      (when (metal-deps--agent-cli-installee-p spec)
-        (let ((cmd (metal-deps--commande-desinstallation-cli spec)))
-          (when cmd
+      ;;
+      ;; Le cas « CLI présente sans gestionnaire connu » n'arrive plus
+      ;; ici : le garde `bloque' l'a intercepté en amont, avant toute
+      ;; modification.  Restent deux cas.
+      (let ((cmd (and (metal-deps--agent-cli-installee-p spec)
+                      (metal-deps--commande-desinstallation-cli spec))))
+        (if cmd
+            ;; Gestionnaire de paquets connu.  Le message de fin viendra
+            ;; du tampon de compilation : `compile' est asynchrone.
             (let* ((cmdline (mapconcat #'metal-deps--quote-safe cmd " "))
                    (compilation-buffer-name-function
                     (lambda (_) (format "*Désinstallation %s*" nom))))
               (metal-deps--journaliser "Désinstallation CLI : %s" cmdline)
-              (compile cmdline t)))))
-      (message "« %s » désinstallé." nom))))
+              (compile cmdline t)
+              (message "Désinstallation de « %s » lancée…" nom))
+          ;; CLI absente : il n'y avait rien à retirer.
+          (message "« %s » retiré du registre (CLI déjà absente)." nom))))))
 
 (defun metal-deps--authentifier-agent-ia (id)
   "Lance l'authentification interactive pour l'agent ID."

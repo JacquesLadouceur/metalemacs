@@ -71,113 +71,113 @@
 
 ;; NOTE: Configuration police déplacée dans early-init.el
 ;; Les fontsets pour emojis/symboles sont configurés après le démarrage
-(when (eq system-type 'windows-nt)
-  (add-hook 'emacs-startup-hook
-            (lambda ()
-              ;; Fonte de base pour le reste de l'Unicode (monochrome, OK)
-              (set-fontset-font t 'unicode (font-spec :family "Segoe UI Symbol"))
-              ;; Emoji couleur en priorité, sur le script emoji ET les symboles
-              (set-fontset-font t 'emoji  (font-spec :family "Segoe UI Emoji") nil 'prepend)
-              (set-fontset-font t 'symbol (font-spec :family "Segoe UI Emoji") nil 'prepend)
-              ;; Nerd Font en dernier recours seulement
-              (when (find-font (font-spec :family "Symbols Nerd Font Mono"))
-                (set-fontset-font t 'unicode (font-spec :family "Symbols Nerd Font Mono") nil 'append)))
-            95))
+;; (when (eq system-type 'windows-nt)
+;;   (add-hook 'emacs-startup-hook
+;;             (lambda ()
+;;               ;; Fonte de base pour le reste de l'Unicode (monochrome, OK)
+;;               (set-fontset-font t 'unicode (font-spec :family "Segoe UI Symbol"))
+;;               ;; Emoji couleur en priorité, sur le script emoji ET les symboles
+;;               (set-fontset-font t 'emoji  (font-spec :family "Segoe UI Emoji") nil 'prepend)
+;;               (set-fontset-font t 'symbol (font-spec :family "Segoe UI Emoji") nil 'prepend)
+;;               ;; Nerd Font en dernier recours seulement
+;;               (when (find-font (font-spec :family "Symbols Nerd Font Mono"))
+;;                 (set-fontset-font t 'unicode (font-spec :family "Symbols Nerd Font Mono") nil 'append)))
+;;             95))
 
 
-(defgroup jl-busy nil
-  "Indicateur global quand Emacs travaille."
-  :group 'convenience)
+;; (defgroup jl-busy nil
+;;   "Indicateur global quand Emacs travaille."
+;;   :group 'convenience)
 
-(defcustom jl/busy-delay 0.5
-  "Delai (en secondes) avant d afficher l indicateur de travail.
-Si une commande termine avant ce delai, rien ne s affiche."
-  :type 'number
-  :group 'jl-busy)
+;; (defcustom jl/busy-delay 0.5
+;;   "Delai (en secondes) avant d afficher l indicateur de travail.
+;; Si une commande termine avant ce delai, rien ne s affiche."
+;;   :type 'number
+;;   :group 'jl-busy)
 
-(defcustom jl/busy-show-message t
-  "Si non-nil, afficher aussi un message dans le minibuffer
-quand Emacs active le mode 'busy'."
-  :type 'boolean
-  :group 'jl-busy)
+;; (defcustom jl/busy-show-message t
+;;   "Si non-nil, afficher aussi un message dans le minibuffer
+;; quand Emacs active le mode 'busy'."
+;;   :type 'boolean
+;;   :group 'jl-busy)
 
-(defvar jl/busy--timer nil
-  "Timer interne pour l indicateur de travail.")
-(defvar jl/busy--command nil
-  "Commande courante pour laquelle l indicateur a ete arme.")
-(defvar jl/busy--active nil
-  "Non-nil si l indicateur est actuellement actif.")
+;; (defvar jl/busy--timer nil
+;;   "Timer interne pour l indicateur de travail.")
+;; (defvar jl/busy--command nil
+;;   "Commande courante pour laquelle l indicateur a ete arme.")
+;; (defvar jl/busy--active nil
+;;   "Non-nil si l indicateur est actuellement actif.")
 
-(defvar jl/busy-mode-line-string nil
-  "Texte affiche dans la mode-line quand Emacs travaille.")
+;; (defvar jl/busy-mode-line-string nil
+;;   "Texte affiche dans la mode-line quand Emacs travaille.")
 
-;; Ajouter l indicateur a la mode-line globale
-(setq global-mode-string '("" jl/busy-mode-line-string))
+;; ;; Ajouter l indicateur a la mode-line globale
+;; (setq global-mode-string '("" jl/busy-mode-line-string))
 
-(defun jl/busy--activate ()
-  "Activer l indicateur de travail si la commande est toujours en cours."
-  (setq jl/busy--timer nil)
-  ;; On active seulement si la commande n a pas deja fini.
-  (unless jl/busy--active
-    (setq jl/busy--active t)
-    (setq jl/busy-mode-line-string
-          (format " [Emacs travaille: %s]" jl/busy--command))
-    (force-mode-line-update t)
-    (when jl/busy-show-message
-      (message "Emacs travaille..."))))
+;; (defun jl/busy--activate ()
+;;   "Activer l indicateur de travail si la commande est toujours en cours."
+;;   (setq jl/busy--timer nil)
+;;   ;; On active seulement si la commande n a pas deja fini.
+;;   (unless jl/busy--active
+;;     (setq jl/busy--active t)
+;;     (setq jl/busy-mode-line-string
+;;           (format " [Emacs travaille: %s]" jl/busy--command))
+;;     (force-mode-line-update t)
+;;     (when jl/busy-show-message
+;;       (message "Emacs travaille..."))))
 
-(defun jl/busy--pre-command ()
-  "Fonction de pre-command pour armer l indicateur."
-  (condition-case nil
-      (progn
-        (setq jl/busy--command this-command)
-        ;; Annuler un ancien timer au cas ou
-        (when jl/busy--timer
-          (cancel-timer jl/busy--timer)
-          (setq jl/busy--timer nil))
-        ;; On arme un nouveau timer
-        (setq jl/busy--timer
-              (run-at-time jl/busy-delay nil #'jl/busy--activate)))
-    (error nil)))
+;; (defun jl/busy--pre-command ()
+;;   "Fonction de pre-command pour armer l indicateur."
+;;   (condition-case nil
+;;       (progn
+;;         (setq jl/busy--command this-command)
+;;         ;; Annuler un ancien timer au cas ou
+;;         (when jl/busy--timer
+;;           (cancel-timer jl/busy--timer)
+;;           (setq jl/busy--timer nil))
+;;         ;; On arme un nouveau timer
+;;         (setq jl/busy--timer
+;;               (run-at-time jl/busy-delay nil #'jl/busy--activate)))
+;;     (error nil)))
 
-(defun jl/busy--post-command ()
-  "Fonction de post-command pour desarmer l indicateur."
-  (condition-case nil
-      (progn
-        ;; Annuler le timer si la commande a fini assez vite
-        (when jl/busy--timer
-          (cancel-timer jl/busy--timer)
-          (setq jl/busy--timer nil))
-        ;; Nettoyer l indicateur s il etait actif
-        (when jl/busy--active
-          (setq jl/busy--active nil)
-          (setq jl/busy-mode-line-string nil)
-          (force-mode-line-update t)
-          (when jl/busy-show-message
-            (message nil))))
-    (error nil)))
+;; (defun jl/busy--post-command ()
+;;   "Fonction de post-command pour desarmer l indicateur."
+;;   (condition-case nil
+;;       (progn
+;;         ;; Annuler le timer si la commande a fini assez vite
+;;         (when jl/busy--timer
+;;           (cancel-timer jl/busy--timer)
+;;           (setq jl/busy--timer nil))
+;;         ;; Nettoyer l indicateur s il etait actif
+;;         (when jl/busy--active
+;;           (setq jl/busy--active nil)
+;;           (setq jl/busy-mode-line-string nil)
+;;           (force-mode-line-update t)
+;;           (when jl/busy-show-message
+;;             (message nil))))
+;;     (error nil)))
 
-;;;###autoload
-(define-minor-mode jl-busy-mode
-  "Mode global affichant un indicateur quand Emacs travaille.
-Quand une commande interactive dure plus que `jl/busy-delay`,
-un indicateur est affiche dans la mode-line, et eventuellement
-un message dans le minibuffer."
-  :global t
-  :group 'jl-busy
-  (if jl-busy-mode
-      (progn
-        (add-hook 'pre-command-hook #'jl/busy--pre-command)
-        (add-hook 'post-command-hook #'jl/busy--post-command))
-    (remove-hook 'pre-command-hook #'jl/busy--pre-command)
-    (remove-hook 'post-command-hook #'jl/busy--post-command)
-    ;; Nettoyage
-    (when jl/busy--timer
-      (cancel-timer jl/busy--timer)
-      (setq jl/busy--timer nil))
-    (setq jl/busy--active nil)
-    (setq jl/busy-mode-line-string nil)
-    (force-mode-line-update t)))
+;; ;;;###autoload
+;; (define-minor-mode jl-busy-mode
+;;   "Mode global affichant un indicateur quand Emacs travaille.
+;; Quand une commande interactive dure plus que `jl/busy-delay`,
+;; un indicateur est affiche dans la mode-line, et eventuellement
+;; un message dans le minibuffer."
+;;   :global t
+;;   :group 'jl-busy
+;;   (if jl-busy-mode
+;;       (progn
+;;         (add-hook 'pre-command-hook #'jl/busy--pre-command)
+;;         (add-hook 'post-command-hook #'jl/busy--post-command))
+;;     (remove-hook 'pre-command-hook #'jl/busy--pre-command)
+;;     (remove-hook 'post-command-hook #'jl/busy--post-command)
+;;     ;; Nettoyage
+;;     (when jl/busy--timer
+;;       (cancel-timer jl/busy--timer)
+;;       (setq jl/busy--timer nil))
+;;     (setq jl/busy--active nil)
+;;     (setq jl/busy-mode-line-string nil)
+;;     (force-mode-line-update t)))
 
 
 (defun jl/insert-for-yank-safe (orig-fn string &rest args)
@@ -890,28 +890,28 @@ L'argument FRAME est ignore (garde pour compatibilite)."
        (string= (file-truename buffer-file-name)
                 (file-truename user-init-file))))
 
-(defun jl/init-safe-write-region (orig-fn &rest args)
-  "Simplifie la sauvegarde du fichier init.el pour limiter les blocages."
-  (if (jl/init-file-p)
-      (let ((before-save-hook nil)
-            (after-save-hook  nil)
-            (write-file-functions nil)
-            (file-name-handler-alist nil)
-            (auto-save-visited-mode nil)
-            (auto-save-default nil)
-            (inhibit-redisplay t)
-            (inhibit-message t)
-            ;; Eviter les fsync bloquants
-            (write-region-inhibit-fsync t)
-            ;; Eviter des copies/renames lourds
-            (file-precious-flag nil)
-            (backup-by-copying nil)
-            ;; Eviter que le GC intervienne pendant le save
-            (gc-cons-threshold most-positive-fixnum))
-        (apply orig-fn args))
-    (apply orig-fn args)))
+;; (defun jl/init-safe-write-region (orig-fn &rest args)
+;;   "Simplifie la sauvegarde du fichier init.el pour limiter les blocages."
+;;   (if (jl/init-file-p)
+;;       (let ((before-save-hook nil)
+;;             (after-save-hook  nil)
+;;             (write-file-functions nil)
+;;             (file-name-handler-alist nil)
+;;             (auto-save-visited-mode nil)
+;;             (auto-save-default nil)
+;;             (inhibit-redisplay t)
+;;             (inhibit-message t)
+;;             ;; Eviter les fsync bloquants
+;;             (write-region-inhibit-fsync t)
+;;             ;; Eviter des copies/renames lourds
+;;             (file-precious-flag nil)
+;;             (backup-by-copying nil)
+;;             ;; Eviter que le GC intervienne pendant le save
+;;             (gc-cons-threshold most-positive-fixnum))
+;;         (apply orig-fn args))
+;;     (apply orig-fn args)))
 
-(advice-add 'basic-save-buffer :around #'jl/init-safe-write-region)
+;; (advice-add 'basic-save-buffer :around #'jl/init-safe-write-region)
 
 
 (use-package highlight-indent-guides

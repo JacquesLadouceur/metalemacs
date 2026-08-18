@@ -294,48 +294,122 @@ Retourne t si le rendu peut continuer immédiatement, nil s'il faut attendre."
 ;;; Projet Quarto et rendu
 ;;; ═══════════════════════════════════════════════════════════════════
 
-(defun metal-quarto-ensure-project-at (dir)
-  "Créer un fichier _metadata.yml minimal et correct dans DIR si nécessaire.
+(defun metal-quarto--creer-metadata (dir)
+  "Écrire `_metadata.yml' dans DIR avec la configuration documentaire MetalEmacs.
+Retourne le chemin du fichier écrit.  Écrase sans demander : les appelants
+vérifient l'état du dossier avant d'appeler.
+
 Le fichier `_metadata.yml' applique des options communes à tous les .qmd du
 dossier sans transformer celui-ci en projet Quarto (ce qui forcerait la
-validation YAML de tous les .qmd voisins, y compris les brouillons).
+validation YAML de tous les .qmd voisins, y compris les brouillons).  Il
+n'est destiné qu'aux documents répartis sur plusieurs fichiers ; un document
+autonome porte sa propre front matter.
 
-Cette fonction n'est plus appelée automatiquement au rendu (où elle créait
-des conflits avec les .qmd Beamer / revealjs / typst). Elle est désormais
-appelée explicitement par le dashboard à la création d'un Document QMD
-\(option [d]\), c'est-à-dire d'un document destiné à devenir un PDF article.
-Les Présentations QMD \(option [p]\) ne déclenchent pas cette création.
-Pour créer manuellement un _metadata.yml dans un dossier existant, appeler
-cette fonction interactivement : `M-x metal-quarto-ensure-project-at'.
+Les ressources `metal-boites.lua' et `metal-tcolorbox.sty' doivent se trouver
+dans le même dossier : c'est `metal-dashboard--copier-ressources-quarto' qui
+s'en charge à la création du document.
 
 La police de caractères n'est pas précisée : le moteur LaTeX par défaut
 \(pdflatex\) utilisera Latin Modern, garanti présent sur toute distribution.
-Pour une autre police, ajouter `pdf-engine: xelatex' et `mainfont:' dans
-la front matter du `.qmd' concerné."
-  (interactive "DDossier où créer _metadata.yml : ")
+Pour une autre police, ajouter `pdf-engine: xelatex' et `mainfont:' ici."
   (let ((file (expand-file-name "_metadata.yml" dir)))
-    (unless (file-exists-p file)
-      (with-temp-file file
-        (insert
-         "lang: fr\n"
-         "\n"
-         "format:\n"
-         "  pdf:\n"
-         "    documentclass: scrartcl\n"
-         "    papersize: letter\n"
-         "    geometry:\n"
-         "      - margin=2cm\n"
-         "    number-sections: true\n"
-         "    toc: false\n"
-         "    fig-pos: \"H\"\n"
-         "    code-block-bg: true\n"
-         "    highlight-style: github\n"
-         "\n"
-         "execute:\n"
-         "  enabled: false\n"
-         "  echo: true\n"
-         "  warning: false\n"
-         "  message: false\n")))))
+    (with-temp-file file
+      (insert
+       "lang: fr\n"
+       "\n"
+       "filters:\n"
+       "  - metal-boites.lua\n"
+       "\n"
+       "header-includes: |\n"
+       "  \\usepackage{metal-tcolorbox}\n"
+       "  \\usepackage{booktabs}\n"
+       "\n"
+       "format:\n"
+       "  pdf:\n"
+       "    documentclass: scrartcl\n"
+       "    papersize: letter\n"
+       "    geometry:\n"
+       "      - margin=2cm\n"
+       "    number-sections: true\n"
+       "    toc: false\n"
+       "    fig-pos: \"H\"\n"
+       "    code-block-bg: true\n"
+       "    highlight-style: github\n"
+       "\n"
+       "execute:\n"
+       "  enabled: false\n"
+       "  echo: true\n"
+       "  warning: false\n"
+       "  message: false\n"))
+    file))
+
+(defvar metal-quarto-dossiers-chapitres
+  '("Chapitres" "Fichiers")
+  "Noms possibles du sous-dossier des fichiers d'un document multifichiers.
+Le premier sert de valeur par défaut à l'invite de création.")
+
+(defun metal-quarto--dossier-chapitres-p (dir)
+  "Vrai si DIR est le sous-dossier des fichiers d'un document multifichiers.
+Deux conditions : son nom figure dans `metal-quarto-dossiers-chapitres', et
+son parent porte un `_metadata.yml' complet."
+  (let* ((nu     (directory-file-name (expand-file-name dir)))
+         (nom    (file-name-nondirectory nu))
+         (parent (file-name-directory nu)))
+    (and parent
+         (member nom metal-quarto-dossiers-chapitres)
+         (file-exists-p (expand-file-name "_metadata.yml" parent))
+         t)))
+
+(defun metal-quarto--ajouter-include (chapitre)
+  "Ajouter un `include' de CHAPITRE au document maître, si celui-ci est repérable.
+Le maître est le seul .qmd présent à la racine du document multifichiers.
+En cas d'ambiguïté — aucun ou plusieurs .qmd — rien n'est modifié : mieux
+vaut laisser l'auteur composer sa table des matières que se tromper de
+fichier."
+  (let* ((dir     (file-name-directory chapitre))
+         (dossier (file-name-nondirectory (directory-file-name dir)))
+         (racine  (file-name-directory (directory-file-name dir)))
+         (maitres (and racine (directory-files racine t "\\.qmd\\'"))))
+    (when (= (length maitres) 1)
+      (let ((ligne (format "{{< include %s/%s >}}"
+                           dossier (file-name-nondirectory chapitre))))
+        (with-current-buffer (find-file-noselect (car maitres))
+          (goto-char (point-max))
+          (unless (save-excursion (search-backward ligne nil t))
+            (unless (bolp) (insert "\n"))
+            (insert ligne "\n")
+            (save-buffer)
+            (message "↳ include ajouté à %s"
+                     (file-name-nondirectory (car maitres)))))))))
+
+(defun metal-quarto-contexte-dossier (dir)
+  "Déterminer comment traiter un nouveau .qmd créé dans DIR.
+
+La règle, dans l'ordre :
+
+  sous-dossier des chapitres  → `chapitre' : pas de front matter
+  dossier VIDE                → `vierge'   : proposer un multifichiers
+  `_metadata.yml' sur place   → `metadata' : pas de front matter
+  sinon                       → nil        : front matter complète
+
+Autrement dit : un dossier deja peuple donne un document autonome avec sa
+front matter, SAUF si un `_metadata.yml' y fournit deja la configuration —
+inutile alors de la dupliquer dans chaque document.
+
+`chapitre' vient en premier parce que le sous-dossier des chapitres est
+vide au moment ou l'on y cree le premier fichier : sans cette priorite,
+la regle du dossier vide y proposerait un second document multifichiers
+a l'interieur du premier.  Un fichier de chapitre n'etant jamais rendu
+seul — il est inclus dans le maitre — l'absence de front matter y est
+correcte.
+
+Un `_quarto.yml' d'un ancetre n'est pas examine : seul compte ce que
+contient le dossier lui-meme."
+  (cond
+   ((metal-quarto--dossier-chapitres-p dir) 'chapitre)
+   ((null (directory-files dir nil "\\`[^.]" t)) 'vierge)
+   ((file-exists-p (expand-file-name "_metadata.yml" dir)) 'metadata)
+   (t nil)))
 
 (defun metal-quarto--front-matter-end ()
   "Position de la fin du front matter YAML (le second `---'), ou nil.
@@ -380,6 +454,41 @@ dans l'ordre du document qui gagne."
                   (setq pos-min (match-beginning 0)
                         meilleur (cdr paire)))))
             meilleur))))))))
+
+(defvar metal-quarto-delai-rafraichissement-treemacs 1.0
+  "Délai d'inactivité, en secondes, avant de redessiner Treemacs.
+Laisse retomber la rafale d'événements de fichiers produite par un rendu
+Quarto avant de reconstruire l'arbre.")
+
+(defun metal-quarto--rafraichir-treemacs ()
+  "Redessiner Treemacs après un rendu Quarto.
+Le rendu crée et détruit une rafale de fichiers — PDF, dossier `_files',
+`mediabag', intermédiaires dans `.quarto' — qui laissent l'affichage
+incohérent.
+
+Le rafraîchissement est différé par un minuteur d'inactivité plutôt
+qu'exécuté directement dans la sentinelle du processus : appelé pendant
+que les événements de fichiers arrivent encore, il entre en concurrence
+avec les minuteurs internes de Treemacs — dont
+`treemacs--apply-annotations-deferred', qui échoue alors sur des
+positions de nœuds devenues nulles.
+
+Le redessin a lieu dans la fenêtre Treemacs sélectionnée, suivant la même
+convention que `metal-treemacs-configurer-repli' : `treemacs-refresh'
+attend un contexte de fenêtre, pas seulement un tampon courant.
+
+Sans effet si Treemacs n'est pas chargé ou pas affiché."
+  (when (and (fboundp 'treemacs-get-local-window)
+             (fboundp 'treemacs-refresh))
+    (run-with-idle-timer
+     metal-quarto-delai-rafraichissement-treemacs nil
+     (lambda ()
+       (let ((fenetre (and (fboundp 'treemacs-get-local-window)
+                           (treemacs-get-local-window))))
+         (when (window-live-p fenetre)
+           (with-selected-window fenetre
+             (let ((inhibit-message t))
+               (treemacs-refresh)))))))))
 
 (defun metal-quarto-produire-document ()
   "Produire le document à partir du fichier Quarto courant.
@@ -431,7 +540,8 @@ buffer reste visible avec le code d'erreur."
                          (progn
                            (when (buffer-live-p output-buf)
                              (kill-buffer output-buf))
-                           (message "Quarto: rendu terminé pour %s" name))
+                           (message "Quarto: rendu terminé pour %s" name)
+                           (metal-quarto--rafraichir-treemacs))
                        (message "Quarto: ERREUR (code %d) pour %s" code name)
                        (when (buffer-live-p output-buf)
                          (display-buffer output-buf)))))))))
@@ -472,7 +582,8 @@ le code d'erreur."
                  (progn
                    (when (buffer-live-p output-buf)
                      (kill-buffer output-buf))
-                   (message "Quarto: manuscrit Word terminé pour %s" name))
+                   (message "Quarto: manuscrit Word terminé pour %s" name)
+                   (metal-quarto--rafraichir-treemacs))
                (message "Quarto: ERREUR (code %d) pour %s" code name)
                (when (buffer-live-p output-buf)
                  (display-buffer output-buf))))))))))
