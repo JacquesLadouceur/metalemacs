@@ -448,7 +448,7 @@ automatiquement."
                      (ignore-errors (metal-secretaire-toolbar-buttons)))
                 "")
             parts))
-    ;; Segment Agent : compact (🤖 seul) si inactif, étendu si actif.
+    ;; Segment Agent : compact (👤 seul) si inactif, étendu si actif.
     ;; Masqué si le secrétaire a pris la barre.
     (when (and agent (not secretaire-prend-la-barre))
       (push (or (and (fboundp 'metal-agent-toolbar-buttons)

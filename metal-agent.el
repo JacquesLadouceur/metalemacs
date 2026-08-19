@@ -1266,7 +1266,7 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
                 ('vide
                  (format "⚠️ Réponse vide de l'agent.  Voir %s ; relancez." buf-name))
                 (_
-                 (format "🤖 Aucune correction exploitable n'a été retournée.  Voir %s."
+                 (format "👤 Aucune correction exploitable n'a été retournée.  Voir %s."
                          buf-name)))
               (metal-agent--suffixe-duree)))
             (display-buffer (metal-agent--codex-buffer)))
@@ -1286,7 +1286,7 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
               (setq metal-agent--last-proposed nil)
               (message nil)
               (metal-agent--show-status-message
-               (format "🤖 Aucune modification à suggérer.%s"
+               (format "👤 Aucune modification à suggérer.%s"
                        (metal-agent--suffixe-duree)))
               (message "Codex n'a proposé aucune modification (le code est déjà correct)."))
           (setq metal-agent--last-proposed proposed)
@@ -1511,7 +1511,7 @@ jusqu'à `metal-agent--progress-stop'."
                                    metal-agent--progress-debut)))))
              (setq metal-agent--progress-tick (1+ metal-agent--progress-tick))
              (let ((message-log-max nil))
-               (message "🤖 %s — %s (merci de patienter, cela peut prendre quelques minutes)"
+               (message "👤 %s — %s (merci de patienter, cela peut prendre quelques minutes)"
                         metal-agent--progress-texte
                         (if secs (concat (metal-agent--format-duree secs)
                                          " écoulées") "")))))))
@@ -2528,7 +2528,7 @@ une réécriture du fichier."
           (progn
             (message nil)
             (metal-agent--show-status-message
-             (format "🤖 Aucune fonction exploitable n'a été retournée.  Voir %s.%s"
+             (format "👤 Aucune fonction exploitable n'a été retournée.  Voir %s.%s"
                      (metal-agent--current-buffer-name)
                      (metal-agent--suffixe-duree)))
             (display-buffer (metal-agent--codex-buffer)))
@@ -3725,7 +3725,7 @@ sélecteur de profil) restent toujours présents."
 ;; `metal-toolbar-build' avec :agent t.  L'agent ne pose donc PAS sa propre
 ;; header-line — il fournit seulement le segment de boutons à insérer.
 ;;
-;;   - Agent inactif  → `metal-agent-toolbar-compact'  (bouton 🤖 seul)
+;;   - Agent inactif  → `metal-agent-toolbar-compact'  (bouton 👤 seul)
 ;;   - Agent actif    → `metal-agent-toolbar-expanded'  (toolbar complète)
 ;;
 ;; Le REMPLACEMENT des boutons de mode par la toolbar agent (quand celle-ci
