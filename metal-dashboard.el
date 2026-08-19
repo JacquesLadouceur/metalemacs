@@ -1044,7 +1044,7 @@ n'est jamais posée si le dossier contient déjà un .qmd."
       ;; --------------------------------------------------
       ;;  Section : Nouveaux fichiers (grille 2x2)
       ;; --------------------------------------------------
-      (insert "◼ Nouveaux fichiers\n")
+      (insert "■ Nouveaux fichiers\n")
 
       (let* ((icon-presentation
               (metal-dashboard--mdicon "📊" nil 1.2))
@@ -1100,7 +1100,7 @@ n'est jamais posée si le dossier contient déjà un .qmd."
       ;; --------------------------------------------------
       ;;  Section : Derniers fichiers
       ;; --------------------------------------------------
-      (insert "◼ Fichiers récents\n")
+      (insert "■ Fichiers récents\n")
       (recentf-load-list)
       (dolist (f (seq-take
                   (seq-filter #'metal-dashboard--recentf-acceptable-p
@@ -1126,7 +1126,7 @@ n'est jamais posée si le dossier contient déjà un .qmd."
       ;; --------------------------------------------------
       ;;  Section : Taille des polices
       ;; --------------------------------------------------
-      (insert "\n◼ Taille des polices\n")
+      (insert "\n■ Taille des polices\n")
       (insert "   ")
       (insert-text-button "[ - ]"
                           'face '(:foreground "#cc0000" :weight bold)
@@ -1171,7 +1171,7 @@ n'est jamais posée si le dossier contient déjà un .qmd."
       ;; --------------------------------------------------
       ;;  Section : Taille des icônes
       ;; --------------------------------------------------
-      (insert "◼ Taille des icônes\n")
+      (insert "■ Taille des icônes\n")
       (insert "   ")
       (insert-text-button "[ - ]"
                           'face '(:foreground "#cc0000" :weight bold)

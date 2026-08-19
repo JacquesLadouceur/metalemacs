@@ -50,6 +50,42 @@
 (require 'ansi-color)
 (eval-when-compile (require 'wid-edit))
 
+;; Rendu des icônes : déléguer à `metal-icones' comme le font le tableau de
+;; bord et les barres d'outils, pour un affichage couleur identique sur
+;; macOS et Windows.  Sans lui, les emoji insérés bruts dépendent de la
+;; fontset du système (monochrome sous Windows, boîte hexadécimale si
+;; aucune fonte emoji n'est enregistrée).
+(require 'metal-icones nil t)
+
+(declare-function metal-icone "metal-icones" (emoji &optional taille-px))
+(declare-function metal-icones-precharger "metal-icones" (emojis &optional taille-px))
+(declare-function metal-toolbar-emoji-size "metal-toolbar" ())
+(defvar metal-icones-taille-defaut)
+
+(defconst metal-deps--icones
+  '("📋" "📦" "🎓" "📄" "👤" "🔑" "⏳")
+  "Emoji affichés dans le buffer de l'Assistant.
+Sert au préchargement : `metal-icones' télécharge les SVG de façon
+SYNCHRONE au premier affichage, d'où l'intérêt de les demander en bloc.")
+
+(defun metal-deps--icone-taille-px ()
+  "Taille en pixels des icônes de l'Assistant.
+Suit le réglage « Taille des icônes » via `metal-toolbar-emoji-size',
+comme le tableau de bord ; repli sur la valeur par défaut du module.
+La résolution est faite à l'appel et non au chargement : `metal-toolbar'
+est chargé bien après `metal-deps' dans `init.el'."
+  (if (fboundp 'metal-toolbar-emoji-size)
+      (max 14 (round (* (metal-toolbar-emoji-size) 0.125)))
+    (if (boundp 'metal-icones-taille-defaut) metal-icones-taille-defaut 20)))
+
+(defun metal-deps--icone (emoji)
+  "Retourner EMOJI rendu en icône SVG couleur.
+Repli sur le caractère brut si `metal-icones' est absent, désactivé, ou
+si le SVG n'a pu être obtenu."
+  (if (fboundp 'metal-icone)
+      (metal-icone emoji (metal-deps--icone-taille-px))
+    emoji))
+
 ;; Les commandes d'installation lancées via `compile' (ex. « brew install
 ;; node » sur macOS) émettent de la sortie colorée par séquences ANSI.
 ;; Le mode Compilation ne les interprète pas par défaut : sans ce filtre,
@@ -2739,6 +2775,10 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
 (defun metal-deps-afficher-etat ()
   "Affiche l'état des dépendances avec interface graphique."
   (interactive)
+  ;; Précharger les icônes SVG (silencieux ; hors-ligne, chaque emoji
+  ;; retombe simplement sur son caractère Unicode).
+  (when (fboundp 'metal-icones-precharger)
+    (metal-icones-precharger metal-deps--icones (metal-deps--icone-taille-px)))
   ;; Rafraîchir le PATH de session : un binaire installé manuellement
   ;; depuis le dernier rendu (ex. le CLI agy déposé dans
   ;; %LOCALAPPDATA%/agy/bin ou ~/.local/bin) doit être détecté au clic
@@ -2782,9 +2822,10 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                                  'face 'shadow))
       (widget-insert "\n")
       (when metal-deps--installation-en-cours
-        (widget-insert (format "  ⏳ Installation en cours (%d restant%s)\n"
-                               (length metal-deps--file-attente)
-                               (if (> (length metal-deps--file-attente) 1) "s" ""))))
+        (widget-insert (concat "  " (metal-deps--icone "⏳")
+                               (format " Installation en cours (%d restant%s)\n"
+                                       (length metal-deps--file-attente)
+                                       (if (> (length metal-deps--file-attente) 1) "s" "")))))
       
       (dolist (categorie '((prerequis . "📋 Prérequis système")
                            (gestionnaire . "📦 Gestionnaires de paquets")
@@ -2801,7 +2842,11 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
           (when outils-cat
             ;; --- En-tête de section ---
             (widget-insert "\n  ")
-            (widget-insert (propertize cat-nom 'face '(:weight bold :height 1.05)))
+            ;; L'icône est insérée séparément du libellé : appliquer un
+            ;; `:height' à un segment porteur d'un emoji casse son rendu.
+            (widget-insert (metal-deps--icone (substring cat-nom 0 1)))
+            (widget-insert (propertize (substring cat-nom 1)
+                                       'face '(:weight bold :height 1.05)))
             (widget-insert "\n  ")
             (widget-insert (propertize (make-string 66 ?─) 'face 'shadow))
             (widget-insert "\n\n")
@@ -2912,7 +2957,7 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                                          (fboundp 'metal-deps--agent-auth-verifiable-p)
                                          (metal-deps--agent-auth-verifiable-p spec))))
                    (widget-insert
-                    (propertize "🔑 " 'face '(:foreground "#10A37F")))
+                    (concat (metal-deps--icone "🔑") " "))
                    (cond
                     ;; Installé + authentifié : texte vert (non cliquable).
                     (authentifie
