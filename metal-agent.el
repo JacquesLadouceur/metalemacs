@@ -1495,6 +1495,21 @@ Chaîne vide si aucune durée n'est connue."
               (metal-agent--format-duree metal-agent--derniere-duree))
     ""))
 
+(defconst metal-agent-pictogramme-repli "»"
+  "Marqueur de repli remplaçant les pictogrammes hors BMP sous Windows.
+Sous Windows, un `message' émis depuis un timer ou un sentinel de
+processus ne parvient pas à ouvrir une police non encore chargée : le
+caractère s'affiche alors en boîte hexadécimale.  Les messages
+asynchrones passent donc par `metal-agent--picto'.")
+
+(defun metal-agent--picto (pictogramme)
+  "Retourner PICTOGRAMME, ou son repli sous Windows.
+À utiliser pour tout message émis hors de la boucle de commandes —
+timers et sentinels de processus."
+  (if (eq system-type 'windows-nt)
+      metal-agent-pictogramme-repli
+    pictogramme))
+
 (defun metal-agent--progress-start (&optional texte)
   "Démarrer l'indicateur de progression dans la minibuffer.
 TEXTE remplace le libellé par défaut.  Affiche un chrono (temps écoulé)
@@ -1511,7 +1526,8 @@ jusqu'à `metal-agent--progress-stop'."
                                    metal-agent--progress-debut)))))
              (setq metal-agent--progress-tick (1+ metal-agent--progress-tick))
              (let ((message-log-max nil))
-               (message "👤 %s — %s (merci de patienter, cela peut prendre quelques minutes)"
+               (message "%s %s — %s (merci de patienter, cela peut prendre quelques minutes)"
+                        (metal-agent--picto "👤")
                         metal-agent--progress-texte
                         (if secs (concat (metal-agent--format-duree secs)
                                          " écoulées") "")))))))
