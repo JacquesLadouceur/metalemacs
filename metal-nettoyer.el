@@ -328,7 +328,8 @@ Avec préfixe : tout le non-ASCII."
         (goto-char (point-min))
         (while (re-search-forward "[[:nonascii:]]" nil t)
           (let ((c (char-before)))
-            (when (or tous (not (char-displayable-p c)))
+            ;; (when (or tous (not (char-displayable-p c)))
+            (when (or tous (null (internal-char-font nil c)))
               (setq n (1+ n))
               (push (format "%s:%d:%d: U+%04X"
                             f (line-number-at-pos) (current-column) c)
