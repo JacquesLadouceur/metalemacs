@@ -316,6 +316,31 @@ Produit un rapport détaillé dans le tampon *Rapport nettoyage MetalEmacs*.
       (message "Reflow terminé (%s) : %d insécable(s), %d paragraphe(s) fusionné(s)."
                nom-style total-insec n-paragraphes-fusionnes))))
 
+(defun metal-tofu-fichiers (dir &optional tous)
+  "Repère le non-ASCII des .el de DIR.
+Sans préfixe : seulement ce qui n'a pas de glyphe.
+Avec préfixe : tout le non-ASCII."
+  (interactive "DDossier : \nP")
+  (let ((res '()) (n 0))
+    (dolist (f (directory-files-recursively dir "\\.el\\'"))
+      (with-temp-buffer
+        (insert-file-contents f)
+        (goto-char (point-min))
+        (while (re-search-forward "[[:nonascii:]]" nil t)
+          (let ((c (char-before)))
+            (when (or tous (not (char-displayable-p c)))
+              (setq n (1+ n))
+              (push (format "%s:%d:%d: U+%04X"
+                            f (line-number-at-pos) (current-column) c)
+                    res))))))
+    (with-current-buffer (get-buffer-create "*tofu-el*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "%d occurrence(s)\n\n" n)
+                (mapconcat #'identity (nreverse res) "\n"))
+        (grep-mode))
+      (display-buffer (current-buffer)))))
+
 (provide 'metal-nettoyer)
 
 ;;; metal-nettoyer.el ends here
