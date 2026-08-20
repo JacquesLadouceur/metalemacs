@@ -50,7 +50,7 @@ corbeille/
 calendriers/
 
 # ---- Configuration personnelle (à ne JAMAIS committer) ----
-perso.el
+metal-prefs.el
 local.el
 .authinfo
 .authinfo.gpg
