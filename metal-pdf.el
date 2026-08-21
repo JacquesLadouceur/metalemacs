@@ -342,6 +342,17 @@ pas le reste de `pdf-view-mode-hook'."
 (advice-add 'load-theme :after #'metal-pdf-sync-colors)
 
 ;; Auto-revert dans les PDF (recharge si le fichier change sur disque).
+(defun metal-pdf--activer-tab-line ()
+  "Force `tab-line-mode' dans le tampon PDF courant.
+Certains tampons spéciaux sont exclus de la tab-line ; `pdf-view-mode'
+en fait partie sur certaines plateformes, d'où l'exclusion levée
+localement."
+  (with-demoted-errors "metal-pdf (tab-line) : %S"
+    (setq-local tab-line-exclude nil)
+    (tab-line-mode 1)))
+
+(add-hook 'pdf-view-mode-hook #'metal-pdf--activer-tab-line -80)
+
 (defun metal-pdf--activer-auto-revert ()
   "Active `auto-revert-mode' dans le tampon PDF courant."
   (with-demoted-errors "metal-pdf (auto-revert) : %S"

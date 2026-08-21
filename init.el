@@ -756,11 +756,10 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 
 ;; Synchronisation des couleurs PDF avec le thème : déplacée dans metal-pdf.el.
 
-;; Forcer tab-line-mode dans les PDF (surtout pour Windows)
-(add-hook 'pdf-view-mode-hook
-          (lambda ()
-            (setq-local tab-line-exclude nil)
-            (tab-line-mode 1)))
+;; tab-line dans les PDF : déplacé dans metal-pdf.el
+;; (`metal-pdf--activer-tab-line'), avec les autres entrées de
+;; `pdf-view-mode-hook'.  Une lambda anonyme ici s'ajoutait une fois de plus
+;; à chaque rechargement d'init.el et ne pouvait pas être retirée par son nom.
 
 ;; === PDF-TOOLS ===
 ;; (if (eq system-type 'windows-nt)
@@ -784,34 +783,63 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 ;;       (pdf-tools-install t nil t))
 ;;     (setq-default pdf-view-display-size 'fit-width)))
 
-(defconst metal-pdf-tools-serveur
-  (expand-file-name "pdf-tools/" user-emacs-directory)
-  "Dossier livré avec MetalEmacs contenant epdfinfo.exe et ses DLL (Windows).")
+;; Le répertoire des modules MetalEmacs doit être sur `load-path' avant le
+;; bloc pdf-tools, qui lit les constantes de metal-pdf-version.  `add-to-list'
+;; est idempotent : la ligne équivalente plus bas reste sans effet.
+(add-to-list 'load-path user-emacs-directory)
 
-(use-package pdf-tools
-  :straight (pdf-tools
-             :type git :host github :repo "vedang/pdf-tools"
-             ;; v1.1.0 — dernière version compatible avec un epdfinfo d'avant
-             ;; la correction gamma (v1.2.0). À remonter en même temps que le
-             ;; binaire, jamais séparément.
-             :commit "a9c9a12c3ecf2005fa641059368ac8284f507620"
-             :files (:defaults "README" ("build" "Makefile") ("build" "server")))
-  :init
-  (when (eq system-type 'windows-nt)
-    (add-to-list 'exec-path metal-pdf-tools-serveur)
-    (setenv "PATH" (concat metal-pdf-tools-serveur path-separator (getenv "PATH"))))
-  :custom
-  (pdf-info-epdfinfo-program
-   (if (eq system-type 'windows-nt)
-       (expand-file-name "epdfinfo.exe" metal-pdf-tools-serveur)
-     (or (executable-find "epdfinfo")
-         (expand-file-name "straight/build/pdf-tools/epdfinfo" user-emacs-directory))))
-  :config
-  (if (file-executable-p pdf-info-epdfinfo-program)
-      (pdf-tools-install t nil t)
-    (message "⚠ epdfinfo introuvable (%s) — lancez M-x pdf-tools-install"
-             pdf-info-epdfinfo-program))
-  (setq-default pdf-view-display-size 'fit-width))
+;; PDF-TOOLS — bloc entièrement protégé.
+;;
+;; Même principe que le `dolist' des modules d'interface plus bas : pdf-tools
+;; dépend d'un binaire natif, d'un clone git et d'une reconstruction straight,
+;; c'est-à-dire de trois choses qui peuvent échouer sur la machine d'un
+;; étudiant.  Perdre le visionneur PDF est ennuyeux ; perdre tout MetalEmacs
+;; parce que le visionneur a échoué est inacceptable.  Toute erreur est donc
+;; journalisée, et l'initialisation continue.
+;;
+;; `debug-on-error' est neutralisé le temps du bloc : sous --debug-init, une
+;; erreur ouvrirait un *Backtrace* et interromprait quand même le chargement,
+;; ce qui annulerait la protection.
+(let ((debug-on-error nil))
+  (condition-case err
+      (progn
+        (require 'metal-pdf-version)  ; version et commit épinglés (généré)
+        (require 'metal-pdf-serveur)  ; état du serveur + M-x mise à jour
+
+        ;; La recette straight n'est pas évaluée : le backquote est
+        ;; indispensable pour y injecter la valeur de
+        ;; `metal-pdf-commit-attendu' plutôt que le symbole lui-même.  D'où
+        ;; l'appel direct à `straight-use-package', suivi d'un `use-package'
+        ;; avec `:straight nil'.
+        (straight-use-package
+         `(pdf-tools :type git :host github :repo "vedang/pdf-tools"
+                     :commit ,metal-pdf-commit-attendu
+                     :files (:defaults "README"
+                                       ("build" "Makefile")
+                                       ("build" "server"))))
+
+        (use-package pdf-tools
+          :straight nil                 ; recette déjà appliquée ci-dessus
+          :custom
+          (pdf-info-epdfinfo-program
+           (or (metal-pdf-serveur-programme) ; MSYS2 : exe et DLL réunis
+               (executable-find "epdfinfo")
+               (expand-file-name "straight/build/pdf-tools/epdfinfo"
+                                 user-emacs-directory)))
+          :config
+          (if (file-executable-p pdf-info-epdfinfo-program)
+              (progn
+                (pdf-tools-install t nil t)
+                ;; Note l'origine du serveur : c'est ce témoin qui permet à
+                ;; l'Assistant de détecter un désaccord hors Windows.
+                (metal-pdf-serveur-noter-construction))
+            (warn "MetalEmacs : serveur epdfinfo %s"
+                  (metal-pdf-serveur-etat-ligne)))
+          (setq-default pdf-view-display-size 'fit-width)))
+    (error
+     (message "MetalEmacs : pdf-tools indisponible — %s"
+              (error-message-string err))
+     (message "MetalEmacs : les PDF s'ouvriront avec doc-view"))))
 
 
 (defun jl/init-file-p ()

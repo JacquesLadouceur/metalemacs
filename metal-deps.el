@@ -56,6 +56,9 @@
 ;; fontset du système (monochrome sous Windows, boîte hexadécimale si
 ;; aucune fonte emoji n'est enregistrée).
 (require 'metal-icones nil t)
+;; Chargement souple : l'Assistant affiche l'état du serveur epdfinfo si le
+;; module est disponible, et un repli explicite sinon.
+(require 'metal-pdf-serveur nil t)
 
 (declare-function metal-icone "metal-icones" (emoji &optional taille-px))
 (declare-function metal-icones-precharger "metal-icones" (emojis &optional taille-px))
@@ -550,6 +553,22 @@ applicatif officiel (/Applications/SWI-Prolog.app), où l'installeur
       (and (eq system-type 'darwin)
            (file-executable-p
             "/Applications/SWI-Prolog.app/Contents/MacOS/swipl"))))
+
+;; --- Serveur epdfinfo : enveloppes tolérantes ---------------------------
+;; L'Assistant doit rester affichable même si metal-pdf-serveur.el n'a pas
+;; pu se charger.  Les deux fonctions ci-dessous dégradent proprement au
+;; lieu de faire échouer tout le rendu du tableau.
+
+(defun metal-deps--epdfinfo-accorde-p ()
+  "Retourne non-nil si le serveur epdfinfo est accordé au Lisp épinglé."
+  (and (fboundp 'metal-pdf-serveur-accorde-p)
+       (metal-pdf-serveur-accorde-p)))
+
+(defun metal-deps--epdfinfo-etat-ligne ()
+  "Ligne d'état du serveur epdfinfo, ou un repli si le module est absent."
+  (if (fboundp 'metal-pdf-serveur-etat-ligne)
+      (metal-pdf-serveur-etat-ligne)
+    "module metal-pdf-serveur non chargé"))
 
 (defun metal-deps--poppler-present-p ()
   "Retourne t si Poppler est installé."
@@ -2550,6 +2569,16 @@ ET CLI présente sur le système."
      :condition (lambda () (and (not (eq system-type 'windows-nt))
                                 (or (not (eq system-type 'darwin))
                                     (metal-deps--macos-moderne-p)))))
+    ;; Serveur epdfinfo : entrée en LECTURE SEULE.  Ni installeur ni
+    ;; désinstalleur — la mise à jour passe par `M-x metal-pdfinfo-mise-a-jour',
+    ;; réservée au mainteneur ; les étudiants la reçoivent par `git pull'.
+    ;; L'état compare le serveur réellement installé à la version épinglée
+    ;; dans metal-pdf-version.el : c'est ce désaccord, silencieux autrement,
+    ;; qui casse l'ouverture des PDF.
+    (:nom "Serveur epdfinfo"
+     :verifier metal-deps--epdfinfo-accorde-p
+     :categorie pdf
+     :description metal-deps--epdfinfo-etat-ligne)
     ;; Ghostscript : moteur de rendu de `doc-view'.  Proposé seulement là où
     ;; doc-view est le visionneur de repli, c.-à-d. sur les Mac < 14 (où
     ;; pdf-tools n'est pas offert).  Sans lui, doc-view affiche le PDF en
@@ -2861,7 +2890,13 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                      (installeur (plist-get outil :installer))
                      (desinstalleur (plist-get outil :desinstaller))
                      (agent-id (plist-get outil :agent-id))
-                     (desc (plist-get outil :description))
+                     ;; `:description' accepte une chaîne ou une fonction sans
+                     ;; argument.  La forme fonction permet un état recalculé
+                     ;; à chaque affichage plutôt que figé au chargement de
+                     ;; `metal-deps-outils'.
+                     (desc (let ((d (plist-get outil :description)))
+                             (cond ((functionp d) (ignore-errors (funcall d)))
+                                   (t d))))
                      ;; Pour les agents : déterminer s'il est authentifié,
                      ;; et s'il est le défaut courant.  Le radio ●/◯
                      ;; remplace alors le ✓/✗ habituel.
