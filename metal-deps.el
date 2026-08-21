@@ -570,6 +570,17 @@ applicatif officiel (/Applications/SWI-Prolog.app), où l'installeur
       (metal-pdf-serveur-etat-ligne)
     "module metal-pdf-serveur non chargé"))
 
+(defun metal-deps--msys2-present-p ()
+  "Retourne non-nil si MSYS2 est installé (Windows)."
+  (and (fboundp 'metal-pdf-serveur-msys2-present-p)
+       (metal-pdf-serveur-msys2-present-p)))
+
+(defun metal-deps--epdfinfo-installable-p ()
+  "Retourne non-nil si le serveur epdfinfo peut être installé ici.
+Sous Windows uniquement, et seulement si MSYS2 est présent : sans lui,
+l'entrée MSYS2 de l'Assistant est le préalable à traiter."
+  (and (eq system-type 'windows-nt) (metal-deps--msys2-present-p)))
+
 (defun metal-deps--poppler-present-p ()
   "Retourne t si Poppler est installé."
   (or (executable-find "pdfinfo")
@@ -1570,11 +1581,12 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
     (message "⚠ Attendez l'installation de Poppler puis relancez cette commande")
     (user-error "Poppler requis"))
   
-  ;; Nettoyer le dossier de build existant
-  (let ((build-dir (expand-file-name "straight/build/pdf-tools" user-emacs-directory)))
-    (when (file-directory-p build-dir)
-      (message "🧹 Nettoyage du dossier de build existant...")
-      (delete-directory build-dir t)))
+  ;; Le dossier de build n'est PAS supprimé ici : `init.el' a déjà
+  ;; construit le paquet au démarrage, et straight garde ce fait en cache.
+  ;; Le supprimer rendait le `straight-use-package' suivant inopérant (il
+  ;; se croit déjà fait) et laissait le paquet sans sources — donc rien à
+  ;; compiler pour epdfinfo.  `straight-rebuild-package', déclenché par
+  ;; l'alignement, reconstruit proprement quand c'est nécessaire.
   
   ;; ;; Configurer les variables d'environnement pour la compilation sur macOS
   ;; (when (eq system-type 'darwin)
@@ -1603,9 +1615,27 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
                          ":"))
       (setenv "ACLOCAL_PATH" (format "%s/share/aclocal" prefix))))
   
-  ;; Installer pdf-tools
+  ;; Installer pdf-tools SUR LE COMMIT ÉPINGLÉ.
+  ;;
+  ;; Surtout pas `(straight-use-package 'pdf-tools)' : le symbole nu prend
+  ;; la recette MELPA par défaut, sans `:commit', et pose le clone sur
+  ;; master.  Le binaire se compile bien, mais au démarrage suivant
+  ;; `metal-pdf-serveur-aligner-straight' voit un HEAD différent du commit
+  ;; épinglé et purge straight/build — effaçant l'epdfinfo qu'on vient de
+  ;; compiler.  L'outil réapparaît alors « non installé » à chaque
+  ;; redémarrage, et les PDF retombent sur doc-view.
+  ;;
+  ;; straight.el ignore un `:commit' dans la recette : on clone d'abord,
+  ;; puis on bascule le dépôt sur le commit épinglé via
+  ;; `metal-pdf-serveur-aligner-straight', qui reconstruit au besoin.
   (message "📦 Installation de pdf-tools...")
-  (straight-use-package 'pdf-tools)
+  (straight-use-package
+   '(pdf-tools :type git :host github :repo "vedang/pdf-tools"
+               :files (:defaults "README"
+                                 ("build" "Makefile")
+                                 ("build" "server"))))
+  (when (fboundp 'metal-pdf-serveur-aligner-straight)
+    (metal-pdf-serveur-aligner-straight))
   (require 'pdf-tools)
   
   ;; Sur Linux/Chromebook : corriger les permissions du script autobuild
@@ -1621,6 +1651,11 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
   (unless (metal-deps--epdfinfo-present-p)
     (message "🔧 Compilation de epdfinfo...")
     (pdf-tools-install t t))
+
+  ;; Noter l'origine du serveur : c'est ce témoin qui permet à l'Assistant
+  ;; de constater l'accord entre le Lisp et le binaire hors Windows.
+  (when (fboundp 'metal-pdf-serveur-noter-construction)
+    (metal-pdf-serveur-noter-construction))
   
   ;; (message "✓ pdf-tools installé")
   )
@@ -2569,16 +2604,29 @@ ET CLI présente sur le système."
      :condition (lambda () (and (not (eq system-type 'windows-nt))
                                 (or (not (eq system-type 'darwin))
                                     (metal-deps--macos-moderne-p)))))
-    ;; Serveur epdfinfo : entrée en LECTURE SEULE.  Ni installeur ni
-    ;; désinstalleur — la mise à jour passe par `M-x metal-pdfinfo-mise-a-jour',
-    ;; réservée au mainteneur ; les étudiants la reçoivent par `git pull'.
-    ;; L'état compare le serveur réellement installé à la version épinglée
-    ;; dans metal-pdf-version.el : c'est ce désaccord, silencieux autrement,
-    ;; qui casse l'ouverture des PDF.
+    ;; MSYS2 : préalable au serveur epdfinfo sous Windows.  Il fournit
+    ;; `pacman', et surtout un mingw64/bin où le binaire côtoie ses DLL,
+    ;; ce qui évite le conflit classique avec Git for Windows.
+    (:nom "MSYS2"
+     :verifier metal-deps--msys2-present-p
+     :installer metal-pdf-serveur-installer-msys2
+     :desinstaller metal-pdf-serveur-desinstaller-msys2
+     :categorie pdf
+     :description "Fournit le serveur epdfinfo et ses DLL"
+     :windows-seulement t)
+    ;; Serveur epdfinfo.  L'installation est offerte ; la RÉVISION de la
+    ;; version épinglée ne l'est pas — elle appartient au mainteneur, par
+    ;; `M-x metal-pdfinfo-mise-a-jour', et parvient aux étudiants par
+    ;; `git pull'.  L'état compare le serveur installé à la version
+    ;; épinglée : c'est ce désaccord, silencieux autrement, qui casse
+    ;; l'ouverture des PDF.
     (:nom "Serveur epdfinfo"
      :verifier metal-deps--epdfinfo-accorde-p
+     :installer metal-pdf-serveur-installer
+     :desinstaller metal-pdf-serveur-desinstaller
      :categorie pdf
-     :description metal-deps--epdfinfo-etat-ligne)
+     :description metal-deps--epdfinfo-etat-ligne
+     :condition metal-deps--epdfinfo-installable-p)
     ;; Ghostscript : moteur de rendu de `doc-view'.  Proposé seulement là où
     ;; doc-view est le visionneur de repli, c.-à-d. sur les Mac < 14 (où
     ;; pdf-tools n'est pas offert).  Sans lui, doc-view affiche le PDF en

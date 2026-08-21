@@ -806,17 +806,17 @@ L'argument FRAME est ignore (garde pour compatibilite)."
         (require 'metal-pdf-version)  ; version et commit épinglés (généré)
         (require 'metal-pdf-serveur)  ; état du serveur + M-x mise à jour
 
-        ;; La recette straight n'est pas évaluée : le backquote est
-        ;; indispensable pour y injecter la valeur de
-        ;; `metal-pdf-commit-attendu' plutôt que le symbole lui-même.  D'où
-        ;; l'appel direct à `straight-use-package', suivi d'un `use-package'
-        ;; avec `:straight nil'.
+        ;; straight.el n'a pas de mot-clé `:commit' : il l'ignorerait en
+        ;; silence.  On le laisse donc cloner sur la branche par défaut,
+        ;; puis `metal-pdf-serveur-aligner-straight' bascule le dépôt sur
+        ;; le commit épinglé et reconstruit — d'où l'ordre : clone D'ABORD,
+        ;; alignement ENSUITE.
         (straight-use-package
-         `(pdf-tools :type git :host github :repo "vedang/pdf-tools"
-                     :commit ,metal-pdf-commit-attendu
+         '(pdf-tools :type git :host github :repo "vedang/pdf-tools"
                      :files (:defaults "README"
                                        ("build" "Makefile")
                                        ("build" "server"))))
+        (metal-pdf-serveur-aligner-straight)
 
         (use-package pdf-tools
           :straight nil                 ; recette déjà appliquée ci-dessus

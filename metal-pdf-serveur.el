@@ -283,6 +283,211 @@ sous 80 colonnes."
   "Retourne non-nil si le serveur epdfinfo est accordé au Lisp épinglé."
   (eq (car (metal-pdf-serveur-etat)) 'ok))
 
+
+;;; --- Installation (actions de l'Assistant) -------------------------------
+
+(defun metal-pdf-serveur-msys2-present-p ()
+  "Retourne non-nil si MSYS2 est installé et utilisable."
+  (and (metal-pdf-serveur-msys2-racine) t))
+
+;;;###autoload
+(defun metal-pdf-serveur-installer-msys2 ()
+  "Installe MSYS2 via Scoop.
+MSYS2 fournit `pacman', par lequel MetalEmacs installe le serveur
+epdfinfo et ses DLL MinGW sous Windows."
+  (interactive)
+  (unless (eq system-type 'windows-nt)
+    (user-error "MSYS2 ne concerne que Windows"))
+  (if (metal-pdf-serveur-msys2-present-p)
+      (message "✓ MSYS2 déjà installé")
+    (unless (executable-find "scoop")
+      (user-error "⚠ Scoop requis — installez-le d'abord depuis l'Assistant"))
+    (message "📦 Installation de MSYS2 via Scoop (plusieurs minutes)...")
+    (let ((tampon "*MSYS2 Install*"))
+      (set-process-sentinel
+       (start-process-shell-command "msys2-install" tampon "scoop install msys2")
+       (lambda (proc _e)
+         (when (eq (process-status proc) 'exit)
+           (if (= (process-exit-status proc) 0)
+               (message "✅ MSYS2 installé — installez maintenant le serveur epdfinfo")
+             (message "❌ Échec de l'installation de MSYS2. Voir %s" tampon))
+           (metal-pdf-serveur--rafraichir-assistant))))
+      (display-buffer tampon))))
+
+(defun metal-pdf-serveur--rafraichir-assistant ()
+  "Redessine l'Assistant s'il est affiché."
+  (when (and (fboundp 'metal-deps-afficher-etat)
+             (get-buffer "*MetalEmacs Assistant*")
+             (get-buffer-window "*MetalEmacs Assistant*" t))
+    (ignore-errors (metal-deps-afficher-etat))))
+
+;;;###autoload
+(defun metal-pdf-serveur-installer ()
+  "Installe ou réinstalle le serveur epdfinfo depuis MSYS2.
+
+Asynchrone : `pacman' télécharge plusieurs dizaines de paquets et
+l'opération dure plusieurs minutes, pendant lesquelles Emacs reste
+utilisable.  La sortie défile dans un tampon dédié.
+
+Ne peut pas corriger un désaccord de version : les dépôts MSYS2 n'offrent
+qu'une version à la fois.  Si elle diffère de la version épinglée, le
+correctif appartient au mainteneur, qui relance
+`metal-pdfinfo-mise-a-jour' et publie le résultat."
+  (interactive)
+  (unless (eq system-type 'windows-nt)
+    (user-error "Sous macOS et Linux, le serveur se construit par M-x pdf-tools-install"))
+  (let ((pacman (metal-pdf-serveur--pacman)))
+    (unless pacman
+      (user-error "MSYS2 introuvable — installez-le d'abord depuis l'Assistant"))
+    (message "📦 Installation du serveur epdfinfo (plusieurs minutes)...")
+    (let* ((tampon "*epdfinfo Install*")
+           (q (shell-quote-argument pacman))
+           (cmd (format "%s -Sy --noconfirm && %s -S --needed --noconfirm %s"
+                        q q metal-pdf-serveur-paquet-msys2)))
+      (set-process-sentinel
+       (start-process-shell-command "epdfinfo-install" tampon cmd)
+       (lambda (proc _e)
+         (when (eq (process-status proc) 'exit)
+           (if (/= (process-exit-status proc) 0)
+               (message "❌ Échec de l'installation. Voir %s" tampon)
+             (let ((v (metal-pdf-serveur-version-installee)))
+               (cond
+                ((null v) (message "❌ Paquet installé mais version illisible"))
+                ((string= v metal-pdf-version-attendue)
+                 (message "✅ Serveur epdfinfo %s installé — redémarrez Emacs" v))
+                (t
+                 (message
+                  (concat "⚠ Serveur %s installé alors que MetalEmacs attend %s. "
+                          "Signalez-le : seul le mainteneur peut réaccorder la version")
+                  v metal-pdf-version-attendue)))))
+           (metal-pdf-serveur--rafraichir-assistant))))
+      (display-buffer tampon))))
+
+;;;###autoload
+(defun metal-pdf-serveur-desinstaller ()
+  "Retire le paquet MSYS2 fournissant le serveur epdfinfo."
+  (interactive)
+  (let ((pacman (metal-pdf-serveur--pacman)))
+    (unless pacman (user-error "MSYS2 introuvable"))
+    (unless (metal-pdf-serveur-version-installee)
+      (user-error "Le serveur epdfinfo n'est pas installé"))
+    (when (yes-or-no-p "Retirer le serveur epdfinfo ? Les PDF passeront à doc-view ")
+      (let ((tampon "*epdfinfo Uninstall*"))
+        (set-process-sentinel
+         (start-process-shell-command
+          "epdfinfo-uninstall" tampon
+          (format "%s -R --noconfirm %s"
+                  (shell-quote-argument pacman)
+                  metal-pdf-serveur-paquet-msys2))
+         (lambda (_p _e) (metal-pdf-serveur--rafraichir-assistant)))
+        (display-buffer tampon)))))
+
+(defun metal-pdf-serveur-desinstaller-msys2 ()
+  "Retire MSYS2 via Scoop.
+Le serveur epdfinfo disparaît avec lui : les PDF repasseront à doc-view."
+  (interactive)
+  (unless (eq system-type 'windows-nt)
+    (user-error "MSYS2 ne concerne que Windows"))
+  (unless (metal-pdf-serveur-msys2-present-p)
+    (user-error "MSYS2 n'est pas installé"))
+  (when (yes-or-no-p
+         "Retirer MSYS2 ? Le serveur epdfinfo part avec, les PDF passeront à doc-view ")
+    (let ((tampon "*MSYS2 Uninstall*"))
+      (set-process-sentinel
+       (start-process-shell-command "msys2-uninstall" tampon "scoop uninstall msys2")
+       (lambda (proc _e)
+         (when (eq (process-status proc) 'exit)
+           (if (= (process-exit-status proc) 0)
+               (message "MSYS2 retiré — redémarrez Emacs")
+             (message "❌ Échec du retrait. Voir %s" tampon))
+           (metal-pdf-serveur--rafraichir-assistant))))
+      (display-buffer tampon))))
+
+;;; --- Alignement du clone straight ----------------------------------------
+
+;; straight.el ne rebascule pas un dépôt déjà cloné lorsque le `:commit' de
+;; la recette change : il conserve le clone existant.  Après une mise à jour
+;; de l'épinglage — la tienne par `metal-pdfinfo-mise-a-jour', celle des
+;; étudiants par `git pull' — le Lisp resterait donc à l'ancienne version
+;; pendant que le binaire passe à la nouvelle.  C'est précisément le
+;; désaccord que tout ce module cherche à éviter.  On compare donc le HEAD
+;; du clone au commit attendu, et on purge s'il diffère : straight reclone
+;; alors au bon commit au démarrage suivant.
+
+(defun metal-pdf-serveur--dossiers-straight ()
+  "Les dossiers straight de pdf-tools : dépôt et compilation."
+  (list (expand-file-name "straight/repos/pdf-tools" user-emacs-directory)
+        (expand-file-name "straight/build/pdf-tools" user-emacs-directory)))
+
+(defun metal-pdf-serveur--commit-clone ()
+  "HEAD du clone straight de pdf-tools, ou nil s'il n'existe pas."
+  (let ((depot (car (metal-pdf-serveur--dossiers-straight))))
+    (when (file-directory-p depot)
+      (with-temp-buffer
+        (when (= 0 (call-process "git" nil t nil "-C" depot "rev-parse" "HEAD"))
+          (let ((s (string-trim (buffer-string))))
+            (and (string-match-p "\\`[0-9a-f]\\{40\\}\\'" s) s)))))))
+
+;;;###autoload
+(defun metal-pdf-serveur-purger-straight ()
+  "Supprime les dossiers straight de pdf-tools.
+straight les recrée au démarrage suivant, sur la branche par défaut ;
+`metal-pdf-serveur-aligner-straight' les ramène ensuite sur le commit
+épinglé."
+  (interactive)
+  (dolist (d (metal-pdf-serveur--dossiers-straight))
+    (when (file-directory-p d)
+      (delete-directory d t)
+      (metal-pdf-serveur--journal "purgé : %s" d)))
+  (message "pdf-tools purgé de straight — redémarrez Emacs"))
+
+(defun metal-pdf-serveur--git (&rest args)
+  "Lance git dans le clone straight de pdf-tools ; retourne t si succès."
+  (let ((depot (car (metal-pdf-serveur--dossiers-straight))))
+    (= 0 (apply #'call-process "git" nil nil nil "-C" depot args))))
+
+;;;###autoload
+(defun metal-pdf-serveur-aligner-straight ()
+  "Place le clone straight de pdf-tools sur `metal-pdf-commit-attendu'.
+
+À appeler APRÈS `straight-use-package', jamais avant : le clone doit
+exister.  Retourne t si un basculement a eu lieu.
+
+straight.el ne connaît pas de mot-clé `:commit' dans ses recettes : il
+l'ignore en silence et laisse le dépôt sur sa branche par défaut.
+L'épinglage doit donc être fait ici, par git, puis suivi d'une
+reconstruction — sinon le Lisp compilé reste celui de la branche.
+
+Ne purge rien : supprimer les dossiers ne ferait que provoquer un
+nouveau clone sur la branche par défaut, donc une boucle."
+  (let ((clone (metal-pdf-serveur--commit-clone)))
+    (when (and clone (not (string= clone metal-pdf-commit-attendu)))
+      ;; Le commit visé peut manquer localement (clone superficiel, ou
+      ;; commit plus récent que le clone) : on complète l'historique.
+      (unless (metal-pdf-serveur--git
+               "cat-file" "-e" (concat metal-pdf-commit-attendu "^{commit}"))
+        (or (metal-pdf-serveur--git "fetch" "--unshallow" "--tags" "origin")
+            (metal-pdf-serveur--git "fetch" "--tags" "origin")))
+      (if (metal-pdf-serveur--git "checkout" "--detach" "--force"
+                                  metal-pdf-commit-attendu)
+          (progn
+            (metal-pdf-serveur--journal
+             "pdf-tools : clone basculé de %s vers %s (épinglé)"
+             (substring clone 0 12) (substring metal-pdf-commit-attendu 0 12))
+            ;; Le Lisp compilé provient de l'ancien commit : à refaire.
+            (when (fboundp 'straight-rebuild-package)
+              (ignore-errors (straight-rebuild-package "pdf-tools" t)))
+            t)
+        (metal-pdf-serveur--journal
+         "pdf-tools : bascule vers %s IMPOSSIBLE — le Lisp reste en %s"
+         (substring metal-pdf-commit-attendu 0 12) (substring clone 0 12))
+        nil))))
+
+(defun metal-pdf-serveur--journal (fmt &rest args)
+  "Journalise dans *Messages* sans encombrer l'écho."
+  (let ((message-log-max t))
+    (message "MetalEmacs : %s" (apply #'format fmt args))))
+
 ;;; --- Commande de mise à jour (mainteneur) --------------------------------
 
 ;;;###autoload
@@ -294,61 +499,73 @@ obtenue, résout le commit amont correspondant et réécrit
 metal-pdf-version.el.  Les étudiants reçoivent le résultat par
 `git pull' ; cette commande n'est pas exposée dans l'Assistant.
 
-À faire ensuite, dans l'ordre : relire le fichier généré, le commiter,
-supprimer straight/repos/pdf-tools et straight/build/pdf-tools, puis
-redémarrer Emacs."
+Asynchrone : le téléchargement pacman dure plusieurs minutes et Emacs
+reste utilisable pendant ce temps.  La suite du travail — lecture de la
+version, résolution du commit, écriture du fichier — se fait dans la
+sentinelle du processus.
+
+À faire ensuite : relire le fichier généré, le commiter, supprimer
+straight/repos/pdf-tools et straight/build/pdf-tools, puis redémarrer."
   (interactive)
   (unless (eq system-type 'windows-nt)
     (user-error "Commande réservée à Windows (source MSYS2 du serveur)"))
-  (unless (metal-pdf-serveur--pacman)
-    (user-error "MSYS2 introuvable — cherché dans : %s"
-                (mapconcat #'identity
-                           (metal-pdf-serveur-msys2-racines-candidates) ", ")))
   (unless (executable-find "git")
     (user-error "git est requis pour résoudre la version en commit"))
-  (let ((tampon (get-buffer-create "*MetalEmacs pdf-tools*"))
-        (pacman (metal-pdf-serveur--pacman)))
-    (with-current-buffer tampon (erase-buffer))
-    (display-buffer tampon)
-    (message "Actualisation de la base de paquets MSYS2...")
-    (call-process pacman nil tampon t "-Sy" "--noconfirm")
-    (let ((disponible (metal-pdf-serveur-version-disponible))
-          (installee (metal-pdf-serveur-version-installee)))
-      (unless disponible
-        (user-error "Paquet %s introuvable dans les dépôts MSYS2"
-                    metal-pdf-serveur-paquet-msys2))
-      (when (and installee (string= installee disponible)
-                 (string= installee metal-pdf-version-attendue))
-        (user-error "Déjà à jour et accordé (version %s)" installee))
-      (unless (yes-or-no-p
-               (format "Installer le serveur %s (installé : %s, épinglé : %s) ? "
-                       disponible (or installee "aucun")
-                       metal-pdf-version-attendue))
-        (user-error "Abandon"))
-      (unless (= 0 (call-process pacman nil tampon t "-S" "--needed"
-                                 "--noconfirm"
-                                 metal-pdf-serveur-paquet-msys2))
-        (error "Échec de l'installation — voir %s" (buffer-name tampon)))
+  (let ((pacman (metal-pdf-serveur--pacman)))
+    (unless pacman
+      (user-error "MSYS2 introuvable — cherché dans : %s"
+                  (mapconcat #'identity
+                             (metal-pdf-serveur-msys2-racines-candidates) ", ")))
+    (unless (yes-or-no-p
+             (format "Installer le serveur et réaccorder l'épinglage (actuel : %s) ? "
+                     metal-pdf-version-attendue))
+      (user-error "Abandon"))
+    (message "📦 pacman en cours — Emacs reste utilisable...")
+    (let* ((tampon "*MetalEmacs pdf-tools*")
+           (q (shell-quote-argument pacman))
+           (cmd (format "%s -Sy --noconfirm && %s -S --needed --noconfirm %s"
+                        q q metal-pdf-serveur-paquet-msys2)))
+      (with-current-buffer (get-buffer-create tampon) (erase-buffer))
+      (set-process-sentinel
+       (start-process-shell-command "epdfinfo-maj" tampon cmd)
+       #'metal-pdf-serveur--sentinelle-mise-a-jour)
+      (display-buffer tampon))))
+
+(defun metal-pdf-serveur--sentinelle-mise-a-jour (proc _evenement)
+  "Poursuit `metal-pdfinfo-mise-a-jour' une fois PROC terminé."
+  (when (eq (process-status proc) 'exit)
+    (if (/= (process-exit-status proc) 0)
+        (message "❌ Échec de pacman. Voir %s" (buffer-name (process-buffer proc)))
       (let ((obtenue (metal-pdf-serveur-version-installee)))
-        (unless obtenue
-          (error "Paquet installé mais version illisible"))
-        (message "Résolution de la balise v%s..." obtenue)
-        (let ((commit (metal-pdf-serveur--commit-de-version obtenue)))
-          (unless commit
-            (error "Aucune balise v%s dans %s — le paquet MSYS2 ne suit pas les balises amont"
-                   obtenue metal-pdf-serveur-depot))
-          (metal-pdf-serveur--ecrire-version obtenue commit)
-          ;; Le témoin doit suivre : le serveur MSYS2 fraîchement installé
-          ;; correspond désormais au commit qu'on vient d'épingler.
-          (let ((metal-pdf-commit-attendu commit))
-            (metal-pdf-serveur-noter-construction))
-          (find-file metal-pdf-serveur-fichier-version)
-          (message
-           (concat "pdf-tools épinglé à %s (%s). "
-                   "Relisez et commitez ce fichier, supprimez "
-                   "straight/repos/pdf-tools et straight/build/pdf-tools, "
-                   "puis redémarrez Emacs")
-           obtenue (substring commit 0 12)))))))
+        (cond
+         ((null obtenue)
+          (message "❌ Paquet installé mais version illisible"))
+         (t
+          (message "Résolution de la balise v%s..." obtenue)
+          (let ((commit (metal-pdf-serveur--commit-de-version obtenue)))
+            (cond
+             ((null commit)
+              (message
+               (concat "❌ Aucune balise v%s en amont — le paquet MSYS2 ne suit "
+                       "pas les balises du dépôt ; épinglage inchangé")
+               obtenue))
+             ((and (string= obtenue metal-pdf-version-attendue)
+                   (string= commit metal-pdf-commit-attendu))
+              (message "✓ Déjà accordé (version %s) — rien à réécrire" obtenue))
+             (t
+              (metal-pdf-serveur--ecrire-version obtenue commit)
+              (let ((metal-pdf-commit-attendu commit))
+                (metal-pdf-serveur-noter-construction))
+              ;; L'épinglage vient de changer : le clone straight porte
+              ;; encore l'ancien commit et ne rebasculera pas tout seul.
+              (dolist (d (metal-pdf-serveur--dossiers-straight))
+                (when (file-directory-p d) (ignore-errors (delete-directory d t))))
+              (find-file metal-pdf-serveur-fichier-version)
+              (message
+               (concat "pdf-tools épinglé à %s (%s), straight purgé. "
+                       "Relisez et commitez le fichier, puis redémarrez")
+               obtenue (substring commit 0 12)))))))))
+    (metal-pdf-serveur--rafraichir-assistant)))
 
 (provide 'metal-pdf-serveur)
 ;;; metal-pdf-serveur.el ends here
