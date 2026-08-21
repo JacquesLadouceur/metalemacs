@@ -1218,7 +1218,11 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
 ;;; ═══════════════════════════════════════════════════════════════════
 
 (defun metal-deps-installer-quarto ()
-  "Installe Quarto et TinyTeX."
+  "Installe Quarto.
+Sous macOS et Linux, installe aussi TinyTeX.  Sous Windows, TinyTeX est
+volontairement omis : MetalEmacs y installe MiKTeX (voir
+`metal-deps-installer-miktex'), et deux distributions LaTeX simultanées
+mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne."
   (interactive)
   (if (metal-deps--quarto-present-p)
       (message "✓ Quarto déjà installé")
@@ -1236,8 +1240,8 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
            (progn
              (metal-deps--scoop-ensure-7zip)
              (metal-deps--scoop-add-extras-bucket)
-             (message "📦 Installation de Quarto via Scoop...")
-             (async-shell-command "scoop install quarto && quarto install tinytex --no-prompt" "*Quarto Install*"))
+             (message "📦 Installation de Quarto via Scoop (sans TinyTeX : MiKTeX sert de distribution LaTeX)...")
+             (async-shell-command "scoop install quarto" "*Quarto Install*"))
          (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
       ('gnu/linux
        (let* ((url "https://github.com/quarto-dev/quarto-cli/releases/download/v1.4.553/quarto-1.4.553-linux-amd64.deb")

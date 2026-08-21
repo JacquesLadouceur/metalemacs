@@ -763,26 +763,55 @@ L'argument FRAME est ignore (garde pour compatibilite)."
             (tab-line-mode 1)))
 
 ;; === PDF-TOOLS ===
-(if (eq system-type 'windows-nt)
-    (use-package pdf-tools
-      :init
-      (setenv "PATH" (concat "~/.emacs.d/pdf-tools/;" (getenv "PATH")))
-      (add-to-list 'exec-path "~/.emacs.d/pdf-tools/")
-      :custom
-      (pdf-info-epdfinfo-program "~/.emacs.d/pdf-tools/epdfinfo.exe")
-      :config
-      (when (file-executable-p pdf-info-epdfinfo-program)
-        (pdf-tools-install t nil t))
-      (setq-default pdf-view-display-size 'fit-width))
-  (use-package pdf-tools
-    :defer t
-    :config
-    (when (or (executable-find "epdfinfo")
-              (file-executable-p
-               (expand-file-name "straight/build/pdf-tools/epdfinfo"
-                                 user-emacs-directory)))
-      (pdf-tools-install t nil t))
-    (setq-default pdf-view-display-size 'fit-width)))
+;; (if (eq system-type 'windows-nt)
+;;     (use-package pdf-tools
+;;       :init
+;;       (setenv "PATH" (concat "~/.emacs.d/pdf-tools/;" (getenv "PATH")))
+;;       (add-to-list 'exec-path "~/.emacs.d/pdf-tools/")
+;;       :custom
+;;       (pdf-info-epdfinfo-program "~/.emacs.d/pdf-tools/epdfinfo.exe")
+;;       :config
+;;       (when (file-executable-p pdf-info-epdfinfo-program)
+;;         (pdf-tools-install t nil t))
+;;       (setq-default pdf-view-display-size 'fit-width))
+;;   (use-package pdf-tools
+;;     :defer t
+;;     :config
+;;     (when (or (executable-find "epdfinfo")
+;;               (file-executable-p
+;;                (expand-file-name "straight/build/pdf-tools/epdfinfo"
+;;                                  user-emacs-directory)))
+;;       (pdf-tools-install t nil t))
+;;     (setq-default pdf-view-display-size 'fit-width)))
+
+(defconst metal-pdf-tools-serveur
+  (expand-file-name "pdf-tools/" user-emacs-directory)
+  "Dossier livré avec MetalEmacs contenant epdfinfo.exe et ses DLL (Windows).")
+
+(use-package pdf-tools
+  :straight (pdf-tools
+             :type git :host github :repo "vedang/pdf-tools"
+             ;; v1.1.0 — dernière version compatible avec un epdfinfo d'avant
+             ;; la correction gamma (v1.2.0). À remonter en même temps que le
+             ;; binaire, jamais séparément.
+             :commit "a9c9a12c3ecf2005fa641059368ac8284f507620"
+             :files (:defaults "README" ("build" "Makefile") ("build" "server")))
+  :init
+  (when (eq system-type 'windows-nt)
+    (add-to-list 'exec-path metal-pdf-tools-serveur)
+    (setenv "PATH" (concat metal-pdf-tools-serveur path-separator (getenv "PATH"))))
+  :custom
+  (pdf-info-epdfinfo-program
+   (if (eq system-type 'windows-nt)
+       (expand-file-name "epdfinfo.exe" metal-pdf-tools-serveur)
+     (or (executable-find "epdfinfo")
+         (expand-file-name "straight/build/pdf-tools/epdfinfo" user-emacs-directory))))
+  :config
+  (if (file-executable-p pdf-info-epdfinfo-program)
+      (pdf-tools-install t nil t)
+    (message "⚠ epdfinfo introuvable (%s) — lancez M-x pdf-tools-install"
+             pdf-info-epdfinfo-program))
+  (setq-default pdf-view-display-size 'fit-width))
 
 
 (defun jl/init-file-p ()
