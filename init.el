@@ -1777,6 +1777,58 @@ fenêtre principale via `metal/fenetre-principale-p'."
              '("\\`\\*compilation\\*\\'"
                (metal/afficher-compilation-en-haut)))
 
+;; Routage de l'Assistant vers la fenêtre du haut — Windows seulement.
+;;
+;; Symptôme : à la PREMIÈRE ouverture de l'Assistant seulement, le tampon
+;; atterrit dans la fenêtre du bas ; les ouvertures suivantes sont
+;; correctes.  L'asymétrie livre la cause : au premier appel le tampon
+;; n'existe pas encore, `display-buffer-reuse-window' n'a donc rien à
+;; réutiliser et le choix retombe sur une fenêtre « disponible » — celle
+;; du bas, la fenêtre du haut étant la fenêtre sélectionnée.  Aux appels
+;; suivants, la fenêtre où le tampon vit déjà est réutilisée : le bon
+;; placement observé ensuite n'est qu'un effet de mémoire, pas une règle.
+;;
+;; `metal/fenetre-principale-p' (ci-dessus) ne convient PAS ici : elle
+;; exclut les fenêtres affichant *Tableau-de-bord*, or c'est justement la
+;; fenêtre du haut dans la disposition courante.  Elle ne trouverait
+;; aucune cible et laisserait le comportement par défaut reprendre la
+;; main.  D'où une sélection purement géométrique : la fenêtre non
+;; latérale et non dédiée dont le bord supérieur est le plus haut.
+;;
+;; La règle est ajoutée en TÊTE (`add-to-list' sans le t final) : shackle
+;; s'insère dans `display-buffer-alist' via `shackle-mode' plus haut dans
+;; ce fichier, et `display-buffer' s'arrête à la première correspondance.
+(defun metal/fenetre-du-haut ()
+  "Retourne la fenêtre non latérale la plus haute du frame courant.
+Contrairement à `metal/fenetre-principale-p', ne tient aucun compte du
+tampon affiché : seule la géométrie décide."
+  (let ((min-haut most-positive-fixnum)
+        meilleure)
+    (dolist (w (window-list nil 'no-minibuffer))
+      (unless (or (window-parameter w 'window-side)
+                  (window-dedicated-p w))
+        (let ((haut (nth 1 (window-edges w))))
+          (when (< haut min-haut)
+            (setq min-haut haut
+                  meilleure w)))))
+    meilleure))
+
+(defun metal/afficher-assistant-en-haut (buffer alist)
+  "Affiche BUFFER dans la fenêtre du haut.
+Réutilise d'abord une fenêtre montrant déjà BUFFER, sinon vise la fenêtre
+retournée par `metal/fenetre-du-haut'.  Retourne nil si aucune fenêtre ne
+convient, ce qui laisse `display-buffer' poursuivre avec ses actions par
+défaut."
+  (or (display-buffer-reuse-window buffer alist)
+      (let ((win (metal/fenetre-du-haut)))
+        (when win
+          (window--display-buffer buffer win 'reuse alist)))))
+
+(when (eq system-type 'windows-nt)
+  (add-to-list 'display-buffer-alist
+               '("\\`\\*MetalEmacs Assistant\\*\\'"
+                 (metal/afficher-assistant-en-haut))))
+
 ;; Consoles MetalEmacs — RÈGLE UNIQUE.
 ;;
 ;; Elle ne repose pas sur une énumération de motifs à rallonge, mais sur
