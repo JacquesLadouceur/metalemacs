@@ -178,18 +178,24 @@ compilé depuis les sources du paquet Lisp."
 
 ;;; --- Résolution version vers commit --------------------------------------
 
-(defun metal-pdf-serveur--commit-de-version (version)
-  "Commit de la balise vVERSION dans le dépôt amont, ou nil.
-
-Trois sources dans l'ordre, pour n'atteindre le réseau qu'en dernier
-recours : la version de référence, le cache d'un accord précédent, puis
-`git ls-remote'."
+(defun metal-pdf-serveur--commit-connu (version)
+  "Commit de VERSION s'il est connu SANS accès réseau, sinon nil.
+Deux sources : la version de référence, et le cache d'un accord
+précédent.  Utilisée par tout ce qui s'exécute dans un chemin
+d'affichage, où un appel réseau bloquerait l'interface."
   (cond
    ((null version) nil)
    ((string= version metal-pdf-version-attendue) metal-pdf-commit-attendu)
-   ((let ((c (metal-pdf-serveur--lire-cache)))
-      (and c (string= (car c) version) (cdr c))))
-   (t
+   (t (let ((c (metal-pdf-serveur--lire-cache)))
+        (and c (string= (car c) version) (cdr c))))))
+
+(defun metal-pdf-serveur--commit-de-version (version)
+  "Commit de la balise vVERSION dans le dépôt amont, ou nil.
+
+Peut interroger le réseau : à n'appeler que depuis une action explicite
+de l'utilisateur, jamais depuis l'affichage."
+  (or (metal-pdf-serveur--commit-connu version)
+      (when version
     (let ((tag (concat "v" version)))
       (with-temp-buffer
         (when (= 0 (call-process "git" nil t nil "ls-remote" "--tags"
@@ -221,9 +227,13 @@ le serveur est compilé depuis les sources du Lisp, qui fait autorité."
            (metal-pdf-serveur-version-installee))
       metal-pdf-version-attendue))
 
-(defun metal-pdf-serveur-commit-vise ()
-  "Commit que le clone straight doit porter, ou nil."
-  (metal-pdf-serveur--commit-de-version (metal-pdf-serveur-version-visee)))
+(defun metal-pdf-serveur-commit-vise (&optional resoudre)
+  "Commit que le clone straight doit porter, ou nil.
+Sans RESOUDRE, s'en tient aux sources locales : aucun accès réseau."
+  (let ((v (metal-pdf-serveur-version-visee)))
+    (if resoudre
+        (metal-pdf-serveur--commit-de-version v)
+      (metal-pdf-serveur--commit-connu v))))
 
 ;;; --- Alignement ----------------------------------------------------------
 
@@ -247,7 +257,7 @@ celui de l'ancien commit.
 Ne purge jamais les dossiers : les supprimer provoquerait un nouveau
 clone sur la branche par défaut, donc une boucle."
   (let ((clone (metal-pdf-serveur--commit-clone))
-        (vise (metal-pdf-serveur-commit-vise)))
+        (vise (metal-pdf-serveur-commit-vise t)))
     (cond
      ((null clone) nil)                 ; straight n'a pas encore cloné
      ((null vise)
@@ -272,6 +282,7 @@ clone sur la branche par défaut, donc une boucle."
               (ignore-errors (straight-rebuild-package "pdf-tools" t)))
             (metal-pdf-serveur--ecrire-cache
              (metal-pdf-serveur-version-visee) vise)
+            (metal-pdf-serveur-invalider-etat)
             t)
         (metal-pdf-serveur--journal
          "pdf-tools : bascule vers %s IMPOSSIBLE — le Lisp reste en %s"
@@ -280,36 +291,66 @@ clone sur la branche par défaut, donc une boucle."
 
 ;;; --- État, pour l'Assistant ----------------------------------------------
 
+(defvar metal-pdf-serveur--etat-memo nil
+  "Dernier état calculé, sous forme (INSTANT . ÉTAT).")
+
+(defcustom metal-pdf-serveur-memo-secondes 20
+  "Durée de validité de l'état mémorisé, en secondes.
+
+Calculer l'état lance `pacman' et `git' — deux sous-processus, lents
+sous Windows.  L'Assistant interroge l'état plusieurs fois par rendu (le
+vérificateur, puis la description) : sans mémorisation, chaque
+rafraîchissement multiplie ces lancements et l'interface se fige."
+  :type 'integer
+  :group 'metal-pdf-serveur)
+
+(defun metal-pdf-serveur-invalider-etat ()
+  "Oublie l'état mémorisé.  À appeler après toute action le modifiant."
+  (setq metal-pdf-serveur--etat-memo nil))
+
 (defun metal-pdf-serveur-etat ()
+  "État de l'accord, mémorisé quelques secondes.  Voir `metal-pdf-serveur--etat'."
+  (let ((memo metal-pdf-serveur--etat-memo))
+    (if (and memo
+             (< (float-time (time-subtract (current-time) (car memo)))
+                metal-pdf-serveur-memo-secondes))
+        (cdr memo)
+      (let ((etat (metal-pdf-serveur--etat)))
+        (setq metal-pdf-serveur--etat-memo (cons (current-time) etat))
+        etat))))
+
+(defun metal-pdf-serveur--etat ()
   "État de l'accord, sous forme (SYMBOLE . DÉTAIL).
 
   sans-msys2    — Windows sans MSYS2 : pas de serveur possible
   absent        — aucun serveur epdfinfo utilisable
   sans-clone    — le paquet Lisp n'est pas encore cloné
-  indetermine   — version du serveur non résoluble en commit
+  a-resoudre    — version du serveur jamais résolue ici (bouton Réparer)
   ok            — Lisp et serveur accordés ; DÉTAIL porte la version
   a-aligner     — accord à rétablir ; DÉTAIL porte la version du serveur
 
 Lecture pure : pas d'écriture, et pas de réseau tant que la version
 visée est celle de référence ou celle du cache."
-  (let ((clone (metal-pdf-serveur--commit-clone))
-        (pilote (metal-pdf-serveur-pilote-par-le-serveur-p)))
+  (let* ((pilote (metal-pdf-serveur-pilote-par-le-serveur-p))
+         ;; Une seule interrogation du serveur par calcul : chaque appel
+         ;; lance pacman, coûteux sous Windows.
+         (installee (and pilote (metal-pdf-serveur-version-installee)))
+         (v (or installee metal-pdf-version-attendue)))
     (cond
      ((and pilote (not (metal-pdf-serveur-msys2-present-p)))
       (cons 'sans-msys2 nil))
-     ((and pilote (not (metal-pdf-serveur-version-installee)))
-      (cons 'absent nil))
+     ((and pilote (null installee)) (cons 'absent nil))
      ((and (not pilote)
            (not (and (boundp 'pdf-info-epdfinfo-program)
                      pdf-info-epdfinfo-program
                      (file-executable-p pdf-info-epdfinfo-program))))
       (cons 'absent nil))
-     ((null clone) (cons 'sans-clone nil))
      (t
-      (let ((vise (metal-pdf-serveur-commit-vise))
-            (v (metal-pdf-serveur-version-visee)))
+      (let ((clone (metal-pdf-serveur--commit-clone))
+            (vise (metal-pdf-serveur--commit-connu v)))
         (cond
-         ((null vise) (cons 'indetermine v))
+         ((null clone) (cons 'sans-clone nil))
+         ((null vise) (cons 'a-resoudre v))
          ((string= clone vise) (cons 'ok v))
          (t (cons 'a-aligner v))))))))
 
@@ -327,8 +368,8 @@ visée est celle de référence ou celle du cache."
                    "serveur non installé — les PDF passent par doc-view"
                  "serveur non compilé — bouton Réparer"))
       ('sans-clone "paquet Lisp pas encore installé")
-      ('indetermine
-       (format "serveur %s — version amont introuvable, accord non vérifiable" v))
+      ('a-resoudre
+       (format "serveur %s — accord à établir, bouton Réparer" v))
       ('ok (if (string= v metal-pdf-version-attendue)
                (format "accordé (%s)" v)
              (format "accordé (%s ; référence %s)" v metal-pdf-version-attendue)))
@@ -338,7 +379,8 @@ visée est celle de référence ou celle du cache."
 ;;; --- Réparation : point d'entrée unique ----------------------------------
 
 (defun metal-pdf-serveur--rafraichir-assistant ()
-  "Redessine l'Assistant s'il est affiché."
+  "Oublie l'état mémorisé et redessine l'Assistant s'il est affiché."
+  (metal-pdf-serveur-invalider-etat)
   (when (and (fboundp 'metal-deps-afficher-etat)
              (get-buffer-window "*MetalEmacs Assistant*" t))
     (ignore-errors (metal-deps-afficher-etat))))
