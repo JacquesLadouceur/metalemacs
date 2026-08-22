@@ -55,6 +55,7 @@ local.el
 .authinfo
 .authinfo.gpg
 secrets.el
+metal-pdf-version-local.el
 
 # ---- macOS ----
 .DS_Store

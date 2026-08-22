@@ -576,10 +576,13 @@ applicatif officiel (/Applications/SWI-Prolog.app), où l'installeur
        (metal-pdf-serveur-msys2-present-p)))
 
 (defun metal-deps--epdfinfo-installable-p ()
-  "Retourne non-nil si le serveur epdfinfo peut être installé ici.
-Sous Windows uniquement, et seulement si MSYS2 est présent : sans lui,
-l'entrée MSYS2 de l'Assistant est le préalable à traiter."
-  (and (eq system-type 'windows-nt) (metal-deps--msys2-present-p)))
+  "Retourne non-nil si l'entrée « Serveur epdfinfo » doit s'afficher.
+Sous Windows dès que MSYS2 est là ; ailleurs dès que pdf-tools est en
+place, puisque l'accord s'y vérifie aussi — le bouton y recompile le
+serveur."
+  (if (eq system-type 'windows-nt)
+      (metal-deps--msys2-present-p)
+    (metal-deps--epdfinfo-present-p)))
 
 (defun metal-deps--poppler-present-p ()
   "Retourne t si Poppler est installé."
@@ -2612,17 +2615,24 @@ ET CLI présente sur le système."
      :installer metal-pdf-serveur-installer-msys2
      :desinstaller metal-pdf-serveur-desinstaller-msys2
      :categorie pdf
-     :description "Fournit le serveur epdfinfo et ses DLL"
-     :windows-seulement t)
+     :description "Requis pour lire les PDF dans Emacs (~1 Go)"
+     :windows-seulement t
+     ;; Volontairement exclu des installations groupées : un gigaoctet
+     ;; déclenché sans y penser passe pour un plantage.
+     :hors-groupe t)
     ;; Serveur epdfinfo.  L'installation est offerte ; la RÉVISION de la
     ;; version épinglée ne l'est pas — elle appartient au mainteneur, par
     ;; `M-x metal-pdfinfo-mise-a-jour', et parvient aux étudiants par
     ;; `git pull'.  L'état compare le serveur installé à la version
     ;; épinglée : c'est ce désaccord, silencieux autrement, qui casse
     ;; l'ouverture des PDF.
+    ;; Serveur epdfinfo.  Le bouton unique fait le geste adapté à l'état :
+    ;; installer le paquet MSYS2 s'il manque, sinon réaligner le Lisp sur
+    ;; la version du serveur.  Aucune intervention du mainteneur n'est
+    ;; requise : c'est le serveur, qu'on ne choisit pas, qui fait autorité.
     (:nom "Serveur epdfinfo"
      :verifier metal-deps--epdfinfo-accorde-p
-     :installer metal-pdf-serveur-installer
+     :installer metal-pdf-serveur-reparer
      :desinstaller metal-pdf-serveur-desinstaller
      :categorie pdf
      :description metal-deps--epdfinfo-etat-ligne
@@ -2845,7 +2855,12 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                  (or (null categorie)
                      (eq (plist-get outil :categorie) categorie)))
         (let ((installeur (plist-get outil :installer)))
-          (when (and installeur (not (eq installeur 'ignore)))
+          ;; `:hors-groupe' exclut un outil des boutons « Installer les
+          ;; logiciels » et « Tout installer », sans le retirer de
+          ;; l'affichage : réservé aux téléchargements très lourds, qu'on
+          ;; ne déclenche que délibérément.
+          (when (and installeur (not (eq installeur 'ignore))
+                     (not (plist-get outil :hors-groupe)))
             (push (cons (plist-get outil :nom) installeur) resultat)))))
     (nreverse resultat)))
 
