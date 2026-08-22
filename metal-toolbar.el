@@ -74,6 +74,32 @@ persistée dans `metal-prefs.el' via `metal-prefs-save'."
 160 par défaut ; modifiable via `metal-toolbar-emoji-increase' et amis."
   (+ metal-toolbar-emoji-base metal-toolbar-emoji-size-offset))
 
+(defcustom metal-toolbar-emoji-px-ratio 0.70
+  "Part de la hauteur de glyphe occupée par une icône SVG.
+
+Une lettre rendue à `:height' H occupe H × `frame-char-height' pixels de
+corps, mais son dessin — capitale sans jambage — n'en remplit qu'environ
+70 %.  Une image de même hauteur que le corps paraîtrait donc nettement
+plus grosse que la lettre voisine.  Ce ratio les accorde optiquement.
+
+Valeur choisie pour la continuité : avec une hauteur de caractère de 18
+pixels (12 points, cas courant) et le multiplicateur 1.60 par défaut, on
+retrouve les ~20 pixels de l'ancienne conversion à constante fixe."
+  :type 'number
+  :group 'metal-toolbar)
+
+(defun metal-toolbar-emoji-px (&optional multiplicateur)
+  "Taille en pixels d'une icône SVG pour un MULTIPLICATEUR de hauteur.
+
+Dérivée de `frame-char-height', afin que les icônes-images et les
+boutons-lettres de la barre restent de même grandeur à toute taille de
+police.  Bornée : `frame-char-height' peut renvoyer une valeur aberrante
+sur un cadre non graphique ou pendant l'initialisation."
+  (let* ((h (or multiplicateur (/ (metal-toolbar-emoji-size) 100.0)))
+         (ch (ignore-errors (frame-char-height)))
+         (ch (if (and (integerp ch) (> ch 0)) ch 18)))
+    (max 12 (min 96 (round (* h ch metal-toolbar-emoji-px-ratio))))))
+
 (defcustom metal-toolbar-emoji-raise 0.25
   "Décalage vertical par défaut des emojis dans les header-lines.
 Les emojis (Apple Color Emoji, Noto, ...) n'ont pas la même ligne de
@@ -257,11 +283,16 @@ Mots-clés :
             les autres boutons voisins."
   (let* ((h (or height (/ (metal-toolbar-emoji-size) 100.0)))
          (r (or raise metal-toolbar-emoji-raise))
-         ;; Taille cible en pixels pour le rendu SVG : le multiplicateur h
-         ;; (1.6 par défaut) est converti en pixels via le même facteur que
-         ;; le tableau de bord (≈ 12.5 px par unité de multiplicateur), de
-         ;; sorte que h=1.6 → ~20 px.
-         (px (max 12 (round (* h 12.5))))
+         ;; Taille cible en pixels pour le rendu SVG.
+         ;;
+         ;; Elle DOIT dériver de la hauteur de caractère du cadre.  Les
+         ;; boutons-lettres (`metal-toolbar-char') reçoivent `:height h',
+         ;; donc une hauteur de h × `frame-char-height' ; une conversion
+         ;; par constante fixe donnait aux images une taille indépendante
+         ;; de la police, et les deux familles divergeaient dès que la
+         ;; taille de police s'écartait de sa valeur habituelle (icônes
+         ;; minuscules à côté de lettres géantes).
+         (px (metal-toolbar-emoji-px h))
          (image (and (fboundp 'metal-icones-image)
                      (metal-icones-image emoji px))))
     (if image

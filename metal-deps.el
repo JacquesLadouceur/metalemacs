@@ -73,13 +73,18 @@ SYNCHRONE au premier affichage, d'où l'intérêt de les demander en bloc.")
 
 (defun metal-deps--icone-taille-px ()
   "Taille en pixels des icônes de l'Assistant.
-Suit le réglage « Taille des icônes » via `metal-toolbar-emoji-size',
-comme le tableau de bord ; repli sur la valeur par défaut du module.
-La résolution est faite à l'appel et non au chargement : `metal-toolbar'
-est chargé bien après `metal-deps' dans `init.el'."
-  (if (fboundp 'metal-toolbar-emoji-size)
-      (max 14 (round (* (metal-toolbar-emoji-size) 0.125)))
-    (if (boundp 'metal-icones-taille-defaut) metal-icones-taille-defaut 20)))
+Délègue à `metal-toolbar-emoji-px', qui dérive la taille de la hauteur de
+caractère du cadre : icônes et libellés restent ainsi proportionnés quelle
+que soit la taille de police.  La résolution est faite à l'appel et non au
+chargement : `metal-toolbar' est chargé bien après `metal-deps'."
+  (cond
+   ;; Source unique : la même conversion que la barre d'outils, dérivée de
+   ;; `frame-char-height'.  Une constante fixe donnait aux icônes une taille
+   ;; indépendante de la police, d'où des images minuscules à côté de
+   ;; libellés géants sur les postes à grande police.
+   ((fboundp 'metal-toolbar-emoji-px) (metal-toolbar-emoji-px))
+   ((fboundp 'metal-icones-taille) (metal-icones-taille))
+   (t 20)))
 
 (defun metal-deps--icone (emoji)
   "Retourner EMOJI rendu en icône SVG couleur.
