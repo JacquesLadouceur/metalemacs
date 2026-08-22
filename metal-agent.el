@@ -3764,6 +3764,7 @@ sélecteur de profil) restent toujours présents."
     minibuffer-mode
     minibuffer-inactive-mode
     fundamental-mode
+    lisp-interaction-mode
     help-mode
     Info-mode
     Custom-mode
