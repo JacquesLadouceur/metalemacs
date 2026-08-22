@@ -66,10 +66,38 @@ d'origine).  Permet de désactiver globalement le rendu image."
   :type 'boolean
   :group 'metal-icones)
 
-(defcustom metal-icones-taille-defaut 20
-  "Taille par défaut, en pixels, des icônes SVG."
-  :type 'integer
+(defcustom metal-icones-taille-defaut nil
+  "Taille fixe, en pixels, des icônes SVG.
+Nil — le défaut — fait dériver la taille de la hauteur de caractère du
+cadre, afin que les icônes suivent la police.  Ne fixer une valeur que
+pour figer délibérément la taille."
+  :type '(choice (const :tag "Suivre la police" nil) integer)
   :group 'metal-icones)
+
+(defcustom metal-icones-taille-ratio 0.85
+  "Part de la hauteur de caractère occupée par une icône SVG.
+Un peu moins de 1 : une icône à pleine hauteur de ligne paraît plus
+grosse qu'un glyphe de la même police, dont les jambages ne remplissent
+jamais tout le corps."
+  :type 'number
+  :group 'metal-icones)
+
+(defun metal-icones-taille ()
+  "Taille en pixels des icônes SVG.
+
+Dérivée de `frame-char-height' — donc de la police courante — pour que
+les deux familles d'icônes de MetalEmacs restent de même grandeur : les
+unes sont des glyphes rendus par la police, les autres des images SVG.
+Un calcul indépendant les faisait diverger dès que la taille de police
+s'écartait de sa valeur habituelle.
+
+Bornée : sur un cadre non graphique ou pendant l'initialisation,
+`frame-char-height' peut renvoyer une valeur aberrante."
+  (or metal-icones-taille-defaut
+      (let ((h (ignore-errors (frame-char-height))))
+        (if (and (integerp h) (> h 0))
+            (max 12 (min 64 (round (* metal-icones-taille-ratio h))))
+          20))))
 
 (defcustom metal-icones-locales-dir
   (expand-file-name "icones/locales/" user-emacs-directory)
@@ -215,7 +243,7 @@ alors sur l'emoji Unicode).  Si EMOJI figure dans
 `metal-icones-substituts', c'est son substitut qui est rendu."
   (when (metal-icones-disponible-p)
     (let* ((emoji (or (cdr (assoc emoji metal-icones-substituts)) emoji))
-           (px (or taille-px metal-icones-taille-defaut))
+           (px (or taille-px (metal-icones-taille)))
            (nom (metal-icones--nom-fichier emoji))
            (cle (cons nom px))
            (cache (gethash cle metal-icones--cache 'absent)))
@@ -239,8 +267,8 @@ Si le SVG Twemoji est disponible, renvoie EMOJI porteur d'une propriété
 `display' pointant vers l'image (couleur, identique Windows / macOS).
 Sinon, renvoie EMOJI tel quel (repli sur l'emoji Unicode).
 
-TAILLE-PX force une taille précise en pixels ; défaut
-`metal-icones-taille-defaut'."
+TAILLE-PX force une taille précise en pixels ; par défaut la taille
+suit la police, voir `metal-icones-taille'."
   (let ((image (metal-icones-image emoji taille-px)))
     (if image
         (propertize emoji 'display image 'rear-nonsticky t)
@@ -291,7 +319,7 @@ d'outils ou le tableau de bord."
   "Construire l'image SVG de l'icône locale NOM à TAILLE-PX pixels.
 Retourne un objet image, ou nil si indisponible."
   (when (metal-icones-disponible-p)
-    (let* ((px (or taille-px metal-icones-taille-defaut))
+    (let* ((px (or taille-px (metal-icones-taille)))
            (cle (cons (concat "locale:" nom) px))
            (cache (gethash cle metal-icones--cache 'absent)))
       (if (not (eq cache 'absent))
@@ -305,6 +333,16 @@ Retourne un objet image, ou nil si indisponible."
                                         :ascent 'center)))))
           (puthash cle image metal-icones--cache)
           image)))))
+
+(defun metal-icones-rafraichir ()
+  "Purge le cache d'images pour que les icônes suivent la police courante.
+Le cache est indexé par (nom . pixels) : un changement de police produit
+donc simplement de nouvelles entrées, sans invalider les anciennes.  Cette
+commande sert surtout à récupérer la mémoire après plusieurs changements."
+  (interactive)
+  (when (fboundp 'metal-icones-vider-cache)
+    (metal-icones-vider-cache))
+  (force-mode-line-update t))
 
 (provide 'metal-icones)
 
