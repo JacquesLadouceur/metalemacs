@@ -1,6 +1,6 @@
 ;;; metal-pdf.el --- Barre d'outils PDF pour MetalEmacs -*- lexical-binding: t; -*-
 
-;; Author: Jacques Ladouceur
+;; Author: Jacques Ladouceur 
 ;; Keywords: pdf, annotations, tools
 
 ;;; Commentary:
