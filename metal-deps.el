@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Jacques Ladouceur
 ;; Auteur: Jacques Ladouceur
-;; Version: 3.8
+;; Version: 3.9
 
 ;;; Commentaire:
 ;; Ce module gère l'installation automatique des dépendances externes
@@ -20,6 +20,10 @@
 ;;               Rafraîchissement intelligent de l'interface (sentinelle)
 ;; Version 3.7 : Ajout de ripgrep (rg) — moteur de recherche récursive rapide,
 ;;               requis par deadgrep pour la recherche interactive dans Emacs
+;; Version 3.9 : Consoles unifiées (`metal-console-nom' / `metal-console-lancer')
+;;               — nommage commun, sortie rafraîchie en temps réel, et
+;;               fenêtre dédiée qui s'efface avec son tampon.
+;;               Premier démarrage automatique de MSYS2 (trousseau pacman).
 ;; Version 3.8 : Seuil macOS « moderne » (>= 14, Sonoma) pour la chaîne PDF
 ;;               et Node.js.  Au-delà, Homebrew fournit des bottles fiables
 ;;               (Intel comme Apple Silicon) : Poppler/pdf-tools sont offerts
@@ -191,6 +195,380 @@ Sur les systèmes non-macOS, retourne nil (le concept ne s'applique pas)."
     (insert (format-time-string "[%H:%M:%S] ")
             (apply #'format fmt args) "\n")))
 
+
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Cache de détection
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; Le rendu de l'Assistant appelle `executable-find' et `file-exists-p'
+;; des dizaines de fois : une fois par outil, une fois par agent du
+;; catalogue, plus les tests d'authentification.  Sur macOS et Linux
+;; c'est imperceptible ; sous Windows, non.
+;;
+;; Deux raisons se cumulent.  D'abord `executable-find' y essaie CHAQUE
+;; suffixe de `exec-suffixes' (.exe, .com, .bat, .cmd…) dans CHAQUE
+;; entrée de `exec-path' — et un PATH Windows garni de Scoop, MiKTeX,
+;; conda, Git et MSYS2 en compte facilement trente.  Une seule recherche
+;; infructueuse représente donc plus d'une centaine d'accès disque.
+;; Ensuite, sur cette machine, HOME est dans un dossier synchronisé
+;; (Synology Drive) : chaque accès traverse un pilote de filtre, ce qui
+;; multiplie le coût unitaire.  Quelques dizaines de recherches
+;; suffisent alors à faire des secondes.
+;;
+;; Trois mesures, par ordre d'effet :
+;;   1. mémoïsation — les répétitions (`scoop' est cherché par la moitié
+;;      des prédicats) ne coûtent plus qu'une fois ;
+;;   2. persistance entre deux rendus — rouvrir l'Assistant ou cliquer
+;;      un bouton ◯ ne relance aucune détection ;
+;;   3. préchauffage à vide après le démarrage d'Emacs — le coût est
+;;      payé pendant que l'utilisateur lit son écran d'accueil, pas
+;;      quand il ouvre l'Assistant.
+;;
+;; Le cache est vidé dès que l'état du système a pu changer : bouton
+;; « Rafraîchir », fin d'une installation, ajout au PATH de session.
+
+(defvar metal-deps--cache-detection nil
+  "Table de mémoïsation des détections, ou nil si le cache est froid.")
+
+(defvar metal-deps--cache-chaud nil
+  "Non-nil quand une détection complète a déjà été faite dans la session.")
+
+(defun metal-deps--cache-vider ()
+  "Invalide le cache de détection.
+À appeler chaque fois que l'état du système a pu changer : fin
+d'installation, rafraîchissement du PATH, clic « Rafraîchir »."
+  (setq metal-deps--cache-detection nil
+        metal-deps--cache-chaud nil))
+
+(defun metal-deps--cache-table ()
+  "Retourne la table de mémoïsation, en la créant au besoin."
+  (or metal-deps--cache-detection
+      (setq metal-deps--cache-detection (make-hash-table :test 'equal))))
+
+(defun metal-deps--memo (cle calcul)
+  "Retourne la valeur mémoïsée pour CLE, en appelant CALCUL au besoin.
+Le marqueur `absent' distingue « pas encore calculé » d'un résultat nil
+légitime — sans quoi toute détection négative serait recalculée à chaque
+appel, c.-à-d. précisément les cas les plus coûteux."
+  (let* ((table (metal-deps--cache-table))
+         (v (gethash cle table 'metal-deps--absent)))
+    (if (eq v 'metal-deps--absent)
+        (puthash cle (funcall calcul) table)
+      v)))
+
+(defmacro metal-deps--avec-cache (&rest corps)
+  "Évalue CORPS avec `executable-find' et `file-exists-p' mémoïsés.
+
+Les définitions RÉELLES des deux fonctions sont capturées AVANT le
+`cl-letf' et appelées par `funcall'.  C'est indispensable : une fonction
+de remplacement qui invoquerait `executable-find' par son nom
+s'appellerait elle-même, puisque c'est précisément ce nom que `cl-letf'
+vient de rebinder — d'où une récursion infinie et un
+« Lisp nesting exceeds max-lisp-eval-depth ».
+
+Le rebinding est global le temps du corps : il touche donc aussi les
+appels internes d'Emacs.  C'est voulu (l'essentiel du coût est dans les
+`executable-find' des prédicats), et sans danger tant que le cache est
+invalidé dès qu'une installation, un ajout au PATH ou un clic
+« Rafraîchir » peut avoir changé l'état du disque."
+  (declare (indent 0) (debug t))
+  (let ((exec-reel (gensym "exec-reel-"))
+        (fichier-reel (gensym "fichier-reel-")))
+    `(let ((,exec-reel (symbol-function 'executable-find))
+           (,fichier-reel (symbol-function 'file-exists-p)))
+       (cl-letf (((symbol-function 'executable-find)
+                  (lambda (commande &rest args)
+                    (metal-deps--memo
+                     (cons 'exec commande)
+                     (lambda () (apply ,exec-reel commande args)))))
+                 ((symbol-function 'file-exists-p)
+                  (lambda (fichier)
+                    (metal-deps--memo
+                     (cons 'fichier fichier)
+                     (lambda () (funcall ,fichier-reel fichier))))))
+         ,@corps))))
+
+(defun metal-deps-prechauffer ()
+  "Exécute les détections à vide pour peupler le cache.
+Appelée sur un timer d'inactivité après le démarrage d'Emacs : le coût
+est payé hors du chemin critique, et la première ouverture de
+l'Assistant devient instantanée."
+  (interactive)
+  (unless metal-deps--cache-chaud
+    (metal-deps--avec-cache
+      (dolist (outil metal-deps-outils)
+        (let ((verif (plist-get outil :verifier))
+              (cond-f (plist-get outil :condition)))
+          (ignore-errors (when (functionp cond-f) (funcall cond-f)))
+          (ignore-errors (when (functionp verif) (funcall verif)))))
+      (dolist (entry (and (boundp 'metal-deps-agents-catalogue)
+                          metal-deps-agents-catalogue))
+        (ignore-errors (metal-deps--agent-cli-installee-p (cdr entry)))))
+    (setq metal-deps--cache-chaud t)
+    (metal-deps--journaliser "Cache de détection préchauffé")))
+
+;; Préchauffage après le démarrage : 4 secondes d'inactivité suffisent à
+;; laisser passer le rendu du tableau de bord et le chargement des
+;; modules.  `run-with-idle-timer' sans répétition : une seule fois.
+(run-with-idle-timer 4 nil #'metal-deps-prechauffer)
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Consoles MetalEmacs
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; Tout tampon qui reçoit la sortie d'un installateur ou d'un script
+;; externe est une « console ».  Son nom n'est plus écrit en dur : il est
+;; fabriqué par `metal-console-nom', ce qui permet à une règle UNIQUE de
+;; `display-buffer-alist' (voir init.el) de toutes les router vers une
+;; side-window dédiée du bas.  Tout installateur ajouté plus tard en
+;; hérite sans retouche de l'init.
+;;
+;; La dédicace de cette fenêtre est ce qui la fait disparaître avec son
+;; tampon.  Sans elle, fermer une console laisse la fenêtre en place et
+;; Emacs y recycle `other-buffer' — typiquement l'Assistant, qui se
+;; retrouve alors affiché dans deux fenêtres à la fois.
+;;
+;; `metal-console-lancer' remplace `async-shell-command' : même ordre
+;; d'arguments, mais nom normalisé et filtre de processus qui force le
+;; redisplay.  Sans ce filtre, la sortie s'accumule sans être affichée
+;; tant qu'aucun événement clavier ou souris ne réveille le redisplay —
+;; d'où la console qui semble figée tant qu'on n'a pas cliqué dedans.
+
+(defconst metal-console-prefixe "*Metal Console: "
+  "Préfixe commun à tous les tampons de console MetalEmacs.
+Sert de point d'ancrage à la règle unique de `display-buffer-alist'.")
+
+(defun metal-console-nom (etiquette)
+  "Nom normalisé du tampon de console pour ETIQUETTE.
+Les astérisques d'un ancien nom sont tolérées et retirées, ce qui permet
+d'écrire indifféremment \"Quarto Install\" ou \"*Quarto Install*\" ;
+un nom déjà normalisé est rendu tel quel (fonction idempotente).
+
+  (metal-console-nom \"MSYS2 Install\") => \"*Metal Console: MSYS2 Install*\""
+  (let ((brut (or etiquette "Commande")))
+    (if (string-prefix-p metal-console-prefixe brut)
+        brut
+      (concat metal-console-prefixe (string-trim brut "\\*" "\\*") "*"))))
+
+(defun metal-console-p (objet)
+  "Retourne non-nil si OBJET (tampon ou nom de tampon) est une console."
+  (let ((nom (if (bufferp objet) (buffer-name objet) objet)))
+    (and (stringp nom) (string-prefix-p metal-console-prefixe nom))))
+
+(defun metal-console--filtre (proc chaine)
+  "Insère CHAINE dans le tampon de PROC et rafraîchit l'affichage.
+Trois soins que le filtre par défaut ne prend pas :
+- le point de CHAQUE fenêtre affichant le tampon suit la fin du tampon,
+  y compris quand la fenêtre n'est pas sélectionnée — `window-point'
+  d'une fenêtre non sélectionnée ne suit pas `point' ;
+- les séquences ANSI des installateurs deviennent des couleurs plutôt
+  que des suites de caractères parasites ;
+- `redisplay' est demandé explicitement AVEC l'argument FORCE, sinon
+  Emacs le diffère jusqu'au prochain événement d'entrée."
+  (when (buffer-live-p (process-buffer proc))
+    (with-current-buffer (process-buffer proc)
+      (let ((inhibit-read-only t)
+            (debut (point-max)))
+        (save-excursion
+          (goto-char debut)
+          (insert chaine)
+          (ansi-color-apply-on-region debut (point-max)))
+        (dolist (fen (get-buffer-window-list (current-buffer) nil t))
+          (set-window-point fen (point-max)))))
+    (redisplay t)))
+
+(defun metal-console--sentinelle (proc evenement)
+  "Écrit le verdict de PROC (décrit par EVENEMENT) à la fin de sa console."
+  (when (and (memq (process-status proc) '(exit signal))
+             (buffer-live-p (process-buffer proc)))
+    (with-current-buffer (process-buffer proc)
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (insert (if (and (eq (process-status proc) 'exit)
+                         (= (process-exit-status proc) 0))
+                    "\n✓ Terminé.\n"
+                  (format "\n⚠ %s\n" (string-trim (or evenement "")))))))
+    (redisplay t)))
+
+(defun metal-console-brancher (proc &optional etiquette)
+  "Branche PROC sur la mécanique de console : tampon vidé, affiché, filtré.
+Destinée aux appels qui créent eux-mêmes leur processus parce qu'ils ont
+une sentinelle propre, et qui n'ont besoin que de l'affichage et du
+rafraîchissement.  Retourne PROC, ce qui permet de l'intercaler tel quel
+dans un `set-process-sentinel'."
+  (when (process-live-p proc)
+    (let ((tampon (process-buffer proc)))
+      (when (buffer-live-p tampon)
+        (with-current-buffer tampon
+          (let ((inhibit-read-only t))
+            (erase-buffer)))
+        (display-buffer tampon)
+        (metal-deps--journaliser "Console %s démarrée"
+                                 (or etiquette (buffer-name tampon))))
+      (set-process-filter proc #'metal-console--filtre)))
+  proc)
+
+(defun metal-console-lancer (commande &optional etiquette _tampon-erreurs)
+  "Exécute COMMANDE dans la console nommée d'après ETIQUETTE.
+Remplaçant direct de `async-shell-command' : même ordre d'arguments, le
+deuxième pouvant s'écrire avec ou sans astérisques.  Retourne le
+processus lancé, ce dont dépend le chaînage de
+`metal-deps--installer-prochain' (qui repère le nouveau processus par
+différence avec `process-list').
+
+Le troisième argument existe pour la seule compatibilité d'appel avec
+`async-shell-command' ; il est ignoré."
+  (let* ((nom (metal-console-nom (or etiquette "Commande")))
+         (tampon (get-buffer-create nom))
+         (encours (get-buffer-process tampon)))
+    (when (process-live-p encours)
+      (user-error "Une opération est déjà en cours dans %s" nom))
+    (with-current-buffer tampon
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format-time-string "[%H:%M:%S] ") commande "\n"
+                (make-string 60 ?─) "\n")))
+    (display-buffer tampon)
+    (metal-deps--journaliser "Console %s : %s" nom commande)
+    (let ((proc (start-process-shell-command nom tampon commande)))
+      (set-process-filter proc #'metal-console--filtre)
+      (set-process-sentinel proc #'metal-console--sentinelle)
+      proc)))
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; MSYS2 : premier démarrage obligatoire (Windows)
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; L'installateur officiel de MSYS2 exécute au premier lancement les
+;; scripts de /etc/post-install/, qui créent le trousseau de pacman.
+;; Scoop, lui, se contente de déposer l'archive et de fabriquer des
+;; shims : le trousseau n'existe pas, et le premier `pacman -Sy' échoue
+;; en série —
+;;   « Public keyring not found; have you run 'pacman-key --init'? »
+;;   « key "5F944B02…" is unknown » / « keyring is not writable »
+;;   « failed to synchronize all databases (invalid or corrupted
+;;     database (PGP signature)) »
+;; Un simple démarrage à vide suffit à tout réparer.  On le fait donc à
+;; la place de l'étudiant : la consigne écrite reste dans le guide, mais
+;; elle ne doit pas être la seule protection.
+
+(defun metal-deps--msys2-racine ()
+  "Répertoire d'installation de MSYS2, ou nil s'il est introuvable.
+Couvre l'installation Scoop (chemin usuel de MetalEmacs) et les
+emplacements de l'installateur officiel."
+  (cl-find-if
+   #'file-directory-p
+   (delq nil
+         (list (and (getenv "USERPROFILE")
+                    (expand-file-name "scoop/apps/msys2/current"
+                                      (getenv "USERPROFILE")))
+               (and (getenv "HOME")
+                    (expand-file-name "scoop/apps/msys2/current"
+                                      (getenv "HOME")))
+               "C:/msys64"
+               "C:/tools/msys64"))))
+
+(defun metal-deps--msys2-initialise-p ()
+  "Non-nil si le trousseau pacman de MSYS2 a déjà été créé."
+  (let ((racine (metal-deps--msys2-racine)))
+    (and racine
+         (file-exists-p (expand-file-name "etc/pacman.d/gnupg/pubring.gpg"
+                                          racine)))))
+
+(defun metal-deps-msys2-premier-lancement (&optional suite)
+  "Effectue le premier démarrage de MSYS2 (scripts post-install).
+Idempotente : ne fait rien si le trousseau existe déjà.  SUITE, si elle
+est fournie, est appelée sans argument une fois l'opération terminée.
+
+DEUX passages sont nécessaires : le premier crée le trousseau et
+l'arborescence, le second termine la mise à jour du runtime.
+
+Les options du script comptent.  `-defterm' évite l'ouverture d'une
+fenêtre mintty ; `-no-start' empêche le détachement du processus, sans
+quoi Emacs croirait l'opération finie alors que les scripts tournent
+encore, et enchaînerait sur un `pacman' voué au même échec."
+  (interactive)
+  (let ((racine (metal-deps--msys2-racine)))
+    (cond
+     ((not (eq system-type 'windows-nt))
+      (when suite (funcall suite)))
+     ((null racine)
+      (message "MSYS2 introuvable — installez-le d'abord."))
+     ((metal-deps--msys2-initialise-p)
+      (metal-deps--journaliser "MSYS2 : trousseau déjà présent")
+      (when suite (funcall suite)))
+     (t
+      (let ((script (expand-file-name "msys2_shell.cmd" racine))
+            (tampon (get-buffer-create (metal-console-nom "MSYS2 Init")))
+            (restants 2))
+        (if (not (file-exists-p script))
+            (message "msys2_shell.cmd introuvable dans %s" racine)
+          (with-current-buffer tampon
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert "Premier démarrage de MSYS2\n"
+                      (make-string 60 ?─) "\n"
+                      "Création du trousseau de signatures (pacman-key).\n"
+                      "Une à deux minutes ; aucune fenêtre ne s'ouvrira.\n\n")))
+          (display-buffer tampon)
+          (metal-deps--journaliser "MSYS2 : premier démarrage (2 passages)")
+          (message "⏳ Premier démarrage de MSYS2 — patientez…")
+          (letrec ((lancer
+                    (lambda ()
+                      (let ((proc (start-process
+                                   "metal-msys2-init" tampon script
+                                   "-defterm" "-no-start" "-here"
+                                   "-c" "exit")))
+                        (set-process-filter proc #'metal-console--filtre)
+                        (set-process-sentinel
+                         proc
+                         (lambda (p evt)
+                           (when (memq (process-status p) '(exit signal))
+                             (setq restants (1- restants))
+                             (if (> restants 0)
+                                 (funcall lancer)
+                               (metal-console--sentinelle p evt)
+                               (metal-deps--journaliser
+                                "MSYS2 : trousseau %s après premier démarrage"
+                                (if (metal-deps--msys2-initialise-p)
+                                    "créé" "TOUJOURS absent"))
+                               (when suite (funcall suite))))))))))
+            (funcall lancer))))))))
+
+(defun metal-deps--msys2-init-differee (&rest _)
+  "Planifie le premier démarrage de MSYS2 dès que l'installation est finie.
+L'installateur vit dans `metal-pdf-serveur.el' et travaille de façon
+asynchrone : on ne peut pas s'accrocher à sa sentinelle sans le
+modifier.  On surveille donc l'apparition de `msys2_shell.cmd', avec un
+plafond de vingt minutes pour ne pas laisser un timer tourner
+indéfiniment si l'installation a échoué."
+  (let ((essais 0))
+    (letrec ((verifier
+              (lambda ()
+                (setq essais (1+ essais))
+                (let ((racine (metal-deps--msys2-racine)))
+                  (cond
+                   ((metal-deps--msys2-initialise-p) nil)
+                   ((and racine
+                         (file-exists-p
+                          (expand-file-name "msys2_shell.cmd" racine)))
+                    (metal-deps-msys2-premier-lancement))
+                   ((< essais 120)
+                    (run-with-timer 10 nil verifier))
+                   (t
+                    (metal-deps--journaliser
+                     "MSYS2 : installation non détectée après 20 min")))))))
+      (run-with-timer 10 nil verifier))))
+
+;; Greffe plutôt que modification : le premier démarrage suit
+;; l'installation quelle que soit la voie empruntée — bouton
+;; « Installer », « Tout installer », ou appel direct de la fonction.
+(with-eval-after-load 'metal-pdf-serveur
+  (when (fboundp 'metal-pdf-serveur-installer-msys2)
+    (advice-add 'metal-pdf-serveur-installer-msys2 :after
+                #'metal-deps--msys2-init-differee)))
+
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Utilitaire : exécuter et rafraîchir l'interface
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -202,6 +580,8 @@ rafraîchit l'interface à la fin.  Si FN est synchrone, on rafraîchit
 après un court délai.  Les erreurs sont capturées et affichées."
   (when metal-deps--installation-en-cours
     (user-error "Une installation séquentielle est en cours — attendez ou annulez"))
+  ;; Le système va changer : le cache de détection ne vaut plus rien.
+  (metal-deps--cache-vider)
   (let ((procs-avant (copy-sequence (process-list))))
     (condition-case err
         (progn
@@ -220,12 +600,12 @@ après un court délai.  Les erreurs sont capturées et affichées."
                      (when (and ancien (functionp ancien))
                        (funcall ancien proc event))
                      (when (memq (process-status proc) '(exit signal))
-                       (run-with-timer 1 nil #'metal-deps-afficher-etat)))))
+                       (run-with-timer 1 nil #'metal-deps-afficher-etat t)))))
               ;; Pas de processus async — rafraîchir après un court délai
-              (run-with-timer 2 nil #'metal-deps-afficher-etat))))
+              (run-with-timer 2 nil #'metal-deps-afficher-etat t))))
       (error
        (message "⚠ %s" (error-message-string err))
-       (run-with-timer 2 nil #'metal-deps-afficher-etat)))))
+       (run-with-timer 2 nil #'metal-deps-afficher-etat t)))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; File d'attente séquentielle pour installations asynchrones
@@ -289,6 +669,7 @@ CALLBACK est appelé quand toutes les installations sont terminées."
   ;; Amorcer sudo sur Linux pour éviter mot de passe affiché en clair
   ;; dans les buffers async-shell-command (un seul prompt pour toute la file)
   (metal-deps--amorcer-sudo)
+  (metal-deps--cache-vider)
   (setq metal-deps--file-attente (copy-sequence outils))
   (setq metal-deps--installation-en-cours t)
   (metal-deps--journaliser "Début de l'installation séquentielle (%d éléments)"
@@ -394,7 +775,9 @@ Retourne t si la commande a été lancée."
     (let* ((script-file (expand-file-name 
                          (format "metal-cmd-%s.ps1" (format-time-string "%H%M%S"))
                          temporary-file-directory))
-           (buf-name (or buffer-name "*MetalEmacs Elevated*")))
+           ;; Nom normalisé : la sortie élevée est une console comme une
+           ;; autre et doit suivre la même règle d'affichage.
+           (buf-name (metal-console-nom (or buffer-name "Élévation"))))
       ;; Écrire le script
       (with-temp-file script-file
         (insert command))
@@ -655,7 +1038,7 @@ Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
       (message "✓ Homebrew déjà installé")
     (metal-deps--journaliser "Installation de Homebrew")
     (let ((cmd "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""))
-      (async-shell-command cmd "*Homebrew Install*")
+      (metal-console-lancer cmd "*Homebrew Install*")
       (message "Installation de Homebrew lancée dans un terminal..."))))
 
 (defun metal-deps-desinstaller-homebrew ()
@@ -668,7 +1051,7 @@ Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
     (when (yes-or-no-p "⚠ Ceci supprimera aussi tous les paquets installés via Homebrew. Continuer ? ")
       (metal-deps--journaliser "Désinstallation de Homebrew")
       (let ((cmd "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)\""))
-        (async-shell-command cmd "*Homebrew Uninstall*")
+        (metal-console-lancer cmd "*Homebrew Uninstall*")
         (message "Désinstallation de Homebrew lancée...")))))
 
 (defun metal-deps-installer-scoop ()
@@ -684,7 +1067,7 @@ Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
     (let* ((scoop-dir (expand-file-name "scoop" (getenv "HOME")))
            (cmd (format "powershell -Command \"$env:SCOOP = '%s'; [Environment]::SetEnvironmentVariable('SCOOP', '%s', 'User'); Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; irm get.scoop.sh | iex\""
                         scoop-dir scoop-dir)))
-      (async-shell-command cmd "*Scoop Install*"))
+      (metal-console-lancer cmd "*Scoop Install*"))
     ;; Mettre à jour le PATH pour cette session
     (let ((scoop-shims (expand-file-name "scoop/shims" (getenv "HOME"))))
       (when (file-exists-p scoop-shims)
@@ -770,7 +1153,7 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
           "le fichier téléchargé pour l'installer."))
       (let* ((dest (expand-file-name
                     (file-name-nondirectory url) "~/Downloads"))
-             (buf "*Installation Node.js*"))
+             (buf (metal-console-nom "Installation Node.js")))
         (metal-deps--journaliser "Installation de Node.js via .pkg : %s" url)
         (with-current-buffer (get-buffer-create buf)
           (let ((inhibit-read-only t))
@@ -791,6 +1174,9 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
                      (shell-quote-argument dest)))
                (proc (start-process-shell-command
                       "metal-node-pkg" buf cmd)))
+          ;; Filtre de console : la sortie de curl s'affiche au fil de
+          ;; l'eau au lieu d'attendre un clic dans la fenêtre.
+          (set-process-filter proc #'metal-console--filtre)
           (set-process-sentinel
            proc
            (lambda (_p event)
@@ -801,7 +1187,7 @@ Apple.  Évite toute compilation Homebrew (lente/impossible sur vieux Mac)."
                      (insert "\n✓ Installeur ouvert.  Terminez l'installation,\n"
                              "  puis cliquez « Rafraîchir » dans l'Assistant.\n")
                    (insert (format "\n⚠ Problème : %s\n" (string-trim event))))))
-             (run-with-timer 1 nil #'metal-deps-afficher-etat))))))))
+             (run-with-timer 1 nil #'metal-deps-afficher-etat t))))))))
 
 (defun metal-deps--ajouter-au-path (dir)
   "Ajoute DIR à `exec-path' et au PATH de la session s'il existe.
@@ -818,6 +1204,10 @@ s'il n'existe pas.  Rend un binaire fraîchement installé visible par
                                (string-equal (expand-file-name a)
                                              (expand-file-name b))))
         (setenv "PATH" (concat dir sep path))
+        ;; Un nouveau répertoire dans le PATH peut rendre visible un
+        ;; binaire jusque-là introuvable : les « absent » mémoïsés sont
+        ;; périmés.
+        (metal-deps--cache-vider)
         (metal-deps--journaliser "PATH rafraîchi : %s ajouté à la session" dir)))
     t))
 
@@ -872,7 +1262,7 @@ commande de l'agent (`:commande') soit visible sans redémarrer Emacs :
             (when (yes-or-no-p "Installer Node.js via Homebrew (brew install node) ? ")
               (metal-deps--journaliser "Installation de Node.js via Homebrew (Apple Silicon)")
               (let ((compilation-buffer-name-function
-                     (lambda (_) "*Installation Node.js*")))
+                     (lambda (_) (metal-console-nom "Installation Node.js"))))
                 ;; COMINT = t : buffer interactif.  brew demande « Do you want
                 ;; to proceed? [y/n] » ; sans comint, le buffer est en lecture
                 ;; seule et « y » déclenche « y is undefined » au lieu d'être
@@ -939,7 +1329,7 @@ commande de l'agent (`:commande') soit visible sans redémarrer Emacs :
                         (metal-deps--journaliser
                          "Node.js installé mais non détecté ; redémarrage peut être requis"))
                       (when (fboundp 'metal-deps-afficher-etat)
-                        (run-with-timer 0.5 nil #'metal-deps-afficher-etat))))))))))
+                        (run-with-timer 0.5 nil #'metal-deps-afficher-etat t))))))))))
       (metal-deps--afficher-aide
        "Installer Node.js sur Windows"
        (concat
@@ -968,7 +1358,7 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
                    "Désinstaller Node.js (brew uninstall node) ?  D'autres outils peuvent en dépendre. ")
               (metal-deps--journaliser "Désinstallation Node.js via Homebrew")
               (let ((compilation-buffer-name-function
-                     (lambda (_) "*Désinstallation Node.js*")))
+                     (lambda (_) (metal-console-nom "Désinstallation Node.js"))))
                 (compile "brew uninstall node" t)))
           (metal-deps--afficher-aide
            "Désinstaller Node.js"
@@ -1107,7 +1497,7 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
         (let* ((cmd (concat "winget install --id Git.Git -e --source winget "
                             "--accept-package-agreements --accept-source-agreements --silent"))
                (code (call-process "powershell" nil
-                                   (get-buffer-create "*Installation Git*") nil
+                                   (get-buffer-create (metal-console-nom "Installation Git")) nil
                                    "-NoProfile" "-ExecutionPolicy" "Bypass"
                                    "-Command" cmd)))
           (if (and (numberp code) (= code 0))
@@ -1136,7 +1526,7 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
   (if (metal-deps--xcode-present-p)
       (message "✓ Command Line Tools déjà installé")
     (metal-deps--journaliser "Installation de Command Line Tools")
-    (async-shell-command "xcode-select --install" "*Xcode CLT Install*")
+    (metal-console-lancer "xcode-select --install" "*Xcode CLT Install*")
     (message "Suivez les instructions de la fenêtre qui s'ouvre...")))
 
 (defun metal-deps-desinstaller-xcode-clt ()
@@ -1194,20 +1584,20 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
        (if (metal-deps--brew-present-p)
            (progn
              (message "Installation de Miniconda via Homebrew...")
-             (async-shell-command "brew install --cask miniconda" "*Miniconda Install*"))
+             (metal-console-lancer "brew install --cask miniconda" "*Miniconda Install*"))
          (let* ((arch (if (metal-deps--apple-silicon-p) "arm64" "x86_64"))
                 (url (format "https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-%s.sh" arch))
                 (script (expand-file-name "miniconda-installer.sh" temporary-file-directory)))
            (message "📦 Téléchargement de Miniconda...")
            (url-copy-file url script t)
-           (async-shell-command (format "bash %s -b" script) "*Miniconda Install*"))))
+           (metal-console-lancer (format "bash %s -b" script) "*Miniconda Install*"))))
       ('windows-nt
        (if (metal-deps--scoop-present-p)
            (progn
              (metal-deps--scoop-ensure-7zip)
              (metal-deps--scoop-add-extras-bucket)
              (message "📦 Installation de Miniconda via Scoop...")
-             (async-shell-command "scoop install miniconda3" "*Miniconda Install*"))
+             (metal-console-lancer "scoop install miniconda3" "*Miniconda Install*"))
          (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
       ('gnu/linux
        (let* ((url "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh")
@@ -1215,7 +1605,7 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
          (message "📦 Téléchargement de Miniconda...")
          (url-copy-file url script t)
          (chmod script #o755)
-         (async-shell-command (format "bash %s -b" script) "*Miniconda Install*"))))))
+         (metal-console-lancer (format "bash %s -b" script) "*Miniconda Install*"))))))
 
 (defun metal-deps-desinstaller-miniconda ()
   "Désinstalle Miniconda."
@@ -1228,7 +1618,7 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
       (let ((caskroom-path (metal-deps--miniconda-homebrew-path)))
         (when (yes-or-no-p (format "Supprimer Miniconda dans %s ? " caskroom-path))
           (metal-deps--journaliser "Désinstallation de Miniconda : %s" caskroom-path)
-          (async-shell-command (format "rm -rf %s" (shell-quote-argument caskroom-path)) "*Miniconda Uninstall*")
+          (metal-console-lancer (format "rm -rf %s" (shell-quote-argument caskroom-path)) "*Miniconda Uninstall*")
           (let ((conda-link "/opt/homebrew/bin/conda"))
             (when (file-symlink-p conda-link)
               (delete-file conda-link)))
@@ -1238,7 +1628,7 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
           (when (yes-or-no-p "Supprimer Miniconda ? ")
             (metal-deps--journaliser "Désinstallation de Miniconda via Scoop")
             (message "⏳ Désinstallation de Miniconda en cours...")
-            (async-shell-command "scoop uninstall miniconda3" "*Miniconda Uninstall*"))
+            (metal-console-lancer "scoop uninstall miniconda3" "*Miniconda Uninstall*"))
         (message "Miniconda a été installé à l'extérieur de Scoop. Désinstallez manuellement.")))
      (t
       (let ((chemins (list
@@ -1248,7 +1638,7 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
           (if trouve
               (when (yes-or-no-p (format "Supprimer Miniconda dans %s ? " trouve))
                 (metal-deps--journaliser "Désinstallation de Miniconda : %s" trouve)
-                (async-shell-command (format "rm -rf %s" (shell-quote-argument trouve)) "*Miniconda Uninstall*"))
+                (metal-console-lancer (format "rm -rf %s" (shell-quote-argument trouve)) "*Miniconda Uninstall*"))
             (message "Miniconda détecté mais emplacement non trouvé. Désinstallez manuellement."))))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -1270,7 +1660,7 @@ mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne."
        (if (metal-deps--brew-present-p)
            (progn
              (message "📦 Installation de Quarto et TinyTeX via Homebrew...")
-             (async-shell-command "brew install --cask quarto && quarto install tinytex --no-prompt" "*Quarto Install*"))
+             (metal-console-lancer "brew install --cask quarto && quarto install tinytex --no-prompt" "*Quarto Install*"))
          (browse-url "https://quarto.org/docs/get-started/")
          (message "Téléchargez Quarto depuis le site web")))
       ('windows-nt
@@ -1279,14 +1669,14 @@ mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne."
              (metal-deps--scoop-ensure-7zip)
              (metal-deps--scoop-add-extras-bucket)
              (message "📦 Installation de Quarto via Scoop (sans TinyTeX : MiKTeX sert de distribution LaTeX)...")
-             (async-shell-command "scoop install quarto" "*Quarto Install*"))
+             (metal-console-lancer "scoop install quarto" "*Quarto Install*"))
          (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
       ('gnu/linux
        (let* ((url "https://github.com/quarto-dev/quarto-cli/releases/download/v1.4.553/quarto-1.4.553-linux-amd64.deb")
               (deb (expand-file-name "quarto.deb" temporary-file-directory)))
          (message "📦 Téléchargement de Quarto...")
          (url-copy-file url deb t)
-         (async-shell-command (format "sudo dpkg -i %s && quarto install tinytex --no-prompt" deb) "*Quarto Install*"))))))
+         (metal-console-lancer (format "sudo dpkg -i %s && quarto install tinytex --no-prompt" deb) "*Quarto Install*"))))))
 
 (defun metal-deps-desinstaller-quarto ()
   "Désinstalle Quarto."
@@ -1299,15 +1689,15 @@ mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne."
         ('darwin
          (if (or (file-exists-p "/opt/homebrew/Caskroom/quarto")
                  (file-exists-p "/usr/local/Caskroom/quarto"))
-             (async-shell-command "brew uninstall --cask quarto" "*Quarto Uninstall*")
+             (metal-console-lancer "brew uninstall --cask quarto" "*Quarto Uninstall*")
            (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (async-shell-command "scoop uninstall quarto" "*Quarto Uninstall*")
+             (metal-console-lancer "scoop uninstall quarto" "*Quarto Uninstall*")
            (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "quarto"))
-             (async-shell-command "sudo apt remove quarto -y" "*Quarto Uninstall*")
+             (metal-console-lancer "sudo apt remove quarto -y" "*Quarto Uninstall*")
            (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -1328,7 +1718,7 @@ Note : un .dmg ne s'installe pas via un installeur Apple comme un .pkg ;
 le glisser-déposer final reste manuel (norme macOS pour les bundles)."
   (let* ((url "https://www.swi-prolog.org/download/stable/bin/swipl-latest.fat.dmg")
          (dest (expand-file-name "swipl-latest.fat.dmg" "~/Downloads"))
-         (buf "*Installation SWI-Prolog*"))
+         (buf (metal-console-nom "Installation SWI-Prolog")))
     (metal-deps--journaliser "Installation de SWI-Prolog via .dmg : %s" url)
     (with-current-buffer (get-buffer-create buf)
       (let ((inhibit-read-only t))
@@ -1351,6 +1741,9 @@ open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
                  (shell-quote-argument url)
                  (shell-quote-argument dest)))
            (proc (start-process-shell-command "metal-swipl-dmg" buf cmd)))
+      ;; Filtre de console : la sortie de curl s'affiche au fil de l'eau
+      ;; au lieu d'attendre un clic dans la fenêtre.
+      (set-process-filter proc #'metal-console--filtre)
       (set-process-sentinel
        proc
        (lambda (_p event)
@@ -1363,7 +1756,7 @@ open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
                (insert (format "\n⚠ Problème : %s\n" (string-trim event))
                        "Téléchargez manuellement depuis :\n"
                        "  https://www.swi-prolog.org/download/stable\n"))))
-         (run-with-timer 1 nil #'metal-deps-afficher-etat))))))
+         (run-with-timer 1 nil #'metal-deps-afficher-etat t))))))
 
 (defun metal-deps-installer-swi-prolog ()
   "Installe SWI-Prolog.
@@ -1378,7 +1771,7 @@ open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
       ('darwin
        (if (metal-deps--macos-moderne-p)
            (if (metal-deps--brew-present-p)
-               (async-shell-command "brew install swi-prolog" "*SWI-Prolog Install*")
+               (metal-console-lancer "brew install swi-prolog" "*SWI-Prolog Install*")
              (browse-url "https://www.swi-prolog.org/download/stable")
              (message "Installez d'abord Homebrew, ou téléchargez depuis le site"))
          ;; macOS < 14 : installeur officiel (.dmg universel)
@@ -1391,11 +1784,11 @@ open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
              (metal-deps--scoop-ensure-7zip)
              (metal-deps--scoop-add-extras-bucket)
              (message "📦 Installation de SWI-Prolog via Scoop...")
-             (async-shell-command "scoop install swipl" "*SWI-Prolog Install*"))
+             (metal-console-lancer "scoop install swipl" "*SWI-Prolog Install*"))
          (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
       ('gnu/linux
        (if (metal-deps--apt-present-p)
-           (async-shell-command "sudo apt install swi-prolog -y" "*SWI-Prolog Install*")
+           (metal-console-lancer "sudo apt install swi-prolog -y" "*SWI-Prolog Install*")
          (message "Installez swi-prolog avec votre gestionnaire de paquets"))))))
 
 (defun metal-deps-desinstaller-swi-prolog ()
@@ -1417,16 +1810,16 @@ open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
           ;; Installé via Homebrew
           ((and (metal-deps--brew-present-p)
                 (= 0 (call-process "brew" nil nil nil "list" "swi-prolog")))
-           (async-shell-command "brew uninstall swi-prolog" "*SWI-Prolog Uninstall*"))
+           (metal-console-lancer "brew uninstall swi-prolog" "*SWI-Prolog Uninstall*"))
           (t
            (message "SWI-Prolog installé à l'extérieur de MetalEmacs. Désinstallez manuellement."))))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (async-shell-command "scoop uninstall swipl" "*SWI-Prolog Uninstall*")
+             (metal-console-lancer "scoop uninstall swipl" "*SWI-Prolog Uninstall*")
            (message "SWI-Prolog installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "swi-prolog"))
-             (async-shell-command "sudo apt remove swi-prolog -y" "*SWI-Prolog Uninstall*")
+             (metal-console-lancer "sudo apt remove swi-prolog -y" "*SWI-Prolog Uninstall*")
            (message "SWI-Prolog installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -1442,18 +1835,18 @@ open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
     (pcase system-type
       ('darwin
        (if (metal-deps--brew-present-p)
-           (async-shell-command "brew install poppler automake autoconf pkg-config" "*Poppler Install*")
+           (metal-console-lancer "brew install poppler automake autoconf pkg-config" "*Poppler Install*")
          (message "Installez d'abord Homebrew")))
       ('windows-nt
        (if (metal-deps--scoop-present-p)
            (progn
              (metal-deps--scoop-ensure-7zip)
              (message "📦 Installation de Poppler via Scoop...")
-             (async-shell-command "scoop install poppler" "*Poppler Install*"))
+             (metal-console-lancer "scoop install poppler" "*Poppler Install*"))
          (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
       ('gnu/linux
        (if (metal-deps--apt-present-p)
-           (async-shell-command "sudo apt install -y libpoppler-dev libpoppler-glib-dev poppler-utils autoconf automake" "*Poppler Install*")
+           (metal-console-lancer "sudo apt install -y libpoppler-dev libpoppler-glib-dev poppler-utils autoconf automake" "*Poppler Install*")
          (message "Installez poppler avec votre gestionnaire de paquets"))))))
 
 (defcustom metal-deps-ghostscript-pkg-url
@@ -1478,7 +1871,7 @@ téléchargement (URL périmée, réseau), ouvre la page de Koch dans le
 navigateur pour un téléchargement manuel."
   (let* ((url metal-deps-ghostscript-pkg-url)
          (dest (expand-file-name (file-name-nondirectory url) "~/Downloads"))
-         (buf "*Installation Ghostscript*"))
+         (buf (metal-console-nom "Installation Ghostscript")))
     (metal-deps--journaliser "Installation de Ghostscript via .pkg : %s" url)
     (with-current-buffer (get-buffer-create buf)
       (let ((inhibit-read-only t))
@@ -1493,6 +1886,9 @@ navigateur pour un téléchargement manuel."
                  (shell-quote-argument url)
                  (shell-quote-argument dest)))
            (proc (start-process-shell-command "metal-gs-pkg" buf cmd)))
+      ;; Filtre de console : la sortie de curl s'affiche au fil de l'eau
+      ;; au lieu d'attendre un clic dans la fenêtre.
+      (set-process-filter proc #'metal-console--filtre)
       (set-process-sentinel
        proc
        (lambda (_p event)
@@ -1505,7 +1901,7 @@ navigateur pour un téléchargement manuel."
                (insert (format "\n⚠ Téléchargement impossible : %s\n" (string-trim event))
                        "Ouverture de la page de téléchargement…\n")
                (browse-url "https://pages.uoregon.edu/koch/"))))
-         (run-with-timer 1 nil #'metal-deps-afficher-etat))))))
+         (run-with-timer 1 nil #'metal-deps-afficher-etat t))))))
 
 (defun metal-deps-installer-ghostscript ()
   "Installe Ghostscript (gs), moteur de rendu de `doc-view'.
@@ -1525,7 +1921,7 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
       ('darwin
        (if (metal-deps--macos-moderne-p)
            (if (metal-deps--brew-present-p)
-               (async-shell-command "brew install ghostscript" "*Ghostscript Install*")
+               (metal-console-lancer "brew install ghostscript" "*Ghostscript Install*")
              (message "Installez d'abord Homebrew"))
          ;; macOS < 14 : installeur .pkg autonome
          (when (yes-or-no-p
@@ -1533,11 +1929,11 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
            (metal-deps--installer-ghostscript-pkg))))
       ('windows-nt
        (if (metal-deps--scoop-present-p)
-           (async-shell-command "scoop install ghostscript" "*Ghostscript Install*")
+           (metal-console-lancer "scoop install ghostscript" "*Ghostscript Install*")
          (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
       ('gnu/linux
        (if (metal-deps--apt-present-p)
-           (async-shell-command "sudo apt install -y ghostscript" "*Ghostscript Install*")
+           (metal-console-lancer "sudo apt install -y ghostscript" "*Ghostscript Install*")
          (message "Installez ghostscript avec votre gestionnaire de paquets"))))))
 
 (defun metal-deps-desinstaller-ghostscript ()
@@ -1553,7 +1949,7 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
           ;; Installé via Homebrew (Mac >= 14)
           ((and (metal-deps--brew-present-p)
                 (= 0 (call-process "brew" nil nil nil "list" "ghostscript")))
-           (async-shell-command "brew uninstall ghostscript" "*Ghostscript Uninstall*"))
+           (metal-console-lancer "brew uninstall ghostscript" "*Ghostscript Uninstall*"))
           ;; Installé via le .pkg autonome : binaires dans /usr/local/bin.
           ;; La suppression nécessite root ; on guide plutôt que de tenter
           ;; un rm -rf silencieux sur /usr/local.
@@ -1571,11 +1967,11 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
            (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement."))))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (async-shell-command "scoop uninstall ghostscript" "*Ghostscript Uninstall*")
+             (metal-console-lancer "scoop uninstall ghostscript" "*Ghostscript Uninstall*")
            (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "ghostscript"))
-             (async-shell-command "sudo apt remove ghostscript -y" "*Ghostscript Uninstall*")
+             (metal-console-lancer "sudo apt remove ghostscript -y" "*Ghostscript Uninstall*")
            (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 (defun metal-deps-installer-pdf-tools ()
@@ -1709,11 +2105,11 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
         ('darwin
          (if (and (metal-deps--brew-present-p)
                   (= 0 (call-process "brew" nil nil nil "list" "poppler")))
-             (async-shell-command "brew uninstall poppler" "*Poppler Uninstall*")
+             (metal-console-lancer "brew uninstall poppler" "*Poppler Uninstall*")
            (message "Poppler installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "poppler-utils"))
-             (async-shell-command "sudo apt remove poppler-utils -y" "*Poppler Uninstall*")
+             (metal-console-lancer "sudo apt remove poppler-utils -y" "*Poppler Uninstall*")
            (message "Poppler installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -1744,18 +2140,19 @@ Ouvre un sélecteur de fichiers pour choisir le .deb."
       (user-error "Fichier introuvable : %s" deb))
     (metal-deps--journaliser "Installation de draw.io depuis %s" deb)
     (message "📦 Installation de draw.io...")
-    (let ((buf-name "*draw.io Install*"))
+    (let ((buf-name (metal-console-nom "draw.io Install")))
       (set-process-sentinel
-       (start-process-shell-command
-        "drawio-install" buf-name
-        (format "sudo dpkg -i %s; sudo apt install -f -y"
-                (shell-quote-argument (expand-file-name deb))))
+       (metal-console-brancher
+        (start-process-shell-command
+         "drawio-install" buf-name
+         (format "sudo dpkg -i %s; sudo apt install -f -y"
+                 (shell-quote-argument (expand-file-name deb)))))
        (lambda (proc _event)
          (when (eq (process-status proc) 'exit)
            (if (= (process-exit-status proc) 0)
                (progn
                  (message "✅ draw.io installé avec succès")
-                 (run-with-timer 1 nil #'metal-deps-afficher-etat))
+                 (run-with-timer 1 nil #'metal-deps-afficher-etat t))
              (message "❌ Erreur lors de l'installation de draw.io. Voir %s" buf-name)))))
       (display-buffer buf-name))))
 
@@ -1770,7 +2167,7 @@ Ouvre un sélecteur de fichiers pour choisir le .deb."
        (if (metal-deps--brew-present-p)
            (progn
              (message "📦 Installation de draw.io via Homebrew...")
-             (async-shell-command "brew install --cask drawio" "*draw.io Install*"))
+             (metal-console-lancer "brew install --cask drawio" "*draw.io Install*"))
          (browse-url "https://github.com/jgraph/drawio-desktop/releases")
          (message "Téléchargez draw.io depuis le site web")))
       ('windows-nt
@@ -1779,7 +2176,7 @@ Ouvre un sélecteur de fichiers pour choisir le .deb."
              (metal-deps--scoop-ensure-7zip)
              (metal-deps--scoop-add-extras-bucket)
              (message "📦 Installation de draw.io via Scoop...")
-             (async-shell-command "scoop install draw.io" "*draw.io Install*"))
+             (metal-console-lancer "scoop install draw.io" "*draw.io Install*"))
          (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
       ('gnu/linux
        (metal-deps-installer-drawio-deb)))))
@@ -1795,15 +2192,15 @@ Ouvre un sélecteur de fichiers pour choisir le .deb."
         ('darwin
          (if (and (metal-deps--brew-present-p)
                   (= 0 (call-process "brew" nil nil nil "list" "--cask" "drawio")))
-             (async-shell-command "brew uninstall --cask drawio" "*draw.io Uninstall*")
+             (metal-console-lancer "brew uninstall --cask drawio" "*draw.io Uninstall*")
            (message "draw.io installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (async-shell-command "scoop uninstall draw.io" "*draw.io Uninstall*")
+             (metal-console-lancer "scoop uninstall draw.io" "*draw.io Uninstall*")
            (message "draw.io installé à l'extérieur de Scoop. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "draw.io"))
-             (async-shell-command "sudo apt remove draw.io -y" "*draw.io Uninstall*")
+             (metal-console-lancer "sudo apt remove draw.io -y" "*draw.io Uninstall*")
            (message "draw.io installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -1821,11 +2218,12 @@ dans les fichiers de projet."
     (pcase system-type
       ('darwin
        (if (metal-deps--brew-present-p)
-           (let ((buf-name "*ripgrep Install*"))
+           (let ((buf-name (metal-console-nom "ripgrep Install")))
              (message "📦 Installation de ripgrep via Homebrew...")
              (set-process-sentinel
-              (start-process-shell-command "ripgrep-install" buf-name
-                                           "brew install ripgrep")
+              (metal-console-brancher
+               (start-process-shell-command "ripgrep-install" buf-name
+                                            "brew install ripgrep"))
               (lambda (proc _event)
                 (when (eq (process-status proc) 'exit)
                   (if (= (process-exit-status proc) 0)
@@ -1840,11 +2238,11 @@ dans les fichiers de projet."
            (progn
              (metal-deps--scoop-ensure-7zip)
              (message "📦 Installation de ripgrep via Scoop...")
-             (async-shell-command "scoop install ripgrep" "*ripgrep Install*"))
+             (metal-console-lancer "scoop install ripgrep" "*ripgrep Install*"))
          (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
       ('gnu/linux
        (if (metal-deps--apt-present-p)
-           (async-shell-command "sudo apt install ripgrep -y" "*ripgrep Install*")
+           (metal-console-lancer "sudo apt install ripgrep -y" "*ripgrep Install*")
          (message "Installez ripgrep avec votre gestionnaire de paquets"))))))
 
 (defun metal-deps-desinstaller-ripgrep ()
@@ -1858,15 +2256,15 @@ dans les fichiers de projet."
         ('darwin
          (if (and (metal-deps--brew-present-p)
                   (= 0 (call-process "brew" nil nil nil "list" "ripgrep")))
-             (async-shell-command "brew uninstall ripgrep" "*ripgrep Uninstall*")
+             (metal-console-lancer "brew uninstall ripgrep" "*ripgrep Uninstall*")
            (message "ripgrep installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (async-shell-command "scoop uninstall ripgrep" "*ripgrep Uninstall*")
+             (metal-console-lancer "scoop uninstall ripgrep" "*ripgrep Uninstall*")
            (message "ripgrep installé à l'extérieur de Scoop. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "ripgrep"))
-             (async-shell-command "sudo apt remove ripgrep -y" "*ripgrep Uninstall*")
+             (metal-console-lancer "sudo apt remove ripgrep -y" "*ripgrep Uninstall*")
            (message "ripgrep installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -1885,10 +2283,11 @@ dans les fichiers de projet."
     (metal-deps--journaliser "Installation de MiKTeX")
     (metal-deps--scoop-ensure-7zip)
     (message "📦 Installation de MiKTeX via Scoop (peut prendre plusieurs minutes)...")
-    (let ((buf-name "*MiKTeX Install*"))
+    (let ((buf-name (metal-console-nom "MiKTeX Install")))
       (set-process-sentinel
-       (start-process-shell-command "miktex-install" buf-name
-                                   "scoop install miktex")
+       (metal-console-brancher
+        (start-process-shell-command "miktex-install" buf-name
+                                     "scoop install miktex"))
        (lambda (proc _event)
          (when (eq (process-status proc) 'exit)
            (if (= (process-exit-status proc) 0)
@@ -1927,7 +2326,7 @@ dans les fichiers de projet."
     (when (yes-or-no-p "Voulez-vous vraiment désinstaller MiKTeX ? ")
       (metal-deps--journaliser "Désinstallation de MiKTeX")
       (if (metal-deps--scoop-present-p)
-          (async-shell-command "scoop uninstall miktex" "*MiKTeX Uninstall*")
+          (metal-console-lancer "scoop uninstall miktex" "*MiKTeX Uninstall*")
         (message "MiKTeX installé à l'extérieur de Scoop. Désinstallez manuellement.")))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -2320,7 +2719,7 @@ affiche un buffer d'aide avec les instructions manuelles (champ
          (cmd
           (let* ((cmdline (mapconcat #'metal-deps--quote-safe cmd " "))
                  (compilation-buffer-name-function
-                  (lambda (_) (format "*Installation %s*" (plist-get spec :nom)))))
+                  (lambda (_) (metal-console-nom (format "Installation %s" (plist-get spec :nom))))))
             (when (yes-or-no-p
                    (format "Installer « %s » via %s ?  Commande : %s "
                            (plist-get spec :nom) (car cmd) cmdline))
@@ -2350,7 +2749,7 @@ affiche un buffer d'aide avec les instructions manuelles (champ
                            "Agent « %s » : CLI installée mais non détectée ; un nouveau terminal / redémarrage peut être requis"
                            (plist-get agent-spec :nom)))
                         (when (fboundp 'metal-deps-afficher-etat)
-                          (run-with-timer 0.5 nil #'metal-deps-afficher-etat))))))))
+                          (run-with-timer 0.5 nil #'metal-deps-afficher-etat t))))))))
               (message
                "Installation lancée.  Une fois terminée, utiliser le bouton « Authentifier » ou « M-x metal-agent-authentifier-cli »."))))
          ;; Cas 2 : pas de gestionnaire mais des instructions manuelles.
@@ -2465,7 +2864,7 @@ laisserait l'utilisateur devant un état à moitié défait."
             ;; du tampon de compilation : `compile' est asynchrone.
             (let* ((cmdline (mapconcat #'metal-deps--quote-safe cmd " "))
                    (compilation-buffer-name-function
-                    (lambda (_) (format "*Désinstallation %s*" nom))))
+                    (lambda (_) (metal-console-nom (format "Désinstallation %s" nom)))))
               (metal-deps--journaliser "Désinstallation CLI : %s" cmdline)
               (compile cmdline t)
               (message "Désinstallation de « %s » lancée…" nom))
@@ -2772,7 +3171,7 @@ Demande interactivement les informations nécessaires."
         (metal-deps--journaliser "Agent personnalisé « %s » ajouté (commande : %s)"
                                  nom commande)
         (message "Agent « %s » ajouté." nom)
-        (run-with-timer 0.3 nil #'metal-deps-afficher-etat)))))
+        (run-with-timer 0.3 nil #'metal-deps-afficher-etat t)))))
 
 (defun metal-deps--sync-providers-avec-catalogue ()
   "Synchronise les entrées catalogue dans `metal-agent-providers'.
@@ -2873,9 +3272,53 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
 ;;; Interface graphique avec widgets
 ;;; ═══════════════════════════════════════════════════════════════════
 
-(defun metal-deps-afficher-etat ()
-  "Affiche l'état des dépendances avec interface graphique."
-  (interactive)
+(defun metal-deps-afficher-etat (&optional forcer)
+  "Affiche l'état des dépendances avec interface graphique.
+Avec FORCER non-nil — ce que fait tout appel interactif, ainsi que le
+bouton « Rafraîchir » et les sentinelles de fin d'installation — le
+cache de détection est vidé au préalable et l'état est relu du système.
+
+Sans FORCER, l'affichage se contente du cache s'il est chaud, ce qui
+rend la réouverture instantanée.  S'il est froid ET que l'appel vient
+d'un clic, on peint d'abord un écran d'attente et la détection part sur
+un timer : la fenêtre s'ouvre tout de suite au lieu de faire patienter
+devant un Emacs figé."
+  (interactive (list t))
+  (when forcer (metal-deps--cache-vider))
+  (if (or metal-deps--cache-chaud (not (eq system-type 'windows-nt)))
+      (metal-deps--rendre-etat)
+    ;; Cache froid sous Windows : afficher, puis détecter.
+    (metal-deps--afficher-patience)
+    (run-with-timer 0.05 nil
+                    (lambda ()
+                      (metal-deps-prechauffer)
+                      (metal-deps--rendre-etat)))))
+
+(defun metal-deps--afficher-patience ()
+  "Peint immédiatement un Assistant minimal pendant la détection.
+Le tampon est le même que celui du rendu complet : il sera simplement
+réécrit sur place, sans changement de fenêtre ni saut visuel."
+  (let ((buf (get-buffer-create "*MetalEmacs Assistant*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (remove-overlays)
+        (insert "\n  ")
+        (insert (propertize "Assistant MetalEmacs"
+                            'face '(:weight bold :height 1.4)))
+        (insert "\n\n  ")
+        (insert (propertize "Détection des logiciels installés…" 'face 'shadow))
+        (insert "\n")))
+    (display-buffer buf)
+    (redisplay t)))
+
+(defun metal-deps--rendre-etat ()
+  "Construit et affiche le tampon de l'Assistant.
+Corps historique de `metal-deps-afficher-etat', désormais appelé sous
+`metal-deps--avec-cache' : les détections répétées d'un même binaire ne
+sont payées qu'une fois par rendu, et pas du tout si le cache est déjà
+chaud."
+  (metal-deps--avec-cache
   ;; Précharger les icônes SVG (silencieux ; hors-ligne, chaque emoji
   ;; retombe simplement sur son caractère Unicode).
   (when (fboundp 'metal-icones-precharger)
@@ -3155,14 +3598,16 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
                      "Tout installer")
       (widget-insert "  ")
       (widget-create 'push-button
-                     :notify (lambda (&rest _) (metal-deps-afficher-etat))
+                     ;; FORCER : le bouton existe pour relire le système,
+                     ;; pas pour redessiner le cache.
+                     :notify (lambda (&rest _) (metal-deps-afficher-etat t))
                      "Rafraîchir")
       (when metal-deps--installation-en-cours
         (widget-insert "  ")
         (widget-create 'push-button
                        :notify (lambda (&rest _)
                                  (metal-deps--annuler-file-attente)
-                                 (run-with-timer 1 nil #'metal-deps-afficher-etat))
+                                 (run-with-timer 1 nil #'metal-deps-afficher-etat t))
                        "Annuler"))
       (widget-insert "\n\n"))
       
@@ -3194,7 +3639,12 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
     ;; le restaure explicitement après pour préserver le défilement.
     (when (and start-precedent (get-buffer-window buf))
       (set-window-start (get-buffer-window buf)
-                        (min start-precedent (point-max))))))
+                        (min start-precedent (point-max))))
+    ;; Le rendu vient de faire toutes les détections : le cache est chaud.
+    ;; Marqué ICI plutôt que dans `metal-deps-prechauffer' parce que le
+    ;; rendu appelle `metal-deps--rafraichir-path-agent', qui invalide le
+    ;; cache s'il découvre un répertoire à ajouter au PATH.
+    (setq metal-deps--cache-chaud t))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Commandes d'installation groupées (séquentielles)
@@ -3216,7 +3666,7 @@ conflits entre gestionnaires de paquets (Homebrew, Scoop, apt)."
        a-installer
        (lambda ()
          (message "✓ Installation des logiciels terminée. Cliquez Rafraîchir pour vérifier.")
-         (run-with-timer 1 nil #'metal-deps-afficher-etat))))))
+         (run-with-timer 1 nil #'metal-deps-afficher-etat t))))))
 
 (defun metal-deps-installer-tout ()
   "Installe tous les composants manquants (prérequis, gestionnaires, logiciels, PDF).
@@ -3234,7 +3684,7 @@ conflits entre gestionnaires de paquets."
        a-installer
        (lambda ()
          (message "✓ Installation complète terminée. Cliquez Rafraîchir pour vérifier.")
-         (run-with-timer 1 nil #'metal-deps-afficher-etat))))))
+         (run-with-timer 1 nil #'metal-deps-afficher-etat t))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Vérification au démarrage

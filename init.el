@@ -1162,34 +1162,63 @@ buffers internes (nom débutant par une espace)."
     (global-tab-line-mode 1)))
 ;;; -------------------------------------------------------------------------
 
+(defun metal/tampon-emporte-sa-fenetre-p (window buffer)
+  "Retourne non-nil si BUFFER doit emporter sa fenêtre à la fermeture.
+Vrai pour les consoles MetalEmacs (préfixe `metal-console-prefixe',
+défini dans metal-deps.el) et, plus largement, pour tout tampon logé
+dans une side-window dédiée.
+
+Le test par préfixe est écrit en dur en second recours : metal-deps est
+chargé APRÈS cette section, et l'advice doit rester correcte même si le
+module a échoué au chargement."
+  (let ((win (or (and (buffer-live-p buffer) (get-buffer-window buffer))
+                 window))
+        (nom (and (buffer-live-p buffer) (buffer-name buffer))))
+    (and (window-live-p win)
+         (not (one-window-p 'nomini))
+         (or (and nom (string-prefix-p "*Metal Console: " nom))
+             (and (window-parameter win 'window-side)
+                  (window-dedicated-p win))))))
+
 (define-advice tab-line-close-tab (:override (&optional e))
   "Ferme l'onglet actif.
 Si l'onglet apparait dans une autre fenêtre, ferme l'onglet en utilisant la fonction `bury-buffer'.
 Si l'onglet est unique, ferme l'onglet avec la fonction `kill-buffer`.
-Finalement, si c'est le dernier onglet d'une fenêtre,la fenêtre est fermée avec la fonction `delete-window`."
+Finalement, si c'est le dernier onglet d'une fenêtre,la fenêtre est fermée avec la fonction `delete-window`.
+
+CAS PARTICULIER — consoles et side-windows dédiées.  La logique
+ci-dessous ne supprime la fenêtre que si l'onglet fermé était son SEUL
+onglet.  Or la fenêtre du bas garde dans son historique les tampons
+qu'elle a déjà montrés : `tab-line-tabs-window-buffers' en renvoie donc
+plusieurs, la fenêtre survit, et Emacs y affiche `other-buffer' —
+c.-à-d. le tampon le plus récent, typiquement *MetalEmacs Assistant*,
+qui se retrouve affiché DEUX FOIS.  Pour ces tampons-là on passe donc
+par `quit-restore-window', qui retire la fenêtre au lieu de la recycler."
   (interactive "e")
   (let* ((posnp (event-start e))
          (window (posn-window posnp))
          (buffer (get-pos-property 1 'tab (car (posn-string posnp)))))
-    (with-selected-window window
-      (let ((tab-list (tab-line-tabs-window-buffers))
-            (buffer-list (flatten-list
-                          (seq-reduce (lambda (list window)
-                                        (select-window window t)
-                                        (cons (tab-line-tabs-window-buffers) list))
-                                      (window-list) nil))))
-        (select-window window)
-        (if (> (seq-count (lambda (b) (eq b buffer)) buffer-list) 1)
-            (progn
-              (if (eq buffer (current-buffer))
-                  (bury-buffer)
-                (set-window-prev-buffers window (assq-delete-all buffer (window-prev-buffers)))
-                (set-window-next-buffers window (delq buffer (window-next-buffers))))
-              (unless (cdr tab-list)
-                (ignore-errors (delete-window window))))
-          (and (kill-buffer buffer)
-               (unless (cdr tab-list)
-                 (ignore-errors (delete-window window)))))))
+    (if (metal/tampon-emporte-sa-fenetre-p window buffer)
+        (quit-restore-window (get-buffer-window buffer) 'kill)
+      (with-selected-window window
+        (let ((tab-list (tab-line-tabs-window-buffers))
+              (buffer-list (flatten-list
+                            (seq-reduce (lambda (list window)
+                                          (select-window window t)
+                                          (cons (tab-line-tabs-window-buffers) list))
+                                        (window-list) nil))))
+          (select-window window)
+          (if (> (seq-count (lambda (b) (eq b buffer)) buffer-list) 1)
+              (progn
+                (if (eq buffer (current-buffer))
+                    (bury-buffer)
+                  (set-window-prev-buffers window (assq-delete-all buffer (window-prev-buffers)))
+                  (set-window-next-buffers window (delq buffer (window-next-buffers))))
+                (unless (cdr tab-list)
+                  (ignore-errors (delete-window window))))
+            (and (kill-buffer buffer)
+                 (unless (cdr tab-list)
+                   (ignore-errors (delete-window window))))))))
     (force-mode-line-update)))
 
 (global-tab-line-mode)
@@ -1691,6 +1720,15 @@ Raccourci Treemacs : M (Shift+M)"
 ;; routé vers la fenêtre d'édition principale (en haut, à côté de *scratch*)
 ;; par la règle qui suit.  Le motif side-window le renvoyait sinon dans la
 ;; fenêtre basse, où il se greffait en onglet à côté du *Tableau-de-bord*.
+
+;; NOTE : ces tampons-ci sont nommés par Emacs lui-même (ou par
+;; metal-quarto.el) et ne peuvent donc pas rejoindre le nommage
+;; « *Metal Console: … » de la règle unifiée plus bas.  Ils gardent leur
+;; entrée propre, volontairement SANS `dedicated' : *Warnings* et
+;; *Backtrace* surgissent de façon imprévisible, et une fenêtre qui
+;; s'évanouit sous les yeux gêne plus qu'elle n'aide en diagnostic.
+;; (Faire passer *Quarto Render* par `metal-console-lancer' dans
+;; metal-quarto.el le ferait basculer sous la règle unifiée.)
 (setq display-buffer-alist
       (append display-buffer-alist
               '(("\\`\\*\\(Quarto Render\\|Compile-Log\\|Warnings\\|Backtrace\\|Async Shell Command\\)\\*\\'"
@@ -1738,6 +1776,37 @@ fenêtre principale via `metal/fenetre-principale-p'."
 (add-to-list 'display-buffer-alist
              '("\\`\\*compilation\\*\\'"
                (metal/afficher-compilation-en-haut)))
+
+;; Consoles MetalEmacs — RÈGLE UNIQUE.
+;;
+;; Elle ne repose pas sur une énumération de motifs à rallonge, mais sur
+;; le nommage produit par `metal-console-nom' (metal-deps.el) : tout
+;; tampon recevant la sortie d'un installateur ou d'un script externe
+;; s'appelle « *Metal Console: … ».  Un installateur ajouté plus tard en
+;; hérite sans qu'il faille revenir ici.
+;;
+;; `dedicated . t' est le point décisif.  Une side-window est déjà
+;; dédiée, mais FAIBLEMENT (valeur `side'), ce qui n'entraîne pas la
+;; suppression de la fenêtre à la mort du tampon.  La dédicace forte le
+;; fait — et couvre toutes les voies de fermeture : le × de la tab-line,
+;; C-x k, et la sentinelle de fin d'installateur.
+;;
+;; `slot' distinct de 0 : une fenêtre fortement dédiée n'accepte pas un
+;; second tampon.  Sans slot propre, une console et un *Warnings*
+;; simultanés se disputeraient la même fenêtre.
+;;
+;; APPEND (le `t' final) : la règle est ajoutée en QUEUE de
+;; `display-buffer-alist'.  `display-buffer' s'arrête à la première
+;; correspondance ; placée en tête, cette règle coifferait le routage de
+;; *compilation* vers la fenêtre du haut.
+(add-to-list 'display-buffer-alist
+             '("\\`\\*Metal Console: "
+               (display-buffer-in-side-window)
+               (side . bottom)
+               (window-height . 0.30)
+               (slot . 1)
+               (dedicated . t))
+             t)
 
 (global-set-key (kbd "C-+") 'metal-text-scale-increase-mouse)
 (global-set-key (kbd "C-=") 'metal-text-scale-increase-mouse)
