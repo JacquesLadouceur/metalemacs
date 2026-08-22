@@ -288,8 +288,11 @@ natif de l'application (Cmd+P sur macOS)."
      ;; ----- Fichier -----
      (:emoji "💾" :color ,(metal-pdf--coul 'save)
              :tooltip "Sauvegarder le PDF avec annotations" :command save-buffer)
-     (:emoji "📂" :color ,(metal-pdf--coul 'print)
-             :tooltip "Ouvrir dans l'application système (Cmd+P pour imprimer)"
+     ;; Imprimante plutôt que dossier : le bouton sert à imprimer, même si
+     ;; techniquement il délègue au lecteur système, d'où l'icône choisie
+     ;; pour l'intention et non pour le mécanisme.
+     (:emoji "🖨️" :color ,(metal-pdf--coul 'print)
+             :tooltip "Imprimer (ouvre le PDF dans l'application système)"
              :command metal-pdf-ouvrir-systeme))))
 
 ;;; --- Mode mineur ---------------------------------------------------------
@@ -308,11 +311,7 @@ natif de l'application (Cmd+P sur macOS)."
   (when metal-pdf-toolbar-auto-enable
     (metal-pdf-toolbar-mode 1)))
 
-;; Profondeur -90 : la barre s'installe AVANT les autres entrées du hook.
-;; `run-hooks' interrompt toute la chaîne dès qu'une entrée lève une erreur ;
-;; le recoloriage et l'auto-revert dialoguent avec epdfinfo et peuvent donc
-;; échouer.  En passant en premier, la barre ne dépend plus de leur succès.
-(add-hook 'pdf-view-mode-hook #'metal-pdf--maybe-enable -90)
+(add-hook 'pdf-view-mode-hook #'metal-pdf--maybe-enable)
 
 ;; Raccourci pour basculer la barre
 (with-eval-after-load 'pdf-view
@@ -326,39 +325,16 @@ natif de l'application (Cmd+P sur macOS)."
         (cons (face-foreground 'default nil t)
               (face-background 'default nil t))))
 
-(defun metal-pdf--appliquer-couleurs ()
-  "Applique le recoloriage du thème au PDF courant.
-Le corps est protégé : `pdf-view-midnight-minor-mode' et `pdf-view-redisplay'
-dialoguent avec le serveur epdfinfo, dont la version peut ne pas correspondre
-au Lisp (options de rendu inconnues).  Un échec est signalé mais n'interrompt
-pas le reste de `pdf-view-mode-hook'."
-  (with-demoted-errors "metal-pdf (couleurs) : %S"
-    (metal-pdf-sync-colors)
-    (pdf-view-midnight-minor-mode 1)   ; recoloriage actif
-    (pdf-view-redisplay t)))
-
-(add-hook 'pdf-view-mode-hook #'metal-pdf--appliquer-couleurs)
+(add-hook 'pdf-view-mode-hook
+          (lambda ()
+            (metal-pdf-sync-colors)
+            (pdf-view-midnight-minor-mode 1)   ; recoloriage actif
+            (pdf-view-redisplay t)))
 
 (advice-add 'load-theme :after #'metal-pdf-sync-colors)
 
 ;; Auto-revert dans les PDF (recharge si le fichier change sur disque).
-(defun metal-pdf--activer-tab-line ()
-  "Force `tab-line-mode' dans le tampon PDF courant.
-Certains tampons spéciaux sont exclus de la tab-line ; `pdf-view-mode'
-en fait partie sur certaines plateformes, d'où l'exclusion levée
-localement."
-  (with-demoted-errors "metal-pdf (tab-line) : %S"
-    (setq-local tab-line-exclude nil)
-    (tab-line-mode 1)))
-
-(add-hook 'pdf-view-mode-hook #'metal-pdf--activer-tab-line -80)
-
-(defun metal-pdf--activer-auto-revert ()
-  "Active `auto-revert-mode' dans le tampon PDF courant."
-  (with-demoted-errors "metal-pdf (auto-revert) : %S"
-    (auto-revert-mode 1)))
-
-(add-hook 'pdf-view-mode-hook #'metal-pdf--activer-auto-revert)
+(add-hook 'pdf-view-mode-hook (lambda () (auto-revert-mode 1)))
 
 ;;; --- Choix du moteur d'ouverture (pdf-tools ou doc-view) ---------
 
