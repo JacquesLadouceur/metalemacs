@@ -242,6 +242,40 @@ un changement d'environnement Python."
 ;; Alias pour compatibilité
 (defalias 'my/treemacs-refresh-stripes 'metal-treemacs--refresh-stripes)
 
+;;; ── Recalcul des bandes après un redessin ───────────────────────────
+;; Treemacs efface et réécrit tout son tampon dès qu'un projet est ajouté
+;; ou retiré (« v » et « V »), et les recouvrements disparaissent avec le
+;; texte qui les portait.  Les conseils posés plus bas sur `treemacs-refresh'
+;; et consorts ne suffisent pas : dans le trajet de « v », le tampon est
+;; redessiné APRÈS eux, par le minuteur d'annotations différées puis par
+;; `treemacs-goto-node'.  On raccroche donc le recalcul à la modification du
+;; tampon elle-même, ce qui couvre tous les trajets, présents et à venir.
+;;
+;; Le recalcul ne touche qu'aux recouvrements, jamais au texte : il ne peut
+;; pas se déclencher lui-même.  Le minuteur regroupe les modifications d'un
+;; même redessin en un seul calcul.
+
+(defvar metal-treemacs--stripe-timer nil
+  "Minuteur de regroupement du recalcul des bandes alternées.")
+
+(defun metal-treemacs--restripe-tous-tampons ()
+  "Recalculer les bandes dans tous les tampons Treemacs vivants."
+  (setq metal-treemacs--stripe-timer nil)
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when (eq major-mode 'treemacs-mode)
+          (metal-treemacs--refresh-stripes))))))
+
+(defun metal-treemacs--planifier-bandes (&rest _)
+  "Reprogrammer le recalcul des bandes après une modification du tampon.
+Destinée à `after-change-functions', d'où les arguments ignorés."
+  (when (eq major-mode 'treemacs-mode)
+    (when (timerp metal-treemacs--stripe-timer)
+      (cancel-timer metal-treemacs--stripe-timer))
+    (setq metal-treemacs--stripe-timer
+          (run-with-idle-timer 0.1 nil #'metal-treemacs--restripe-tous-tampons))))
+
 
 (with-eval-after-load 'treemacs
   (add-hook 'treemacs-mode-hook
@@ -251,6 +285,10 @@ un changement d'environnement Python."
                                      (when (treemacs-get-local-buffer)
                                        (with-current-buffer (treemacs-get-local-buffer)
                                          (metal-treemacs--stripe-rows)))))))
+  (add-hook 'treemacs-mode-hook
+            (lambda ()
+              (add-hook 'after-change-functions
+                        #'metal-treemacs--planifier-bandes nil t)))
   (add-hook 'treemacs-mode-hook (lambda () (setq-local indicate-empty-lines nil)))
   (add-hook 'treemacs-mode-hook
             (lambda ()
@@ -517,13 +555,19 @@ Le nom historique est conservé pour ne pas rompre les appels existants."
 
 (defun metal--nom-volume-reseau (unc)
   "Nom court pour le partage UNC, sous la forme « Partage (serveur) ».
-Le nom d'hôte est réduit à son premier segment : un nom MagicDNS complet
-occuperait sinon toute la largeur de Treemacs."
+Un nom d'hôte est réduit à son premier segment : un nom MagicDNS complet
+occuperait sinon toute la largeur de Treemacs.  Une adresse IP est en
+revanche gardée entière — la tronquer au premier point donnerait « 100 »
+pour toute adresse Tailscale."
   (let* ((parts   (split-string (subst-char-in-string ?\\ ?/ unc) "/" t))
          (hote    (car parts))
-         (partage (cadr parts)))
-    (if (and hote partage)
-        (format "%s (%s)" partage (car (split-string hote "\\.")))
+         (partage (cadr parts))
+         (court   (and hote
+                       (if (string-match-p "\\`[0-9]+\\(\\.[0-9]+\\)+\\'" hote)
+                           hote
+                         (car (split-string hote "\\."))))))
+    (if (and court partage)
+        (format "%s (%s)" partage court)
       (or partage hote unc))))
 
 (defun metal--treemacs-project-name (path)
