@@ -7,7 +7,7 @@
 ;;; Commentaires:
 ;; Ce module gère la configuration Treemacs pour MetalEmacs :
 ;; - Apparence style Finder (lignes alternées)
-;; - Gestion des clés USB (ajout/retrait)
+;; - Gestion des volumes : clés USB et partages réseau (montage/démontage)
 ;; - Ouverture automatique au démarrage
 ;; - Raccourcis clavier
 ;; - Polices harmonisées avec le reste de l'interface
@@ -390,70 +390,184 @@ préservation de la taille de la side-window dans Emacs."
   (global-set-key (kbd "C-x t w")   #'treemacs-set-width))
 
 ;;; ═══════════════════════════════════════════════════════════════════
-;;; Gestion des clés USB
+;;; Gestion des volumes : clés USB et partages réseau
 ;;; ═══════════════════════════════════════════════════════════════════
 
+;; « v » monte dans Treemacs tous les volumes détectés, « V » les retire
+;; tous.  Deux familles sont couvertes : les volumes amovibles (clés USB)
+;; et les partages réseau montés dans l'Explorateur Windows.
+;;
+;; Sous Windows, la détection ne balaie plus les lettres de lecteur.  Un
+;; `file-exists-p' sur la lettre d'un partage déconnecté bloque Emacs le
+;; temps du délai SMB — plusieurs dizaines de secondes quand le tunnel
+;; n'est pas monté.  On interroge à la place la table locale des
+;; connexions (`Win32_NetworkConnection'), qui ne touche pas au réseau, et
+;; l'on retient le chemin UNC plutôt que la lettre : la lettre dépend de
+;; la session d'ouverture (elle disparaît notamment sous élévation UAC),
+;; l'UNC non.
+
+(defvar metal-treemacs-lettres-amovibles
+  '("D" "E" "F" "G" "H" "I" "J" "K" "L")
+  "Lettres de lecteur examinées sous Windows en l'absence de PowerShell.
+Sert aussi à reconnaître un projet Treemacs comme volume amovible.")
+
+(defvar metal-treemacs-volumes-reseau-manuels nil
+  "Chemins UNC à monter même s'ils ne figurent pas dans l'Explorateur.
+Un partage simplement visité dans l'Explorateur, sans lettre assignée,
+n'apparaît pas dans la table des connexions Windows : l'inscrire ici le
+rend disponible sous « v ».  Les barres obliques inverses sont acceptées.
+Exemple :
+
+  (setq metal-treemacs-volumes-reseau-manuels
+        \\='(\"//ugreen.mon-tailnet.ts.net/Partage\"))")
+
 ;; --- Utils chemins/canonisation ---
+(defun metal--unc-p (path)
+  "Vrai si PATH désigne un partage réseau (forme UNC)."
+  (and (stringp path)
+       (string-prefix-p "//" (subst-char-in-string ?\\ ?/ path))))
+
 (defun metal--canonical (path)
-  "Retourne PATH en forme canonique pour Treemacs (D:/, pas D:\\)."
-  (let* ((tru (file-truename path))
-         (fwd (subst-char-in-string ?\\ ?/ tru)))
-    (file-name-as-directory fwd)))
+  "Retourne PATH en forme canonique pour Treemacs (D:/, //serveur/partage/).
+Un chemin UNC n'est pas résolu par `file-truename' : la résolution
+provoquerait un accès au partage, donc une attente si celui-ci est
+injoignable.  La normalisation se limite alors aux séparateurs."
+  (let ((fwd (subst-char-in-string ?\\ ?/ path)))
+    (file-name-as-directory
+     (if (string-prefix-p "//" fwd)
+         fwd
+       (subst-char-in-string ?\\ ?/ (file-truename path))))))
 
 ;; --- Détection des volumes montés ---
+(defconst metal--ps-volumes
+  (concat "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+          "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2' | "
+          "ForEach-Object { 'AMO|' + $_.DeviceID }; "
+          "Get-CimInstance Win32_NetworkConnection | "
+          "ForEach-Object { 'RES|' + $_.RemoteName }")
+  "Script PowerShell listant volumes amovibles et connexions réseau.
+Aucune guillemet double n'y figure : leur échappement vers PowerShell
+n'est pas fiable depuis Emacs sous Windows.  `Win32_NetworkConnection'
+est préféré à un filtre DriveType=4 sur `Win32_LogicalDisk' : ce dernier
+interroge la taille et l'espace libre, donc le partage lui-même.")
+
+(defun metal--volumes-w32 ()
+  "Liste des volumes amovibles et réseau sous Windows.
+Retourne des chemins racine : « e:/ » pour une clé, « //serveur/partage »
+pour un partage.  Sans PowerShell, retombe sur un balayage des lettres de
+`metal-treemacs-lettres-amovibles'."
+  (let ((ps (or (executable-find "pwsh") (executable-find "powershell")))
+        (coding-system-for-read 'utf-8-dos)
+        (res '()))
+    (if (null ps)
+        (mapcar (lambda (d) (concat (downcase d) ":/"))
+                (seq-filter (lambda (d) (file-exists-p (concat d ":/")))
+                            metal-treemacs-lettres-amovibles))
+      (with-temp-buffer
+        (when (eq 0 (call-process ps nil t nil "-NoProfile" "-NonInteractive"
+                                  "-Command" metal--ps-volumes))
+          (goto-char (point-min))
+          (while (re-search-forward "^\\(AMO\\|RES\\)|\\(.+?\\)[ \t\r]*$" nil t)
+            (let ((type (match-string 1))
+                  (val  (match-string 2)))
+              (push (if (equal type "AMO")
+                        (concat (downcase val) "/")
+                      (subst-char-in-string ?\\ ?/ val))
+                    res)))))
+      (nreverse res))))
+
+(defun metal--volume-reseau-joignable-p (unc)
+  "Vrai si l'hôte de UNC accepte une connexion sur le port SMB.
+Un test TCP échoue en une fraction de seconde quand l'hôte est absent,
+là où un accès au système de fichiers attendrait le délai SMB complet."
+  (let ((hote (car (split-string (subst-char-in-string ?\\ ?/ unc) "/" t))))
+    (and hote
+         (condition-case nil
+             (let ((proc (make-network-process :name "metal-smb"
+                                               :host hote
+                                               :service 445
+                                               :nowait nil)))
+               (when proc (delete-process proc) t))
+           (error nil)))))
+
 (defun metal--usb-roots ()
-  "Liste des chemins racine des volumes USB montés."
-  (cond
-   ((eq system-type 'windows-nt)
-    (seq-filter #'file-exists-p
-                (mapcar (lambda (d) (concat d ":/"))
-                        '("D" "E" "F" "G" "H" "I" "J" "K" "L"))))
-   ((eq system-type 'darwin)
-    (let ((volumes-dir "/Volumes"))
-      (when (file-directory-p volumes-dir)
-        (seq-filter #'file-directory-p
-                    (directory-files volumes-dir t "^[^.].*")))))
-   ((eq system-type 'gnu/linux)
-    (let ((media-dirs '("/media" "/run/media")))
-      (apply #'append
-             (mapcar (lambda (dir)
-                       (when (file-directory-p dir)
-                         (directory-files dir t "^[^.].*")))
-                     media-dirs))))
-   (t nil)))
+  "Liste des chemins racine des volumes montés, amovibles et réseau.
+Le nom historique est conservé pour ne pas rompre les appels existants."
+  (delete-dups
+   (append
+    (cond
+     ((eq system-type 'windows-nt)
+      (metal--volumes-w32))
+     ((eq system-type 'darwin)
+      (let ((volumes-dir "/Volumes"))
+        (when (file-directory-p volumes-dir)
+          (seq-filter #'file-directory-p
+                      (directory-files volumes-dir t "^[^.].*")))))
+     ((eq system-type 'gnu/linux)
+      (let ((media-dirs '("/media" "/run/media")))
+        (apply #'append
+               (mapcar (lambda (dir)
+                         (when (file-directory-p dir)
+                           (directory-files dir t "^[^.].*")))
+                       media-dirs))))
+     (t nil))
+    (seq-filter #'metal--volume-reseau-joignable-p
+                (mapcar (lambda (p) (subst-char-in-string ?\\ ?/ p))
+                        metal-treemacs-volumes-reseau-manuels)))))
+
+(defun metal--nom-volume-reseau (unc)
+  "Nom court pour le partage UNC, sous la forme « Partage (serveur) ».
+Le nom d'hôte est réduit à son premier segment : un nom MagicDNS complet
+occuperait sinon toute la largeur de Treemacs."
+  (let* ((parts   (split-string (subst-char-in-string ?\\ ?/ unc) "/" t))
+         (hote    (car parts))
+         (partage (cadr parts)))
+    (if (and hote partage)
+        (format "%s (%s)" partage (car (split-string hote "\\.")))
+      (or partage hote unc))))
 
 (defun metal--treemacs-project-name (path)
   "Nom court et stable pour PATH."
   (cond
-   ((eq system-type 'windows-nt) 
-    (upcase (substring (file-truename path) 0 1)))
-   (t 
+   ((metal--unc-p path)
+    (metal--nom-volume-reseau path))
+   ((eq system-type 'windows-nt)
+    (upcase (substring path 0 1)))
+   (t
     (file-name-nondirectory (directory-file-name path)))))
 
 ;; --- Helpers pour reconnaître et nettoyer les projets ---
 (defun metal--usb-project-p (project)
-  "Vrai si PROJECT correspond à un volume USB (selon l'OS)."
+  "Vrai si PROJECT correspond à un volume amovible ou à un partage réseau.
+Le chemin n'est pas passé à `file-truename' : sur un projet UNC, la
+résolution atteindrait le partage."
   (let* ((path (treemacs-project->path project))
-         (tru (file-truename path)))
+         (fwd  (subst-char-in-string ?\\ ?/ path)))
     (cond
+     ((string-prefix-p "//" fwd) t)
      ((eq system-type 'windows-nt)
-      (let ((drive (upcase (substring tru 0 1))))
-        (member drive '("D" "E" "F" "G" "H" "I" "J" "K" "L"))))
+      (member (upcase (substring fwd 0 1)) metal-treemacs-lettres-amovibles))
      ((eq system-type 'darwin)
-      (string-prefix-p "/Volumes/" tru))
+      (string-prefix-p "/Volumes/" fwd))
      ((eq system-type 'gnu/linux)
-      (or (string-prefix-p "/media/" tru)
-          (string-prefix-p "/run/media/" tru)))
+      (or (string-prefix-p "/media/" fwd)
+          (string-prefix-p "/run/media/" fwd)))
      (t nil))))
 
 (defun metal--stale-project-p (project)
-  "Vrai si le chemin du PROJECT n'existe plus."
+  "Vrai si le chemin du PROJECT n'existe plus.
+Les chemins UNC sont exclus du test : `file-exists-p' y bloquerait le
+temps du délai SMB si le partage n'est plus joignable.  Ils sont de toute
+façon retirés par `metal--usb-project-p', évalué avant."
   (let ((path (treemacs-project->path project)))
-    (not (file-exists-p path))))
+    (and (not (metal--unc-p path))
+         (not (file-exists-p path)))))
 
 (defun metal-treemacs-ajouter-usb ()
-  "Ajoute les volumes USB montés dans Treemacs, sans doublon.
-Ouvre Treemacs si nécessaire et, si possible, se place sur le volume ajouté."
+  "Monte dans Treemacs les volumes détectés, sans doublon.
+Couvre les volumes amovibles (clés USB) et les partages réseau montés
+dans l'Explorateur, ces derniers sous leur chemin UNC.  Ouvre Treemacs si
+nécessaire et, si possible, se place sur le dernier volume monté."
   (interactive)
   (require 'treemacs)
   ;; S'assurer que Treemacs et le workspace existent
@@ -494,14 +608,17 @@ Ouvre Treemacs si nécessaire et, si possible, se place sur le volume ajouté."
                 (ignore-errors 
                   (when (fboundp 'treemacs-goto-node)
                     (treemacs-goto-node proj))))))
-          (message "[USB] %d volume(s) ajouté(s): %s"
+          (message "[Volumes] %d volume(s) monté(s) : %s"
                    (length added-names)
                    (mapconcat #'identity (nreverse added-names) ", ")))
-      (message "[USB] Aucun nouveau volume à ajouter."))))
+      (message "[Volumes] Aucun nouveau volume à monter."))))
 
 ;; --- Retrait dans Treemacs ---
 (defun metal-treemacs-retirer-usb ()
-  "Retire de Treemacs tous les projets USB, montés ou non, et nettoie les chemins invalides."
+  "Démonte de Treemacs tous les volumes, amovibles et réseau.
+Retire aussi les projets dont le chemin local n'existe plus.  Un projet
+resté sur un partage injoignable disparaît sans qu'aucun accès réseau
+soit tenté."
   (interactive)
   (unless (featurep 'treemacs) (require 'treemacs))
   (let* ((ws (treemacs-current-workspace))
@@ -529,10 +646,49 @@ Ouvre Treemacs si nécessaire et, si possible, se place sur le volume ajouté."
     (when (treemacs-get-local-window)
       (treemacs-select-window)
       (treemacs-refresh))
-    (message "[USB] %d projet(s) retiré(s) (USB et/ou invalides)." removed)))
+    (message "[Volumes] %d volume(s) démonté(s) (amovibles, réseau et/ou invalides)."
+             removed)))
+
+;; Noms explicites, les anciens restant valides pour la barre d'outils et
+;; le tableau de bord.
+(defalias 'metal-treemacs-monter-volumes   'metal-treemacs-ajouter-usb)
+(defalias 'metal-treemacs-demonter-volumes 'metal-treemacs-retirer-usb)
+
+;;; ── Purge des volumes au démarrage ──────────────────────────────────
+;; Treemacs restaure ses projets depuis `treemacs-persist'.  Un partage
+;; monté hier y figure encore ce matin : au premier rendu, Treemacs le
+;; parcourt, et si le tunnel n'est pas monté, Emacs attend le délai SMB
+;; avant d'afficher quoi que ce soit.  Les volumes sont donc retirés au
+;; démarrage — « v » les remonte en une frappe quand ils sont là.
+
+(defvar metal-treemacs-purger-volumes-au-demarrage t
+  "Retirer au démarrage les volumes restaurés de la session précédente.
+Mettre à nil pour conserver le comportement de Treemacs, au risque d'une
+attente au premier affichage si un partage n'est plus joignable.")
+
+(defun metal-treemacs-purger-volumes ()
+  "Retirer les volumes hérités de la session précédente.
+Aucun accès disque ni réseau : la reconnaissance se fait sur le chemin."
+  (interactive)
+  (when (and metal-treemacs-purger-volumes-au-demarrage
+             (featurep 'treemacs))
+    (ignore-errors
+      (let* ((ws      (treemacs-current-workspace))
+             (projets (and ws (treemacs-workspace->projects ws)))
+             (volumes (seq-filter #'metal--usb-project-p projets)))
+        (when volumes
+          ;; Treemacs refuse un espace de travail vide : garantir un repli.
+          (when (= (length volumes) (length projets))
+            (treemacs-do-add-project-to-workspace (expand-file-name "~") "Home"))
+          (dolist (p volumes)
+            (treemacs-do-remove-project-from-workspace p)))))))
+
+;; Profondeur 95 : après `metal-treemacs-open-on-startup', qui charge
+;; Treemacs et crée l'espace de travail.
+(add-hook 'after-init-hook #'metal-treemacs-purger-volumes 95)
 
 ;;; ═══════════════════════════════════════════════════════════════════
-;;; Raccourcis USB dans Treemacs
+;;; Raccourcis des volumes dans Treemacs
 ;;; ═══════════════════════════════════════════════════════════════════
 
 ;; 1) Keymap local au mode
@@ -541,11 +697,12 @@ Ouvre Treemacs si nécessaire et, si possible, se place sur le volume ajouté."
     (define-key map (kbd "v") #'metal-treemacs-ajouter-usb)
     (define-key map (kbd "V") #'metal-treemacs-retirer-usb)
     map)
-  "Keymap pour metal-treemacs-keys-mode (utilisé seulement dans treemacs-mode).")
+  "Keymap pour metal-treemacs-keys-mode (utilisé seulement dans treemacs-mode).
+« v » monte les volumes détectés, « V » les démonte tous.")
 
 ;; 2) Minor-mode buffer-local, désactivé par défaut
 (define-minor-mode metal-treemacs-keys-mode
-  "Raccourcis USB pour Treemacs."
+  "Raccourcis de montage des volumes pour Treemacs."
   :init-value nil
   :lighter ""
   :keymap metal-treemacs-usb-keymap)
