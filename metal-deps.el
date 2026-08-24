@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Jacques Ladouceur
 ;; Auteur: Jacques Ladouceur
-;; Version: 3.9
+;; Version: 4.0
 
 ;;; Commentaire:
 ;; Ce module gère l'installation automatique des dépendances externes
@@ -40,6 +40,29 @@
 ;;               brut au lieu des pages).  Sur Mac < 14, installé via le
 ;;               .pkg autonome officiel (Koch/MacTeX), Homebrew étant Tier 3
 ;;               sur ces systèmes (compilation depuis la source).
+;; Version 4.0 : Fin des invites `sudo' dans les tampons de console.  Un
+;;               tampon Emacs n'offre pas de tty : `sudo' ne peut donc pas
+;;               y désactiver l'écho (mot de passe affiché en clair) ni y
+;;               lire la saisie (installation bloquée).  Trois réponses,
+;;               selon le cas :
+;;                 — Quarto sur macOS : le cask Homebrew est conservé mais
+;;                   lancé dans Terminal.app, car sa stanza `pkg' fait
+;;                   appeler `sudo installer' par brew.  `reinstall' au
+;;                   lieu d'`install' quand le cask est enregistré sans
+;;                   exécutable (dossier supprimé à la main).  Sans
+;;                   Homebrew, repli sur le .pkg de la release GitHub
+;;                   (version `metal-deps-quarto-version'), ouvert par
+;;                   `open -W' — authentification par dialogue système.
+;;                 — Miniconda sur macOS : script officiel dans ~/miniconda3
+;;                   au lieu du cask, qui passait lui aussi par `sudo'.
+;;                 — Homebrew et `quarto uninstall' : lancés dans Terminal.app
+;;                   via `metal-deps--lancer-dans-terminal', seule voie pour
+;;                   une authentification interactive légitime.
+;;               Garde-fou central : `metal-console-lancer' refuse toute
+;;               commande contenant `sudo' — elle est amorcée en amont sur
+;;               Linux, et redirigée vers Terminal.app sur macOS.  Le cas
+;;               s'applique aussi aux désinstallations : « brew uninstall
+;;               --cask » appelle sudo pour retirer le reçu pkgutil.
 ;;
 ;; Commandes principales :
 ;;   M-x metal-deps-afficher-etat     - Interface graphique avec boutons
@@ -409,7 +432,39 @@ dans un `set-process-sentinel'."
       (set-process-filter proc #'metal-console--filtre)))
   proc)
 
-(defun metal-console-lancer (commande &optional etiquette _tampon-erreurs)
+(defun metal-deps--lancer-dans-terminal (commande &optional titre)
+  "Exécute COMMANDE dans Terminal.app, avec un vrai terminal (macOS).
+Réservée aux commandes qui exigent une authentification interactive : un
+tampon Emacs n'offre pas de tty, or c'est le tty qui permet à `sudo'
+de désactiver l'écho et de lire le mot de passe.  Sans lui, le mot de
+passe s'affiche en clair puis la commande échoue.
+
+Les autres commandes doivent continuer de passer par `metal-console-lancer',
+qui garde la sortie dans l'Assistant.  TITRE ne sert qu'au journal.
+Retourne le processus lancé, comme `metal-console-lancer', ce dont
+dépend le chaînage de `metal-deps--installer-prochain'."
+  (unless (eq system-type 'darwin)
+    (user-error "Terminal.app n'existe que sur macOS"))
+  (let ((script (expand-file-name "metal-terminal.command"
+                                  temporary-file-directory)))
+    (with-temp-file script
+      (insert "#!/bin/bash\n"
+              commande "\n"
+              "status=$?\n"
+              "echo\n"
+              "echo \"— Terminé (code $status).  Revenez à MetalEmacs et cliquez « Rafraîchir ».\"\n"))
+    (chmod script #o755)
+    ;; Le verdict sera pris au clic sur « Rafraîchir » : on s'assure dès
+    ;; maintenant que les dossiers où macOS et Homebrew déposent leurs
+    ;; binaires sont dans `exec-path'.  Emacs lancé depuis le Finder
+    ;; n'hérite pas du PATH du shell de connexion, et ne verrait donc
+    ;; rien avant un redémarrage.
+    (dolist (d '("/usr/local/bin" "/opt/homebrew/bin"))
+      (metal-deps--ajouter-au-path d))
+    (metal-deps--journaliser "Terminal.app : %s" (or titre commande))
+    (start-process "metal-terminal" nil "open" "-a" "Terminal" script)))
+
+(cl-defun metal-console-lancer (commande &optional etiquette _tampon-erreurs)
   "Exécute COMMANDE dans la console nommée d'après ETIQUETTE.
 Remplaçant direct de `async-shell-command' : même ordre d'arguments, le
 deuxième pouvant s'écrire avec ou sans astérisques.  Retourne le
@@ -419,6 +474,21 @@ différence avec `process-list').
 
 Le troisième argument existe pour la seule compatibilité d'appel avec
 `async-shell-command' ; il est ignoré."
+  ;; Garde-fou : une commande privilégiée ne doit jamais atteindre un
+  ;; tampon de console.  Sans tty, `sudo' ne peut ni masquer l'écho ni
+  ;; lire la saisie : le mot de passe s'affiche en clair et la commande
+  ;; reste bloquée sur son invite.  Sur Linux on amorce sudo en amont
+  ;; (saisie masquée par `read-passwd', cache de ~15 min) ; sur macOS,
+  ;; où ce cache n'est pas partagé avec les installeurs graphiques, on
+  ;; bascule dans Terminal.app.
+  (when (string-match-p "\\_<sudo\\_>" commande)
+    (pcase system-type
+      ('gnu/linux (metal-deps--amorcer-sudo))
+      ('darwin
+       (metal-deps--journaliser
+        "Commande privilégiée redirigée vers Terminal.app : %s" commande)
+       (cl-return-from metal-console-lancer
+         (metal-deps--lancer-dans-terminal commande etiquette)))))
   (let* ((nom (metal-console-nom (or etiquette "Commande")))
          (tampon (get-buffer-create nom))
          (encours (get-buffer-process tampon)))
@@ -1037,9 +1107,12 @@ Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
   (if (metal-deps--brew-present-p)
       (message "✓ Homebrew déjà installé")
     (metal-deps--journaliser "Installation de Homebrew")
+    ;; Le script officiel appelle `sudo' et attend une touche : les deux
+    ;; exigent un vrai terminal.  Lancé dans un tampon Emacs, il affiche
+    ;; le mot de passe en clair puis reste bloqué faute de pouvoir le lire.
     (let ((cmd "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""))
-      (metal-console-lancer cmd "*Homebrew Install*")
-      (message "Installation de Homebrew lancée dans un terminal..."))))
+      (metal-deps--lancer-dans-terminal cmd "Installation de Homebrew")
+      (message "Installation de Homebrew lancée dans Terminal.app…"))))
 
 (defun metal-deps-desinstaller-homebrew ()
   "Désinstalle Homebrew sur macOS."
@@ -1051,8 +1124,8 @@ Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
     (when (yes-or-no-p "⚠ Ceci supprimera aussi tous les paquets installés via Homebrew. Continuer ? ")
       (metal-deps--journaliser "Désinstallation de Homebrew")
       (let ((cmd "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)\""))
-        (metal-console-lancer cmd "*Homebrew Uninstall*")
-        (message "Désinstallation de Homebrew lancée...")))))
+        (metal-deps--lancer-dans-terminal cmd "Désinstallation de Homebrew")
+        (message "Désinstallation de Homebrew lancée dans Terminal.app…")))))
 
 (defun metal-deps-installer-scoop ()
   "Installe Scoop sur Windows (sans privilèges admin)."
@@ -1581,16 +1654,20 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
     (metal-deps--journaliser "Installation de Miniconda")
     (pcase system-type
       ('darwin
-       (if (metal-deps--brew-present-p)
-           (progn
-             (message "Installation de Miniconda via Homebrew...")
-             (metal-console-lancer "brew install --cask miniconda" "*Miniconda Install*"))
-         (let* ((arch (if (metal-deps--apple-silicon-p) "arm64" "x86_64"))
-                (url (format "https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-%s.sh" arch))
-                (script (expand-file-name "miniconda-installer.sh" temporary-file-directory)))
-           (message "📦 Téléchargement de Miniconda...")
-           (url-copy-file url script t)
-           (metal-console-lancer (format "bash %s -b" script) "*Miniconda Install*"))))
+       ;; Toujours l'installeur officiel, jamais « brew install --cask
+       ;; miniconda » : ce cask porte une stanza `pkg', donc Homebrew y
+       ;; délègue à `sudo installer' — invite de mot de passe inutilisable
+       ;; depuis un tampon Emacs.  Le script officiel installe dans
+       ;; ~/miniconda3 sans aucun privilège, ce que promet d'ailleurs la
+       ;; docstring de cette commande.
+       (let* ((arch (if (metal-deps--apple-silicon-p) "arm64" "x86_64"))
+              (url (format "https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-%s.sh" arch))
+              (script (expand-file-name "miniconda-installer.sh" temporary-file-directory)))
+         (message "📦 Téléchargement de Miniconda...")
+         (url-copy-file url script t)
+         (chmod script #o755)
+         (metal-console-lancer (format "bash %s -b" (shell-quote-argument script))
+                               "*Miniconda Install*")))
       ('windows-nt
        (if (metal-deps--scoop-present-p)
            (progn
@@ -1645,12 +1722,104 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
 ;;; Installateurs - Quarto
 ;;; ═══════════════════════════════════════════════════════════════════
 
+(defcustom metal-deps-quarto-version "1.10.18"
+  "Version de Quarto téléchargée depuis la release GitHub.
+Sert sur Linux (.deb) et sur les Mac sans Homebrew (.pkg de repli) ; le
+cask Homebrew et Scoop imposent, eux, la version de leur dépôt.  Voir
+https://quarto.org/docs/download/ pour la version courante."
+  :type 'string
+  :group 'metal-deps)
+
+(defun metal-deps--quarto-artefact ()
+  "Nom de l'artefact de release Quarto pour la plateforme courante."
+  (let ((v metal-deps-quarto-version))
+    (pcase system-type
+      ('darwin     (format "quarto-%s-macos.pkg" v))
+      ('windows-nt (format "quarto-%s-win.msi" v))
+      (_           (format "quarto-%s-linux-%s.deb" v
+                           (if (string-match-p "\\`\\(aarch64\\|arm\\)"
+                                               system-configuration)
+                               "arm64" "amd64"))))))
+
+(defun metal-deps--quarto-url ()
+  "URL de téléchargement de l'artefact Quarto pour cette plateforme."
+  (format "https://github.com/quarto-dev/quarto-cli/releases/download/v%s/%s"
+          metal-deps-quarto-version (metal-deps--quarto-artefact)))
+
+(defun metal-deps--quarto-cask-present-p ()
+  "Retourne t si le cask Homebrew de Quarto est encore enregistré.
+Deux gestionnaires se disputeraient alors /usr/local/bin/quarto : un
+`brew upgrade' ultérieur réécrirait le lien posé par le .pkg."
+  (and (eq system-type 'darwin)
+       (or (file-exists-p "/opt/homebrew/Caskroom/quarto")
+           (file-exists-p "/usr/local/Caskroom/quarto"))))
+
+(defun metal-deps--installer-quarto-pkg ()
+  "Télécharge le .pkg officiel de Quarto et l'ouvre pour installation.
+Repli pour les Mac sans Homebrew (la voie normale étant le cask, voir
+`metal-deps-installer-quarto').  La version installée est celle
+d'`metal-deps-quarto-version'.
+
+L'installeur Apple demande lui-même le mot de passe administrateur, dans
+son dialogue système : aucun `sudo' ne transite par Emacs.  C'est le
+point clé — `sudo' lancé depuis un tampon Emacs n'a pas de tty, donc il
+affiche le mot de passe en clair et échoue ensuite faute de pouvoir le
+lire.
+
+`open -W' attend la fermeture de l'installeur, ce qui permet d'enchaîner
+TinyTeX sur le `quarto' fraîchement posé dans /usr/local/bin."
+  (let* ((url (metal-deps--quarto-url))
+         (dest (expand-file-name (file-name-nondirectory url) "~/Downloads"))
+         (buf (metal-console-nom "Installation Quarto")))
+    (metal-deps--journaliser "Installation de Quarto via .pkg : %s" url)
+    (with-current-buffer (get-buffer-create buf)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Téléchargement de Quarto %s…\n  %s\n\n"
+                        metal-deps-quarto-version url))
+        (insert "L'installeur Apple s'ouvrira automatiquement à la fin.\n"
+                "macOS demandera le mot de passe dans sa propre fenêtre.\n"
+                "TinyTeX suivra, à la fermeture de l'installeur.\n")))
+    (display-buffer buf)
+    ;; `-sS' masque la barre de progression de curl (illisible dans un
+    ;; tampon) sans supprimer les messages d'erreur.
+    (let* ((cmd (format
+                 "curl -fSL -sS -o %s %s && echo TELECHARGE && open -W %s && \
+export PATH=\"/usr/local/bin:$PATH\" && quarto install tinytex --no-prompt"
+                 (shell-quote-argument dest)
+                 (shell-quote-argument url)
+                 (shell-quote-argument dest)))
+           (proc (start-process-shell-command "metal-quarto-pkg" buf cmd)))
+      (set-process-filter proc #'metal-console--filtre)
+      (set-process-sentinel
+       proc
+       (lambda (_p event)
+         ;; Emacs lancé depuis le Finder n'a pas /usr/local/bin dans son
+         ;; PATH : sans cela, quarto reste invisible jusqu'au redémarrage.
+         (metal-deps--ajouter-au-path "/usr/local/bin")
+         (with-current-buffer (get-buffer-create buf)
+           (let ((inhibit-read-only t))
+             (goto-char (point-max))
+             (if (and (string-match-p "finished" event)
+                      (metal-deps--quarto-present-p))
+                 (insert "\n✓ Quarto et TinyTeX installés.\n")
+               (insert (format "\n⚠ Installation incomplète : %s\n"
+                               (string-trim event))
+                       "Si l'installeur a été annulé, relancez ;\n"
+                       "sinon voir https://quarto.org/docs/download/\n"))))
+         (run-with-timer 1 nil #'metal-deps-afficher-etat t))))))
+
 (defun metal-deps-installer-quarto ()
   "Installe Quarto.
 Sous macOS et Linux, installe aussi TinyTeX.  Sous Windows, TinyTeX est
 volontairement omis : MetalEmacs y installe MiKTeX (voir
 `metal-deps-installer-miktex'), et deux distributions LaTeX simultanées
-mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne."
+mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne.
+
+Sur macOS, l'installation passe par le cask Homebrew, lancé dans
+Terminal.app : le cask délègue à `sudo installer', dont l'invite de mot
+de passe est inutilisable depuis un tampon Emacs (pas de tty).  Sans
+Homebrew, repli sur le .pkg officiel de la release GitHub."
   (interactive)
   (if (metal-deps--quarto-present-p)
       (message "✓ Quarto déjà installé")
@@ -1658,11 +1827,24 @@ mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne."
     (pcase system-type
       ('darwin
        (if (metal-deps--brew-present-p)
-           (progn
-             (message "📦 Installation de Quarto et TinyTeX via Homebrew...")
-             (metal-console-lancer "brew install --cask quarto && quarto install tinytex --no-prompt" "*Quarto Install*"))
-         (browse-url "https://quarto.org/docs/get-started/")
-         (message "Téléchargez Quarto depuis le site web")))
+           ;; Le cask porte une stanza `pkg' : Homebrew délègue à
+           ;; `sudo installer', qui exige un tty.  Terminal.app le
+           ;; fournit ; le garde-fou de `metal-console-lancer' ne peut
+           ;; rien ici, car le `sudo' est interne à brew et n'apparaît
+           ;; pas dans la commande.
+           (metal-deps--lancer-dans-terminal
+            (concat
+             (if (metal-deps--quarto-cask-present-p)
+                 ;; Cask enregistré mais exécutable absent (dossier
+                 ;; supprimé à la main) : `install' se contenterait de
+                 ;; répondre « already installed ».
+                 "brew reinstall --cask quarto"
+               "brew install --cask quarto")
+             " && quarto install tinytex --no-prompt")
+            "Installation de Quarto")
+         ;; Sans Homebrew : .pkg officiel, l'installeur Apple se charge
+         ;; lui-même de l'authentification.
+         (metal-deps--installer-quarto-pkg)))
       ('windows-nt
        (if (metal-deps--scoop-present-p)
            (progn
@@ -1672,11 +1854,18 @@ mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne."
              (metal-console-lancer "scoop install quarto" "*Quarto Install*"))
          (message "⚠ Scoop requis. Lancez d'abord M-x metal-deps-installer-scoop")))
       ('gnu/linux
-       (let* ((url "https://github.com/quarto-dev/quarto-cli/releases/download/v1.4.553/quarto-1.4.553-linux-amd64.deb")
+       ;; `dpkg' exige les privilèges : on amorce sudo ici aussi, et pas
+       ;; seulement dans la file séquentielle — le bouton individuel de
+       ;; l'Assistant tombait autrement sur l'invite en clair.
+       (metal-deps--amorcer-sudo)
+       (let* ((url (metal-deps--quarto-url))
               (deb (expand-file-name "quarto.deb" temporary-file-directory)))
-         (message "📦 Téléchargement de Quarto...")
+         (message "📦 Téléchargement de Quarto %s…" metal-deps-quarto-version)
          (url-copy-file url deb t)
-         (metal-console-lancer (format "sudo dpkg -i %s && quarto install tinytex --no-prompt" deb) "*Quarto Install*"))))))
+         (metal-console-lancer
+          (format "sudo dpkg -i %s && quarto install tinytex --no-prompt"
+                  (shell-quote-argument deb))
+          "*Quarto Install*"))))))
 
 (defun metal-deps-desinstaller-quarto ()
   "Désinstalle Quarto."
@@ -1687,17 +1876,30 @@ mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne."
       (metal-deps--journaliser "Désinstallation de Quarto")
       (pcase system-type
         ('darwin
-         (if (or (file-exists-p "/opt/homebrew/Caskroom/quarto")
-                 (file-exists-p "/usr/local/Caskroom/quarto"))
-             (metal-console-lancer "brew uninstall --cask quarto" "*Quarto Uninstall*")
-           (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
+         (cond
+          ;; Ancienne installation par cask
+          ;; `brew uninstall --cask' appelle `sudo' pour retirer le reçu
+          ;; pkgutil (org.rstudio.quarto) : il lui faut un vrai terminal.
+          ((metal-deps--quarto-cask-present-p)
+           (metal-deps--lancer-dans-terminal
+            "brew uninstall --cask quarto --force"
+            "Désinstallation du cask Quarto"))
+          ;; Installation par .pkg : `quarto uninstall' retire le dossier,
+          ;; le lien et le reçu pkgutil.  Il appelle sudo, donc terminal.
+          ((file-directory-p "/Applications/quarto")
+           (metal-deps--lancer-dans-terminal "quarto uninstall"
+                                             "Désinstallation de Quarto"))
+          (t
+           (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement."))))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
              (metal-console-lancer "scoop uninstall quarto" "*Quarto Uninstall*")
            (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "quarto"))
-             (metal-console-lancer "sudo apt remove quarto -y" "*Quarto Uninstall*")
+             (progn
+               (metal-deps--amorcer-sudo)
+               (metal-console-lancer "sudo apt remove quarto -y" "*Quarto Uninstall*"))
            (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -2192,6 +2394,10 @@ Ouvre un sélecteur de fichiers pour choisir le .deb."
         ('darwin
          (if (and (metal-deps--brew-present-p)
                   (= 0 (call-process "brew" nil nil nil "list" "--cask" "drawio")))
+             ;; Cask d'application (.app) : pas de reçu pkgutil, donc pas
+             ;; de `sudo' — la console convient.  Si Homebrew se met à
+             ;; demander le mot de passe ici, router vers Terminal.app
+             ;; comme pour Quarto.
              (metal-console-lancer "brew uninstall --cask drawio" "*draw.io Uninstall*")
            (message "draw.io installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('windows-nt
