@@ -671,132 +671,160 @@ Gère également le cas du passage gras+italique (***w***)."
       ;; Autres cas gérés par le toggle générique
       (my/org-toggle-wrap-with delim))))
 
-;; (defun metal-quarto-underline ()
-;;   "Souligne avec <u>...</u> la région ou le texte autour du point (toggle)."
-;;   (interactive)
-;;   (let ((tag-open "<u>")
-;;         (tag-close "</u>"))
-;;     (if (use-region-p)
-;;         ;; CAS RÉGION
-;;         (progn
-;;           (when (fboundp 'trim-selection-to-word-boundaries)
-;;             (trim-selection-to-word-boundaries))
-;;           (let* ((beg (region-beginning))
-;;                  (end (region-end))
-;;                  (open-len (length tag-open))
-;;                  (close-len (length tag-close)))
-;;             (save-excursion
-;;               (if (and (>= beg open-len)
-;;                        (<= (+ end close-len) (point-max))
-;;                        (string= (buffer-substring-no-properties (- beg open-len) beg) tag-open)
-;;                        (string= (buffer-substring-no-properties end (+ end close-len)) tag-close))
-;;                   ;; Déjà souligné -> on retire
-;;                   (progn
-;;                     (delete-region end (+ end close-len))
-;;                     (delete-region (- beg open-len) beg))
-;;                 ;; Sinon on ajoute
-;;                 (goto-char end) (insert tag-close)
-;;                 (goto-char beg) (insert tag-open)))))
-;;       ;; CAS SANS RÉGION
-;;       (let* ((pos (point))
-;;              (line-beg (line-beginning-position))
-;;              (line-end (line-end-position))
-;;              (open (save-excursion
-;;                      (goto-char pos)
-;;                      (when (search-backward tag-open line-beg t) (point))))
-;;              (close (save-excursion
-;;                       (goto-char pos)
-;;                       (when (search-forward tag-close line-end t) (point)))))
-;;         (cond
-;;          ;; Entre <u> et </u> -> on enlève
-;;          ((and open close (< open pos) (> close pos))
-;;           (save-excursion
-;;             (delete-region (- close (length tag-close)) close)
-;;             (delete-region open (+ open (length tag-open)))))
-;;          ;; Sinon, on applique au mot au point
-;;          (t
-;;           (let ((bounds (bounds-of-thing-at-point 'word)))
-;;             (if (not bounds)
-;;                 (message "Aucun mot trouvé.")
-;;               (let ((beg (car bounds))
-;;                     (end (cdr bounds)))
-;;                 (save-excursion
-;;                   (if (and (>= beg (length tag-open))
-;;                            (<= (+ end (length tag-close)) (point-max))
-;;                            (string= (buffer-substring-no-properties (- beg (length tag-open)) beg) tag-open)
-;;                            (string= (buffer-substring-no-properties end (+ end (length tag-close))) tag-close))
-;;                       ;; Déjà souligné -> on retire
-;;                       (progn
-;;                         (delete-region end (+ end (length tag-close)))
-;;                         (delete-region (- beg (length tag-open)) beg))
-;;                     ;; Sinon, on ajoute
-;;                     (goto-char end) (insert tag-close)
-;;                     (goto-char beg) (insert tag-open))))))))))))
+(defconst metal-quarto-underline-ouvrant "["
+  "Marqueur ouvrant du soulignement Pandoc.")
 
+(defconst metal-quarto-underline-fermant "]{.underline}"
+  "Marqueur fermant du soulignement Pandoc.")
+
+(defconst metal-quarto-underline-regexp
+  "\\[\\([^][]*\\)\\]{\\.underline}"
+  "Expression régulière reconnaissant un soulignement Pandoc complet.
+Le groupe 1 capture le texte souligné.  Les crochets internes sont
+exclus, ce qui évite de confondre la construction avec un lien Markdown
+imbriqué.")
+
+(defun metal-quarto--underline-englobant ()
+  "Retourne le soulignement Pandoc contenant le point, ou nil.
+La valeur est la liste (DÉBUT FIN DÉBUT-TEXTE FIN-TEXTE), positions du
+marqueur complet puis du seul texte souligné.
+
+On balaie la ligne à la recherche de la construction entière plutôt que
+de chercher le crochet ouvrant en arrière : un lien Markdown
+[texte](url) ou un span portant une autre classe ne peuvent ainsi pas
+être pris pour un soulignement."
+  (save-excursion
+    (let ((pos (point))
+          (fin-ligne (line-end-position))
+          (trouve nil))
+      (goto-char (line-beginning-position))
+      (while (and (not trouve)
+                  (re-search-forward metal-quarto-underline-regexp fin-ligne t))
+        (when (and (<= (match-beginning 0) pos)
+                   (>= (match-end 0) pos))
+          (setq trouve (list (match-beginning 0) (match-end 0)
+                             (match-beginning 1) (match-end 1)))))
+      trouve)))
+
+(defun metal-quarto--underline-poser (debut fin)
+  "Entoure la région DEBUT..FIN des marqueurs de soulignement."
+  (save-excursion
+    (goto-char fin)   (insert metal-quarto-underline-fermant)
+    (goto-char debut) (insert metal-quarto-underline-ouvrant)))
+
+(defun metal-quarto--underline-retirer (englobant)
+  "Retire les marqueurs du soulignement décrit par ENGLOBANT.
+Le marqueur fermant est supprimé en premier : effacer l'ouvrant
+d'abord décalerait toutes les positions suivantes."
+  (let ((debut (nth 0 englobant))
+        (fin (nth 1 englobant))
+        (debut-texte (nth 2 englobant))
+        (fin-texte (nth 3 englobant)))
+    (save-excursion
+      (delete-region fin-texte fin)
+      (delete-region debut debut-texte))))
 
 (defun metal-quarto-underline ()
-  "Souligne avec \\uline{...} (compatible PDF + HTML via Pandoc). Toggle."
+  "Bascule le soulignement sur la région ou le mot au point.
+Produit la syntaxe native de Pandoc, [texte]{.underline}, et non du
+LaTeX brut.
+
+La distinction est essentielle : Pandoc ne charge le paquet `ulem' que
+lorsqu'il reconnaît lui-même un soulignement dans le Markdown.  Un
+\\uline{...} écrit à la main lui échappe — il le recopie tel quel dans
+le .tex sans charger le paquet, et LuaLaTeX s'arrête sur « Undefined
+control sequence ».  La syntaxe native produit le même \\uline{} en
+LaTeX, mais avec le paquet chargé, et un span de classe `underline' en
+HTML."
   (interactive)
-  (let ((tag-open "\\uline{")
-        (tag-close "}"))
-    (if (use-region-p)
-        ;; CAS RÉGION
-        (progn
-          (when (fboundp 'trim-selection-to-word-boundaries)
-            (trim-selection-to-word-boundaries))
-          (let* ((beg (region-beginning))
-                 (end (region-end))
-                 (open-len (length tag-open))
-                 (close-len (length tag-close)))
-            (save-excursion
-              (if (and (>= beg open-len)
-                       (<= (+ end close-len) (point-max))
-                       (string= (buffer-substring-no-properties (- beg open-len) beg) tag-open)
-                       (string= (buffer-substring-no-properties end (+ end close-len)) tag-close))
-                  ;; Déjà souligné -> on retire
-                  (progn
-                    (delete-region end (+ end close-len))
-                    (delete-region (- beg open-len) beg))
-                ;; Sinon on ajoute
-                (goto-char end) (insert tag-close)
-                (goto-char beg) (insert tag-open)))))
-      
-      ;; CAS SANS RÉGION
-      (let* ((pos (point))
-             (line-beg (line-beginning-position))
-             (line-end (line-end-position))
-             (open (save-excursion
-                     (goto-char pos)
-                     (when (search-backward tag-open line-beg t) (point))))
-             (close (save-excursion
-                      (goto-char pos)
-                      (when (search-forward tag-close line-end t) (point)))))
-        (cond
-         ;; Entre \uline{ et } -> on enlève
-         ((and open close (< open pos) (> close pos))
+  (let ((englobant (metal-quarto--underline-englobant)))
+    (cond
+     ;; Déjà souligné : on retire
+     (englobant
+      (metal-quarto--underline-retirer englobant))
+     ;; Région active : on l'entoure
+     ((use-region-p)
+      (when (fboundp 'trim-selection-to-word-boundaries)
+        (trim-selection-to-word-boundaries))
+      (metal-quarto--underline-poser (region-beginning) (region-end)))
+     ;; Sinon le mot au point
+     (t
+      (let ((bornes (bounds-of-thing-at-point 'word)))
+        (if bornes
+            (metal-quarto--underline-poser (car bornes) (cdr bornes))
+          ;; Aucun mot : poser les marqueurs vides, point à l'intérieur
+          (insert metal-quarto-underline-ouvrant
+                  metal-quarto-underline-fermant)
+          (goto-char (- (point)
+                        (length metal-quarto-underline-fermant)))))))))
+
+;;; --- Conversion de l'ancienne syntaxe ------------------------------
+
+(defconst metal-quarto--uline-regexp
+  "\\\\uline{\\([^{}]*\\)}"
+  "Expression régulière reconnaissant un \\uline{...} littéral.")
+
+(defun metal-quarto--dans-du-code-p ()
+  "Retourne non-nil si le point se trouve dans du code littéral.
+Vrai entre deux accents graves sur la même ligne, ou dans un bloc de
+code délimité par des lignes de trois accents graves.  Ces occurrences
+documentent la syntaxe au lieu de l'employer : les convertir
+défigurerait le texte."
+  (or
+   ;; Nombre impair d'accents graves avant le point sur la ligne
+   (cl-oddp (count ?` (buffer-substring-no-properties
+                       (line-beginning-position) (point))))
+   ;; Nombre impair de délimiteurs de bloc au-dessus
+   (cl-oddp (save-excursion
+              (let ((limite (point))
+                    (n 0))
+                (goto-char (point-min))
+                (while (re-search-forward "^[ \t]*```" limite t)
+                  (setq n (1+ n)))
+                n)))))
+
+(defun metal-quarto-convertir-uline (dossier)
+  "Convertit \\uline{texte} en [texte]{.underline} dans les .qmd de DOSSIER.
+Balaie récursivement DOSSIER.  Les occurrences situées dans du code
+littéral sont laissées telles quelles : elles documentent la syntaxe au
+lieu de l'employer.  Les fichiers modifiés sont enregistrés et un
+rapport s'affiche."
+  (interactive "DDossier à convertir : ")
+  (let ((fichiers (directory-files-recursively dossier "\\.qmd\\'"))
+        (rapport nil)
+        (total 0))
+    (dolist (f fichiers)
+      (let ((n 0))
+        (with-current-buffer (find-file-noselect f)
           (save-excursion
-            (delete-region (1- close) close)
-            (delete-region open (+ open (length tag-open)))))
-         
-         ;; Sinon, appliquer au mot
-         (t
-          (let ((bounds (bounds-of-thing-at-point 'word)))
-            (if (not bounds)
-                (message "Aucun mot trouvé.")
-              (let ((beg (car bounds))
-                    (end (cdr bounds)))
+            (goto-char (point-min))
+            (while (re-search-forward metal-quarto--uline-regexp nil t)
+              (let ((texte (match-string 1))
+                    (debut (match-beginning 0))
+                    (fin (match-end 0)))
                 (save-excursion
-                  (if (and (>= beg (length tag-open))
-                           (<= (+ end (length tag-close)) (point-max))
-                           (string= (buffer-substring-no-properties (- beg (length tag-open)) beg) tag-open)
-                           (string= (buffer-substring-no-properties end (+ end (length tag-close))) tag-close))
-                      ;; Déjà souligné -> on retire
-                      (progn
-                        (delete-region end (+ end (length tag-close)))
-                        (delete-region (- beg (length tag-open)) beg))
-                    ;; Sinon on ajoute
-                    (goto-char end) (insert tag-close)
-                    (goto-char beg) (insert tag-open))))))))))))
+                  (goto-char debut)
+                  (unless (metal-quarto--dans-du-code-p)
+                    (delete-region debut fin)
+                    (insert metal-quarto-underline-ouvrant texte
+                            metal-quarto-underline-fermant)
+                    (setq n (1+ n)))))))
+          (when (> n 0)
+            (save-buffer)
+            (setq total (+ total n))
+            (push (format "  %2d  %s" n (file-relative-name f dossier))
+                  rapport)))))
+    (if (null rapport)
+        (message "Aucun \\uline{} à convertir dans %s" dossier)
+      (with-current-buffer (get-buffer-create "*Conversion uline*")
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert (format "%d soulignement%s converti%s dans %d fichier%s\n\n"
+                          total (if (> total 1) "s" "") (if (> total 1) "s" "")
+                          (length rapport) (if (> (length rapport) 1) "s" "")))
+          (insert (mapconcat #'identity (nreverse rapport) "\n") "\n")))
+      (display-buffer "*Conversion uline*")
+      (message "%d soulignement(s) converti(s)" total))))
 
 (defun metal-quarto-strike ()
   "Bascule le barré en Markdown (~~...~~) sur la région ou le mot au point."

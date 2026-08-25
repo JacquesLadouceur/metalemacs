@@ -107,7 +107,7 @@ fichier soit recuperable."
  ;; ─────────────────────────────────────────────────────────────────
  (antigravity
   :nom         \"Antigravity\"
-  :description \"Inclus avec un abonnement Google AI (Pro/Ultra)\"
+  :description \"Avec Google AI\"
   :gratuit     \"compte Google AI\"
   :commande    \"agy\"
   :couleur     \"#4285F4\"
@@ -140,7 +140,7 @@ fichier soit recuperable."
  ;; ─────────────────────────────────────────────────────────────────
  (codex
   :nom         \"ChatGPT\"
-  :description \"Gratuit avec ChatGPT Free ou abonnement Plus/Pro\"
+  :description \"Avec ChatGPT Plus/Pro\"
   :gratuit     t
   :paquet-npm  \"@openai/codex\"
   :paquet-brew \"codex\"
@@ -168,7 +168,7 @@ fichier soit recuperable."
  ;; ─────────────────────────────────────────────────────────────────
  (claude
   :nom         \"Claude\"
-  :description \"Avec abonnement Claude Pro/Max ou clé API\"
+  :description \"Avec Claude Pro/Max\"
   :gratuit     nil
   :paquet-npm  \"@anthropic-ai/claude-code\"
   :paquet-brew \"claude-code\"
@@ -198,14 +198,14 @@ fichier soit recuperable."
 (defvar metal-deps-agents-modeles-connus
   '((antigravity
      :nom "Antigravity" :commande "agy"
-     :description "Avec abonnement Google AI (Pro/Ultra)"
+     :description "Avec Google AI"
      :gratuit "compte Google AI" :couleur "#4285F4" :format claude-style
      :args ("--print-timeout" "10m" "-p") :via-process t
      :isoler-fichier t
      :auth-mode externe)
     (codex
      :nom "ChatGPT" :commande "codex"
-     :description "Gratuit avec ChatGPT Free"
+     :description "Avec ChatGPT"
      :gratuit t :paquet-npm "@openai/codex" :paquet-brew "codex"
      :couleur "#10A37F" :format codex-style
      :args ("-p")
@@ -214,7 +214,7 @@ fichier soit recuperable."
      :auth-fichiers ("~/.codex/auth.json" "~/.codex/config.toml"))
     (claude
      :nom "Claude" :commande "claude"
-     :description "Avec abonnement Claude Pro/Max ou cle API"
+     :description "Avec Claude Pro/Max"
      :gratuit nil :paquet-npm "@anthropic-ai/claude-code" :paquet-brew "claude-code"
      :couleur "#D97757" :format claude-style
      :args ("-p" "--output-format" "text") :via-process t
