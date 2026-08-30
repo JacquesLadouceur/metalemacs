@@ -2210,6 +2210,17 @@ Idempotent : un second appel (p. ex. `delete-frame-functions' après
             ;; Réarmer pour la prochaine session.
             metal-agent--ediff-nettoyage-fait-p nil))))
 
+(defun metal-agent--bloc-instructions-libres ()
+  "Retourne le bloc d'instructions libres, ou une chaîne vide.
+Destiné aux actions qui construisent leur prompt sans passer par
+`metal-agent--prompt-final-code' (explication, analyse) : celles-ci
+héritaient du préambule du profil mais ignoraient silencieusement les
+instructions libres saisies dans le panneau de configuration."
+  (let ((libre (string-trim (or metal-agent--instructions-libres ""))))
+    (if (string-empty-p libre)
+        ""
+      (format "\nInstructions supplémentaires :\n%s\n" libre))))
+
 (defun metal-agent--context-header ()
   "Contexte commun envoyé au provider courant (Codex ou Claude).
 Inclut le préambule système du profil actif s'il existe."
@@ -2270,7 +2281,8 @@ le texte est une erreur.
 "
     ""))
 
-(defun metal-agent--prompt-final-code (instruction code &optional target-label)
+(defun metal-agent--prompt-final-code (instruction code &optional target-label
+                                                   demande-utilisateur)
   "Construire un prompt demandant un code final.
 Injecte les fragments des options actives et les instructions libres.
 La réponse doit être encadrée par des marqueurs sentinelles (et non un
@@ -2283,7 +2295,14 @@ minimale » (qui n'a de sens qu'en correction).  Restent invariants dans
 les deux cas : l'en-tête de contexte, le blindage anti-agentique et le
 contrat de marqueurs — un profil ne peut pas les désactiver.
 Sans section [Tâche], on garde le gabarit de correction par défaut,
-adapté au type de fichier (texte → révision, code → correction)."
+adapté au type de fichier (texte → révision, code → correction).
+
+DEMANDE-UTILISATEUR est le texte saisi par l'utilisateur au minibuffer
+(demande libre, orientation de reformulation).  Il est distinct de
+INSTRUCTION, qui peut être un verbe de tâche codé en dur : sur un profil
+[Tâche], INSTRUCTION est écarté au profit de la tâche du profil, mais la
+demande de l'utilisateur, elle, est ajoutée comme précision — sans quoi
+elle serait silencieusement perdue."
   (let ((fragments (metal-agent--fragments-actifs))
         (blindage (metal-agent--blindage-anti-agentique))
         (tache (let ((tc (metal-agent--profil-prop :tache)))
@@ -2303,6 +2322,12 @@ adapté au type de fichier (texte → révision, code → correction)."
           (bloc-libre
            (if libre
                (format "\nInstructions supplémentaires :\n%s\n" libre)
+             ""))
+          (bloc-demande
+           (if (and (stringp demande-utilisateur)
+                    (not (string-empty-p (string-trim demande-utilisateur))))
+               (format "\nPrécision demandée pour cette exécution :\n%s\n"
+                       demande-utilisateur)
              "")))
       (if tache
           ;; ── Profil avec section [Tâche] : la tâche du profil pilote. ──
@@ -2310,7 +2335,7 @@ adapté au type de fichier (texte → révision, code → correction)."
 "%s%s
 Tâche :
 %s
-
+%s
 Contraintes obligatoires :
 - Ne modifie AUCUN fichier sur le disque. Ne demande PAS la permission
   d'écrire ou d'éditer un fichier. Tu ne fais qu'analyser le texte fourni
@@ -2332,6 +2357,7 @@ Contenu à traiter :
            (metal-agent--context-header)
            blindage
            tache
+           bloc-demande
            (or target-label "le résultat")
            metal-agent--marqueur-debut
            metal-agent--marqueur-fin
@@ -2430,7 +2456,9 @@ prose) s'adapte au type de document."
        #'metal-agent--handle-codex-code-response))))
 
 (defun metal-agent-expliquer-selection ()
-  "Demander à l'agent d'expliquer ou de clarifier la sélection."
+  "Demander à l'agent d'expliquer ou de clarifier la sélection.
+Comme `metal-agent-demande-libre-analyse', hérite du préambule du profil
+et des instructions libres, mais pas des options du profil."
   (interactive)
   (let* ((code (metal-agent--selection-text))
          (texte-p (metal-agent--texte-p)))
@@ -2438,7 +2466,7 @@ prose) s'adapte au type de document."
      (format
 "%s%s
 %s
-
+%s
 Contraintes obligatoires :
 - Explique le passage fourni ci-dessous ; concentre-toi sur lui.
 - NE recopie PAS le programme complet et NE liste PAS les autres
@@ -2456,6 +2484,7 @@ Passage à expliquer :
       (if texte-p
           "Explique ou clarifie ce passage en français : reformule l'idée, précise ce qui est ambigu, sans le réécrire dans le document."
         "Explique cette sélection en français, de façon technique et approfondie. Détaille la sémantique, le fonctionnement interne et les points subtils pertinents pour un lecteur qui connaît déjà le langage — ne te limite pas à une paraphrase de surface.")
+      (metal-agent--bloc-instructions-libres)
       (metal-agent--code-block-language)
       code)
      "explication"
@@ -2620,7 +2649,7 @@ est demandée à l'utilisateur."
                                    metal-agent--saved-region-end)
       (metal-agent--store-target 'buffer code))
     (metal-agent--run-codex
-     (metal-agent--prompt-final-code consigne code target-label)
+     (metal-agent--prompt-final-code consigne code target-label orientation)
      (if sur-selection "reformulation (sélection)" "reformulation (fichier)")
      #'metal-agent--handle-codex-code-response)))
 
@@ -2629,7 +2658,11 @@ est demandée à l'utilisateur."
 Si une région est active dans le buffer source, on envoie UNIQUEMENT
 la sélection à l'agent et la modification s'applique à la sélection
 seule.  Sinon, on envoie le fichier entier et la modification
-remplace tout le buffer."
+remplace tout le buffer.
+
+Sur un profil définissant une section [Tâche], la demande ne remplace
+pas la tâche du profil : elle lui est jointe comme précision pour cette
+exécution."
   (interactive)
   ;; Capturer la sélection AVANT toute interaction (qui changerait
   ;; éventuellement le buffer ou la marque).
@@ -2661,7 +2694,7 @@ remplace tout le buffer."
                                    metal-agent--saved-region-end)
       (metal-agent--store-target 'buffer code))
     (metal-agent--run-codex
-     (metal-agent--prompt-final-code demande code target-label)
+     (metal-agent--prompt-final-code demande code target-label demande)
      (if sur-selection "requête (sélection)" "requête (fichier)")
      #'metal-agent--handle-codex-code-response)))
 
@@ -2671,7 +2704,11 @@ Contrairement à `metal-agent-demande-libre', le modèle n'est pas
 contraint de renvoyer du code : sa réponse (analyse, explication,
 recommandations) est affichée dans le buffer de sortie de l'agent.
 Si une région est active, seule la sélection sert de contexte ;
-sinon, c'est le fichier entier."
+sinon, c'est le fichier entier.
+
+Le prompt reprend le préambule du profil actif et les instructions
+libres, mais PAS ses options : celles-ci décrivent des consignes
+d'écriture, sans objet pour une action qui ne modifie rien."
   (interactive)
   (metal-agent--save-current-buffer-and-selection)
   (let* ((sur-selection (and metal-agent--saved-region-beg
@@ -2686,9 +2723,9 @@ sinon, c'est le fichier entier."
          (titre (if sur-selection "analyse (sélection)" "analyse (fichier)")))
     (metal-agent--run-codex
      (format
-      "%s
+      "%s%s
 %s
-
+%s
 N'apporte aucune modification au code ; il s'agit d'une analyse.
 
 Format de la réponse (IMPORTANT) — elle sera lue dans un buffer Emacs
@@ -2705,7 +2742,9 @@ en texte brut, étroit :
 %s
 ```"
       (metal-agent--context-header)
+      (metal-agent--blindage-anti-agentique)
       demande
+      (metal-agent--bloc-instructions-libres)
       (metal-agent--code-block-language)
       code)
      titre

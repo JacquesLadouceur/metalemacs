@@ -15,6 +15,10 @@
 
 (require 'recentf)
 (require 'cl-lib)
+(require 'subr-x)
+(require 'ucs-normalize)
+(require 'url)
+(require 'xml)
 (require 'metal-icones nil t)
 
 ;; Fournies par `metal-quarto.el'.  Chargement non forcé ici : la création
@@ -397,6 +401,173 @@ Remplace le buffer de sélection courant."
         (if (eq metal-dashboard-signets-tri 'date) 'nom 'date))
   (metal-dashboard-signets-ouvrir))
 
+;;; ── Capture d'un lien depuis le presse-papiers ─────────────────────
+
+(defun metal-dashboard--signets-utile (chaine)
+  "Retourner CHAINE élaguée si elle contient autre chose que du blanc.
+Retourne nil sinon.  Indispensable pour chaîner les sources du
+presse-papiers avec `or\\=': le port NS de macOS renvoie la chaîne vide
+— et non nil — pour un type de sélection qu\\='il ne gère pas, ce qui
+arrêterait le `or\\=' sur une valeur inexploitable."
+  (when (stringp chaine)
+    (let ((elaguee (string-trim chaine)))
+      (unless (string-empty-p elaguee) elaguee))))
+
+(defun metal-dashboard--signets-presse-papiers ()
+  "Retourner le contenu du presse-papiers système, ou une chaîne vide.
+Interroge la sélection CLIPBOARD sous ses deux types (le navigateur doit
+être encore ouvert sous X11), puis retombe sur l'anneau de kill d'Emacs.
+Chaque source est ignorée si elle est vide ou ne contient que du blanc."
+  (or (metal-dashboard--signets-utile
+       (ignore-errors (gui-get-selection 'CLIPBOARD 'UTF8_STRING)))
+      (metal-dashboard--signets-utile
+       (ignore-errors (gui-get-selection 'CLIPBOARD 'STRING)))
+      (metal-dashboard--signets-utile
+       (ignore-errors (current-kill 0 t)))
+      ""))
+
+(defun metal-dashboard--signets-url-p (chaine)
+  "Retourner non-nil si CHAINE ressemble à une adresse http(s)."
+  (and (stringp chaine)
+       (string-match-p "\\`https?://[^[:space:]]+\\'" chaine)))
+
+(defun metal-dashboard--signets-extraire-url (chaine)
+  "Retourner la première adresse http(s) contenue dans CHAINE, ou nil.
+Tolère ce qui entoure le lien : titre de page copié avec l'adresse,
+guillemets, chevrons, parenthèses Markdown, retours de ligne."
+  (when (and (stringp chaine)
+             (string-match "https?://[^ \t\n\r\f\"<>]+" chaine))
+    ;; Retirer la ponctuation ou les délimiteurs collés à la fin du lien.
+    (replace-regexp-in-string "[].,;:!?'\")]+\\'" "" (match-string 0 chaine))))
+
+(defun metal-dashboard--signets-titre-distant (url)
+  "Retourner le contenu de la balise <title> de URL, ou nil.
+Échoue silencieusement (hors ligne, délai dépassé, page sans titre)."
+  (ignore-errors
+    (let ((tampon (url-retrieve-synchronously url t t 4)))
+      (when (buffer-live-p tampon)
+        (with-current-buffer tampon
+          (prog1
+              (progn
+                (goto-char (point-min))
+                (when (re-search-forward "<title[^>]*>\\([^<]*\\)</title>" nil t)
+                  (let ((titre (string-trim
+                                (replace-regexp-in-string
+                                 "[ \t\n\r]+" " "
+                                 (xml-substitute-special (match-string 1))))))
+                    (unless (string-empty-p titre) titre))))
+            (kill-buffer tampon)))))))
+
+(defun metal-dashboard--signets-sections (filepath)
+  "Retourner la liste des titres de niveau 1 du fichier FILEPATH."
+  (when (file-exists-p filepath)
+    (with-temp-buffer
+      (insert-file-contents filepath)
+      (goto-char (point-min))
+      (let (titres)
+        (while (re-search-forward "^\\* +\\(.*\\)$" nil t)
+          (let ((titre (string-trim (match-string 1))))
+            (unless (string-empty-p titre)
+              (push titre titres))))
+        (nreverse titres)))))
+
+(defun metal-dashboard--signets-clef-tri (chaine)
+  "Retourner la clef de comparaison de CHAINE : minuscules, sans accents.
+La décomposition NFD sépare la lettre de son signe diacritique, qui est
+ensuite retiré : « Éducation » et « education » donnent la même clef."
+  (replace-regexp-in-string
+   "[\u0300-\u036f]" ""
+   (ucs-normalize-NFD-string (downcase chaine))))
+
+(defun metal-dashboard--signets-trier-sections (sections)
+  "Retourner SECTIONS triées alphabétiquement, casse et accents ignorés."
+  (mapcar #'cdr
+          (sort (mapcar (lambda (s)
+                          (cons (metal-dashboard--signets-clef-tri s) s))
+                        sections)
+                (lambda (a b) (string-lessp (car a) (car b))))))
+
+(defun metal-dashboard--signets-table (candidats)
+  "Retourner une table de complétion préservant l'ordre de CANDIDATS.
+Sans cela, les interfaces de complétion (Vertico, Ivy, etc.) réordonnent
+la liste selon leur propre tri et défont le tri sans accents."
+  (lambda (chaine predicat action)
+    (if (eq action 'metadata)
+        '(metadata (display-sort-function . identity)
+                   (cycle-sort-function . identity))
+      (complete-with-action action candidats chaine predicat))))
+
+(defcustom metal-dashboard-signets-prefixe "- "
+  "Préfixe des entrées de signet écrites dans les fichiers .org.
+Vaut « - » : les signets sont des éléments de liste sous la section.
+Mettre « ** » pour en faire des titres de niveau 2."
+  :type 'string
+  :group 'metal-dashboard)
+
+(defun metal-dashboard--signets-inserer (filepath section url titre)
+  "Insérer le signet URL/TITRE à la fin de SECTION dans FILEPATH.
+L'entrée est écrite avec `metal-dashboard-signets-prefixe'.  La section
+est créée à la fin du fichier si elle n'existe pas."
+  (with-current-buffer (find-file-noselect filepath)
+    (save-excursion
+      (goto-char (point-min))
+      (if (re-search-forward
+           (format "^\\* +%s[ \t]*$" (regexp-quote section)) nil t)
+          (progn
+            (forward-line 1)
+            (if (re-search-forward "^\\* " nil t)
+                (goto-char (match-beginning 0))
+              (goto-char (point-max)))
+            (skip-chars-backward " \t\n"))
+        (goto-char (point-max))
+        (skip-chars-backward " \t\n")
+        (insert (format "\n\n* %s" section)))
+      (insert (format "\n%s[[%s][%s]]"
+                      metal-dashboard-signets-prefixe url
+                      (if (string-empty-p titre) url titre)))
+      (when (eobp) (insert "\n")))
+    (save-buffer)))
+
+(defun metal-dashboard-signets-ajouter-lien ()
+  "Ajouter un signet à partir du lien copié dans le presse-papiers.
+L'adresse est reprise automatiquement du presse-papiers ; elle n'est
+demandée que si celui-ci n'en contient aucune.  Demande ensuite la liste
+de destination (si plusieurs existent), le titre — récupéré depuis la
+page distante — puis la section Org de niveau 1 où classer le signet."
+  (interactive)
+  (let ((fichiers (mapcar #'car (metal-dashboard--signets-liste-fichiers))))
+    (unless fichiers
+      (user-error "Aucune liste de signets : créez-en une d'abord"))
+    (let* ((fichier
+            (if (cdr fichiers)
+                (expand-file-name
+                 (completing-read "Liste : "
+                                  (mapcar #'file-name-nondirectory fichiers)
+                                  nil t)
+                 (metal-dashboard--signets-dir))
+              (car fichiers)))
+           (brut (metal-dashboard--signets-presse-papiers))
+           ;; L'adresse est prise telle quelle dans le presse-papiers ; on
+           ;; ne demande la saisie que s'il n'y a rien d'exploitable.
+           (url (or (metal-dashboard--signets-extraire-url brut)
+                    (metal-dashboard--signets-extraire-url
+                     (read-string "Aucun lien dans le presse-papiers, URL : ")))))
+      (unless (metal-dashboard--signets-url-p url)
+        (user-error "Adresse invalide : %s" (or url "")))
+      (let* ((titre (read-string
+                     "Titre : "
+                     (or (metal-dashboard--signets-titre-distant url) "")))
+             (sections (metal-dashboard--signets-trier-sections
+                        (or (metal-dashboard--signets-sections fichier)
+                            '("Général"))))
+             (section (completing-read
+                       "Section : "
+                       (metal-dashboard--signets-table sections)
+                       nil nil nil nil (car sections))))
+        (metal-dashboard--signets-inserer fichier section url titre)
+        (message "Signet ajouté dans %s (%s)"
+                 (file-name-nondirectory fichier) section)))))
+
 (defun metal-dashboard-signets-ouvrir ()
   "Ouvrir le buffer `*Signets*' listant les fichiers de signets du dossier.
 Si le dossier n'existe pas, le créer. Si aucun fichier n'existe,
@@ -443,6 +614,14 @@ demander immédiatement un nom pour créer le premier."
                                  'follow-link t
                                  'help-echo (format "Ouvrir %s" filepath))
                   (insert (format "    %s\n" date-relative))))
+              (insert "\n  ")
+              (insert-button (concat (metal-dashboard--icone "📋")
+                                     " Ajouter un lien du presse-papiers...")
+                             'action (lambda (_b)
+                                       (call-interactively
+                                        #'metal-dashboard-signets-ajouter-lien))
+                             'follow-link t
+                             'help-echo "Capturer l'URL copiée dans le navigateur")
               (insert "\n  ")
               (insert-button (concat (metal-dashboard--icone "➕")
                                      " Créer une nouvelle liste de signets...")

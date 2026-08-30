@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Jacques Ladouceur
 ;; Auteur: Jacques Ladouceur
-;; Version: 1.1
+;; Version: 1.2
 
 ;;; Commentaires:
 ;; Ce module gère la configuration Quarto pour MetalEmacs :
@@ -10,6 +10,7 @@
 ;; - Pliage automatique des sections
 ;; - Barre d'outils header-line
 ;; - Formatage (gras, italique, souligné, barré, code)
+;; - Bibliographie et citations (citar)
 ;; - Rendu Quarto (F8)
 ;; - Conversion Org-mode vers Quarto (.qmd)
 
@@ -224,15 +225,35 @@ Retourne t si le rendu peut continuer immédiatement, nil s'il faut attendre."
 (setq markdown-mode-outline-regexp "^#+ ")
 
 ;; TAB : plier/déplier la section courante
+(defun metal--yas-deployable-p ()
+  "Retourne non nil si un modèle YASnippet peut être déployé au point.
+La vérification est protégée : si YASnippet est absent ou si son API
+interne change, la fonction retourne nil sans provoquer d'erreur."
+  (and (bound-and-true-p yas-minor-mode)
+       (fboundp 'yas--templates-for-key-at-point)
+       (yas--templates-for-key-at-point)
+       t))
+
 (defun metal-outline-cycle ()
-  "Sur un titre : plier/déplier. Sinon : TAB normal."
+  "Sur un titre : faire défiler l'état de la section.
+Le cycle passe par trois états : repliée, sous-titres visibles, puis
+entièrement déployée ; l'état intermédiaire est sauté lorsque la section
+ne contient aucun sous-titre.  Ailleurs, déployer le modèle YASnippet
+dont l'abréviation précède le point, s'il en existe un ; sinon, TAB
+normal."
   (interactive)
-  (if (and outline-minor-mode
-           (save-excursion
-             (beginning-of-line)
-             (looking-at outline-regexp)))
-      (outline-toggle-children)
-    (indent-for-tab-command)))
+  (cond
+   ((and outline-minor-mode
+         (save-excursion
+           (beginning-of-line)
+           (looking-at outline-regexp)))
+    (if (fboundp 'outline-cycle)
+        (outline-cycle)
+      (outline-toggle-children)))
+   ((metal--yas-deployable-p)
+    (yas-expand))
+   (t
+    (indent-for-tab-command))))
 
 (define-key outline-minor-mode-map (kbd "<tab>") #'metal-outline-cycle)
 (define-key outline-minor-mode-map (kbd "TAB")   #'metal-outline-cycle)
@@ -1073,8 +1094,9 @@ buffer.  Ne duplique pas un champ `bibliography:' déjà présent."
                 "---\n\n")))))
 
 (defconst metal-quarto-references-menu
-  '(("Note de bas de page" . metal-quarto-note-bas-de-page)
-    ("Citation [@clé]"     . metal-quarto-citation)
+  '(("Citation (choisir dans la bibliographie)" . metal-quarto-citer)
+    ("Citation (clé saisie à la main)" . metal-quarto-citation)
+    ("Note de bas de page" . metal-quarto-note-bas-de-page)
     ("Image / figure"      . metal-quarto-figure)
     ("Renvoi croisé (@fig-, @tbl-, @sec-)" . metal-quarto-renvoi))
   "Menu unifié des insertions de type référence.
@@ -1082,14 +1104,154 @@ Libellé français vers commande interactive correspondante.")
 
 (defun metal-quarto-references ()
   "Propose un choix de référence à insérer (note, citation, image, renvoi).
-Point d'entrée unique regroupant `metal-quarto-note-bas-de-page',
-`metal-quarto-citation', `metal-quarto-figure' et `metal-quarto-renvoi',
-sélectionné via `completing-read'."
+Point d'entrée unique regroupant `metal-quarto-citer',
+`metal-quarto-note-bas-de-page', `metal-quarto-citation',
+`metal-quarto-figure' et `metal-quarto-renvoi', sélectionné via
+`completing-read'."
   (interactive)
   (let* ((libelle (completing-read "Insérer : "
                                     metal-quarto-references-menu nil t))
          (commande (cdr (assoc libelle metal-quarto-references-menu))))
     (call-interactively commande)))
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Bibliographie : citar
+;;; ═══════════════════════════════════════════════════════════════════
+
+(defgroup metal-quarto nil
+  "Édition de documents Quarto dans MetalEmacs."
+  :group 'quarto
+  :prefix "metal-quarto-")
+
+(defcustom metal-quarto-bibliographie-defaut nil
+  "Fichiers .bib à utiliser quand le document n'en déclare aucun.
+Cette valeur est demandée à la première utilisation d'une commande de
+citation, puis conservée d'une session à l'autre par
+`customize-save-variable'.  Un document qui déclare lui-même sa
+bibliographie a toujours priorité sur ce réglage."
+  :type '(repeat file)
+  :group 'metal-quarto)
+
+(use-package citar
+  :straight t
+  :init
+  (setq citar-bibliography metal-quarto-bibliographie-defaut)
+  (setq citar-templates
+        '((main   . "${author editor:30}  ${date year issued:4}  ${title:48}")
+          (suffix . "  ${=key= id:20}")
+          (preview . "${author editor} (${year issued date}) ${title}.\n")
+          (note   . "Notes sur ${author editor}, ${title}"))))
+
+(defun metal-quarto--bib-nettoyer (chaine)
+  "Retire les espaces et les guillemets entourant CHAINE."
+  (string-trim (string-trim chaine) "[\"']" "[\"']"))
+
+(defun metal-quarto--bib-champs-yaml (fichier)
+  "Retourne les valeurs brutes du champ `bibliography:' de FICHIER.
+Reconnaît les trois écritures YAML admises par Quarto : valeur simple,
+tableau en ligne entre crochets, et liste à tirets sur les lignes
+suivantes."
+  (when (and fichier (file-readable-p fichier))
+    (with-temp-buffer
+      (insert-file-contents fichier)
+      (goto-char (point-min))
+      (when (re-search-forward "^bibliography:[ \t]*\\(.*\\)$" nil t)
+        (let ((valeur (string-trim (match-string-no-properties 1)))
+              (fichiers nil))
+          (cond
+           ((string-empty-p valeur)
+            (forward-line 1)
+            (while (looking-at "^[ \t]*-[ \t]*\\(.+\\)$")
+              (push (metal-quarto--bib-nettoyer
+                     (match-string-no-properties 1))
+                    fichiers)
+              (forward-line 1)))
+           ((string-prefix-p "[" valeur)
+            (dolist (f (split-string (string-trim valeur "\\[" "\\]") "," t))
+              (push (metal-quarto--bib-nettoyer f) fichiers)))
+           (t (push (metal-quarto--bib-nettoyer valeur) fichiers)))
+          (nreverse fichiers))))))
+
+(defun metal-quarto--bib-sources ()
+  "Fichiers susceptibles de déclarer la bibliographie du document courant.
+Le fichier lui-même d'abord, puis les `_metadata.yml' et `_quarto.yml'
+des dossiers parents : un chapitre dépourvu d'en-tête YAML hérite ainsi
+de la bibliographie déclarée à la racine du projet."
+  (let* ((fichier (buffer-file-name))
+         (dossier (file-name-directory (or fichier default-directory)))
+         (dm (locate-dominating-file dossier "_metadata.yml"))
+         (dq (locate-dominating-file dossier "_quarto.yml"))
+         (sources (list fichier
+                        (and dm (expand-file-name "_metadata.yml" dm))
+                        (and dq (expand-file-name "_quarto.yml" dq)))))
+    (seq-filter (lambda (f) (and f (file-readable-p f))) sources)))
+
+(defun metal-quarto--bib-declaree ()
+  "Bibliographie déclarée pour le document courant, ou nil.
+Retourne une liste de chemins absolus existants ; les chemins relatifs
+sont résolus par rapport au fichier qui les déclare, comme le fait
+Quarto lui-même."
+  (let ((resultat nil))
+    (dolist (source (metal-quarto--bib-sources))
+      (unless resultat
+        (let ((bruts (metal-quarto--bib-champs-yaml source)))
+          (when bruts
+            (setq resultat
+                  (seq-filter
+                   #'file-readable-p
+                   (mapcar (lambda (f)
+                             (expand-file-name
+                              f (file-name-directory source)))
+                           bruts)))))))
+    resultat))
+
+(defun metal-quarto-bib-choisir ()
+  "Demande le fichier .bib à utiliser et conserve le choix.
+Le chemin est enregistré dans `metal-quarto-bibliographie-defaut', ce
+qui évite d'avoir à le redonner aux sessions suivantes.  Retourne la
+liste des fichiers retenus."
+  (interactive)
+  (let* ((fichier (read-file-name "Fichier de bibliographie (.bib) : "
+                                  nil nil t nil
+                                  (lambda (f)
+                                    (or (file-directory-p f)
+                                        (string-suffix-p ".bib" f)))))
+         (liste (list (expand-file-name fichier))))
+    (customize-save-variable 'metal-quarto-bibliographie-defaut liste)
+    (setq citar-bibliography liste)
+    (message "Bibliographie enregistrée : %s" fichier)
+    liste))
+
+(defun metal-quarto-bib-assurer (&optional demander)
+  "Règle `citar-bibliography' pour le tampon courant.
+La bibliographie déclarée par le document ou par le projet a priorité ;
+à défaut, `metal-quarto-bibliographie-defaut' est utilisé.  Si aucune
+des deux n'est disponible et que DEMANDER est non nil, le fichier est
+demandé une fois, puis mémorisé."
+  (let ((locale (metal-quarto--bib-declaree))
+        (defaut (seq-filter #'file-readable-p
+                            metal-quarto-bibliographie-defaut)))
+    (cond
+     (locale (setq-local citar-bibliography locale))
+     (defaut (setq-local citar-bibliography defaut))
+     (demander (setq-local citar-bibliography (metal-quarto-bib-choisir))))))
+
+(defun metal-quarto-citer ()
+  "Insère une citation choisie dans la bibliographie du document.
+Ouvre la liste des entrées avec leurs auteurs, leur année et leur titre ;
+plusieurs entrées peuvent être retenues pour une citation groupée."
+  (interactive)
+  (metal-quarto-bib-assurer t)
+  (call-interactively #'citar-insert-citation))
+
+(defun metal-quarto--activer-citar ()
+  "Active la complétion des clés de citation dans le tampon courant.
+Après la saisie d'un `@', \\[completion-at-point] propose les entrées
+de la bibliographie.  Aucune question n'est posée à l'ouverture du
+fichier : la bibliographie n'est demandée qu'au premier appel d'une
+commande de citation."
+  (metal-quarto-bib-assurer nil)
+  (add-hook 'completion-at-point-functions #'citar-capf 90 t))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Barre d'outils header-line
@@ -1137,6 +1299,11 @@ bien les fichiers Markdown ordinaires que Quarto."
 
 ;; Activer cette barre pour tous les fichiers Markdown (.md et .qmd)
 (add-hook 'markdown-mode-hook #'metal-quarto-header-line)
+
+;; Complétion des clés de citation après un « @ »
+(add-hook 'markdown-mode-hook #'metal-quarto--activer-citar)
+
+(define-key markdown-mode-map (kbd "C-c c") #'metal-quarto-citer)
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Conversion Org-mode vers Quarto (.qmd)

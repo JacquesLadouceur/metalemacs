@@ -1258,6 +1258,7 @@ Opération :
 (global-set-key (kbd "C-c b u") #'metal-icloud-delier-fichier)
 (global-set-key (kbd "C-c b i") #'metal-icloud-afficher-etat)
 
+
 (use-package org-table-wrap-functions
   :straight (:host github :repo "analyticd/org-table-wrap-functions")
   :bind (:map org-mode-map

@@ -968,39 +968,115 @@ ou le symbole à l'avance, avant le clic."
     (when (and expression (not (string-empty-p expression)))
       (dape-watch-dwim expression))))
 
+;; (defun metal-python--dape-header-format ()
+;;   "Construire la chaîne du header-line pour une session dape active.
+;; Les libellés sont des emoji ; le constructeur `metal-python--dape-bouton'
+;; reste spécifique car il capture le buffer cliqué (contrainte des
+;; commandes dape)."
+;;   (concat
+;;    "      "
+;;    (metal-python--dape-bouton (metal-toolbar-emoji "▶️" :color "#27ae60")
+;;                               "Continuer jusqu'au prochain breakpoint"
+;;                               #'dape-continue)
+;;    " "
+;;    (metal-python--dape-bouton (metal-toolbar-emoji "⤵️")
+;;                               "Ligne suivante, sans entrer dans les fonctions"
+;;                               #'dape-next)
+;;    " "
+;;    (metal-python--dape-bouton (metal-toolbar-emoji "🔽")
+;;                               "Entrer dans la fonction"
+;;                               #'dape-step-in)
+;;    " "
+;;    (metal-python--dape-bouton (metal-toolbar-emoji "🔼")
+;;                               "Sortir de la fonction"
+;;                               #'dape-step-out)
+;;    (metal-toolbar-separator)
+;;    (metal-python--dape-bouton (metal-toolbar-emoji "👁️" :color "#2980b9")
+;;                               "Surveiller la sélection ou le symbole sous le curseur"
+;;                               #'metal-python--dape-watch-depuis-selection-ou-symbole)
+;;    " "
+;;    (metal-python--dape-bouton (metal-toolbar-emoji "🔴")
+;;                               "Poser/enlever un breakpoint à la ligne courante"
+;;                               #'dape-breakpoint-toggle)
+;;    " "
+;;    (metal-python--dape-bouton (metal-toolbar-emoji "⏹️" :color "#c0392b")
+;;                               "Terminer la session de débogage"
+;;                               #'dape-quit)))
+
+(defun metal-python--dape-selectionner-fenetre-cliquee ()
+  "Sélectionner la fenêtre d'où provient le clic courant, s'il y en a un.
+Les commandes dape exigent que le buffer courant soit celui de la
+session débuggée, sinon elles échouent avec `No stopped debug
+connection'. Un clic dans le header-line ne garantit pas cela."
+  (let* ((posn (and (consp last-input-event)
+                    (event-start last-input-event)))
+         (window (and posn (posn-window posn))))
+    (when (window-live-p window)
+      (select-window window))))
+
+(defun metal-python-dape-continue ()
+  "Continuer l'exécution jusqu'au prochain breakpoint."
+  (interactive)
+  (metal-python--dape-selectionner-fenetre-cliquee)
+  (call-interactively #'dape-continue))
+
+(defun metal-python-dape-next ()
+  "Passer à la ligne suivante, sans entrer dans les fonctions appelées."
+  (interactive)
+  (metal-python--dape-selectionner-fenetre-cliquee)
+  (call-interactively #'dape-next))
+
+(defun metal-python-dape-step-in ()
+  "Entrer dans la fonction appelée à la ligne courante."
+  (interactive)
+  (metal-python--dape-selectionner-fenetre-cliquee)
+  (call-interactively #'dape-step-in))
+
+(defun metal-python-dape-step-out ()
+  "Exécuter jusqu'au retour de la fonction courante."
+  (interactive)
+  (metal-python--dape-selectionner-fenetre-cliquee)
+  (call-interactively #'dape-step-out))
+
+(defun metal-python-dape-breakpoint-toggle ()
+  "Poser ou retirer un breakpoint à la ligne courante."
+  (interactive)
+  (metal-python--dape-selectionner-fenetre-cliquee)
+  (call-interactively #'dape-breakpoint-toggle))
+
+(defun metal-python-dape-quit ()
+  "Terminer la session de débogage."
+  (interactive)
+  (metal-python--dape-selectionner-fenetre-cliquee)
+  (call-interactively #'dape-quit))
+
+
+
 (defun metal-python--dape-header-format ()
   "Construire la chaîne du header-line pour une session dape active.
-Les libellés sont des emoji ; le constructeur `metal-python--dape-bouton'
-reste spécifique car il capture le buffer cliqué (contrainte des
-commandes dape)."
-  (concat
-   (metal-python--dape-bouton (metal-toolbar-emoji "▶️" :color "#27ae60")
-                              "Continuer jusqu'au prochain breakpoint"
-                              #'dape-continue)
-   " "
-   (metal-python--dape-bouton (metal-toolbar-emoji "⤵️")
-                              "Ligne suivante, sans entrer dans les fonctions"
-                              #'dape-next)
-   " "
-   (metal-python--dape-bouton (metal-toolbar-emoji "🔽")
-                              "Entrer dans la fonction"
-                              #'dape-step-in)
-   " "
-   (metal-python--dape-bouton (metal-toolbar-emoji "🔼")
-                              "Sortir de la fonction"
-                              #'dape-step-out)
-   (metal-toolbar-separator)
-   (metal-python--dape-bouton (metal-toolbar-emoji "👁️" :color "#2980b9")
-                              "Surveiller la sélection ou le symbole sous le curseur"
-                              #'metal-python--dape-watch-depuis-selection-ou-symbole)
-   " "
-   (metal-python--dape-bouton (metal-toolbar-emoji "🔴")
-                              "Poser/enlever un breakpoint à la ligne courante"
-                              #'dape-breakpoint-toggle)
-   " "
-   (metal-python--dape-bouton (metal-toolbar-emoji "⏹️" :color "#c0392b")
-                              "Terminer la session de débogage"
-                              #'dape-quit)))
+Barre déclarative via `metal-toolbar-build' : padding, taille et
+alignement viennent uniformément de `metal-toolbar'."
+  (metal-toolbar-build
+   '((:emoji "▶️" :color "#27ae60"
+             :tooltip "Continuer jusqu'au prochain breakpoint"
+             :command metal-python-dape-continue)
+     (:emoji "⤵️" :tooltip "Ligne suivante, sans entrer dans les fonctions"
+             :command metal-python-dape-next)
+     (:emoji "🔽" :tooltip "Entrer dans la fonction"
+             :command metal-python-dape-step-in)
+     (:emoji "🔼" :tooltip "Sortir de la fonction"
+             :command metal-python-dape-step-out)
+     (:sep)
+     (:emoji "👁️" :color "#2980b9"
+             :tooltip "Surveiller la sélection ou le symbole sous le curseur"
+             :command metal-python--dape-watch-depuis-selection-ou-symbole)
+     (:emoji "🔴" :tooltip "Poser/enlever un breakpoint à la ligne courante"
+             :command metal-python-dape-breakpoint-toggle)
+     (:sep)
+     (:emoji "⏹️" :color "#c0392b"
+             :tooltip "Terminer la session de débogage"
+             :command metal-python-dape-quit))))
+
 
 (defun metal-python--dape-header-activer ()
   "Remplacer le header-line par la barre de boutons dape.
