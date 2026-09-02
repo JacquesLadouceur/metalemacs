@@ -1232,6 +1232,9 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
     (display-buffer (metal-agent--codex-buffer))
     (cond
      ((metal-agent--erreur-auth-p raw)
+      ;; Preuve par l'usage : elle prime sur toute sonde et corrige
+      ;; immédiatement l'affichage de l'Assistant.
+      (metal-agent-auth-noter metal-agent-provider 'non)
       (let ((label (metal-agent--current-label))
             (buf-name (metal-agent--current-buffer-name)))
         (metal-agent--show-status-message
@@ -2985,6 +2988,9 @@ Ordre de préférence du terminal :
 
 Avec un préfixe (`C-u', FORCER-ANSI-TERM non nil), force ansi-term."
   (interactive "i\nP")
+  ;; L'état d'auth en cache devient caduc dès qu'on ouvre un login :
+  ;; le prochain rendu de l'Assistant doit resonder.
+  (metal-agent-auth-invalider (or provider-id metal-agent-provider))
   (let* ((id        (or provider-id metal-agent-provider))
          (label     (metal-agent--provider-prop :label id))
          (command   (let ((metal-agent-provider id))
@@ -3036,6 +3042,375 @@ Avec un préfixe (`C-u', FORCER-ANSI-TERM non nil), force ansi-term."
         (message
          "ansi-term peut mal rendre l'UI de %s.  Installer `eat' ou `vterm' pour un meilleur rendu."
          label))))))
+
+;;; --- État d'authentification (détection à trois états) -------------
+
+;; Le panneau de l'Assistant affichait un booléen : tout ce qui n'était
+;; pas *prouvé* authentifié devenait « non authentifié », donc un bouton
+;; [Authentifier] trompeur.  On distingue ici trois états réels — `oui',
+;; `non' et `inconnu' — et on hiérarchise les canaux de preuve :
+;; variable d'environnement, puis sonde CLI, puis fichiers de
+;; credentials.  Le premier canal qui répond `oui' ou `non' tranche ;
+;; `inconnu' donne droit à une mention grise, jamais à un bouton.
+;;
+;; Clés de catalogue lues (toutes optionnelles) :
+;;
+;;   :auth-env      ("ANTHROPIC_API_KEY" …)
+;;       Variables d'environnement qui valent authentification.
+;;
+;;   :auth-sonde    (:args ("auth" "status") :succes 0 :echec (1) :timeout 15)
+;;       Sous-commande NON interactive interrogeant la CLI.  Le verdict
+;;       ne dépend QUE du code de sortie : le texte des CLI change de
+;;       formulation à chaque version et dépend de la locale.  Sans
+;;       `:echec', un code différent de `:succes' donne `inconnu' —
+;;       jamais `non'.
+;;
+;;   :auth-fichiers ((windows "%USERPROFILE%/.antigravity/credentials.json"
+;;                            "%LOCALAPPDATA%/agy/credentials.json")
+;;                   (darwin  "~/.config/antigravity/credentials.json")
+;;                   (t       "~/.config/antigravity/credentials.json"))
+;;       Candidats par plateforme, évalués en « au moins un existe ».
+;;       Les formes %VAR%, $VAR et ${VAR} sont résolues par `getenv'.
+;;       Sous Windows, `~' n'est PAS fiable : quand HOME n'est pas
+;;       défini, Emacs le fait retomber sur %APPDATA%, et un chemin en
+;;       `~/…' va chercher dans AppData/Roaming.  Une liste plate de
+;;       chaînes reste acceptée (compatibilité) et vaut pour toutes les
+;;       plateformes.
+
+(defcustom metal-agent-auth-ttl 300
+  "Durée de validité, en secondes, d'un état d'authentification en cache.
+Le panneau de l'Assistant se redessine souvent : sans cache, chaque
+rendu lancerait un processus par agent.  nil = pas d'expiration."
+  :type '(choice integer (const :tag "Jamais expirer" nil))
+  :group 'metal-agent)
+
+(defcustom metal-agent-auth-sonde-timeout 15
+  "Délai maximal, en secondes, accordé à une sonde d'authentification.
+Au-delà, la sonde est tuée et l'état retenu est `inconnu'."
+  :type 'integer
+  :group 'metal-agent)
+
+(defvar metal-agent-auth-changement-hook nil
+  "Hook lancé quand l'état d'auth d'un agent change.
+Chaque fonction reçoit deux arguments : l'ID de l'agent et le nouvel
+état (`oui', `non' ou `inconnu').  C'est le point d'accroche pour que
+l'Assistant (metal-deps.el) se redessine au retour d'une sonde
+asynchrone.")
+
+(defvar metal-agent--auth-cache (make-hash-table :test 'eq)
+  "Cache des états d'auth : ID vers (:etat SYM :canal SYM :horodatage TIME).")
+
+(defvar metal-agent--auth-en-cours nil
+  "Liste des IDs dont une sonde asynchrone est en vol.")
+
+(defun metal-agent--auth-plateforme ()
+  "Clé de plateforme utilisée dans `:auth-fichiers'."
+  (cond ((eq system-type 'windows-nt) 'windows)
+        ((eq system-type 'darwin)     'darwin)
+        (t                            'gnu/linux)))
+
+(defun metal-agent--auth-resoudre-chemin (chemin)
+  "Résoudre les variables d'environnement de CHEMIN, ou nil s'il en manque.
+Reconnaît %VAR% (Windows), $VAR et ${VAR}.  Retourner nil plutôt qu'un
+chemin tronqué évite de conclure « non authentifié » sur la foi d'un
+chemin qui ne veut rien dire sur cette machine."
+  (let ((manquante nil))
+    (let ((res (replace-regexp-in-string
+                "%\\([A-Za-z_][A-Za-z0-9_]*\\)%\\|\\${\\([A-Za-z_][A-Za-z0-9_]*\\)}\\|\\$\\([A-Za-z_][A-Za-z0-9_]*\\)"
+                (lambda (m)
+                  (let* ((nom (or (match-string 1 m)
+                                  (match-string 2 m)
+                                  (match-string 3 m)))
+                         (val (getenv nom)))
+                    (if (and val (not (string-empty-p val)))
+                        (replace-regexp-in-string "\\\\" "/" val)
+                      (setq manquante t)
+                      "")))
+                chemin t t)))
+      (unless manquante
+        (expand-file-name res)))))
+
+(defun metal-agent--auth-fichiers-declares (id)
+  "Chemins de credentials déclarés pour ID sur la plateforme courante."
+  (let ((decl (metal-agent--auth-info-pour id :auth-fichiers)))
+    (cond
+     ((null decl) nil)
+     ;; Liste plate de chaînes : ancienne forme, vaut partout.
+     ((cl-every #'stringp decl) decl)
+     (t (let ((entree (or (assq (metal-agent--auth-plateforme) decl)
+                          (assq system-type decl)
+                          (assq t decl))))
+          (cl-remove-if-not #'stringp (cdr entree)))))))
+
+(defun metal-agent--auth-candidats (id)
+  "Liste de (BRUT . RÉSOLU) pour ID ; RÉSOLU est nil si une variable manque."
+  (mapcar (lambda (c) (cons c (metal-agent--auth-resoudre-chemin c)))
+          (metal-agent--auth-fichiers-declares id)))
+
+(defun metal-agent--auth-etat-fichiers (id)
+  "État d'auth de ID déduit des fichiers de credentials.
+Un fichier présent vaut `oui'.  Aucun fichier mais un dossier de
+configuration existant vaut `non' : la CLI est bien là et n'a pas de
+credentials.  Aucun fichier ET aucun dossier parent vaut `inconnu' :
+on cherche probablement au mauvais endroit, et il vaut mieux ne rien
+conclure que d'afficher un faux bouton [Authentifier]."
+  (let ((cands (delq nil (mapcar #'cdr (metal-agent--auth-candidats id)))))
+    (cond
+     ((null cands) 'inconnu)
+     ((cl-some #'file-exists-p cands) 'oui)
+     ((cl-some (lambda (f) (file-directory-p (file-name-directory f))) cands) 'non)
+     (t 'inconnu))))
+
+(defun metal-agent--auth-etat-env (id)
+  "État d'auth de ID déduit des variables d'environnement `:auth-env'."
+  (let ((vars (metal-agent--auth-info-pour id :auth-env)))
+    (if (and vars
+             (cl-some (lambda (v)
+                        (let ((val (getenv v)))
+                          (and val (not (string-empty-p val)))))
+                      vars))
+        'oui
+      'inconnu)))
+
+(defun metal-agent--auth-code-membre-p (code spec)
+  "Non-nil si CODE correspond à SPEC (nombre, liste de nombres, ou nil)."
+  (cond ((null spec)    nil)
+        ((numberp spec) (= code spec))
+        ((listp spec)   (and (memq code spec) t))))
+
+(defun metal-agent--auth-verdict-sonde (sonde code)
+  "Traduire le CODE de sortie d'une SONDE en `oui', `non' ou `inconnu'."
+  (let ((succes (or (plist-get sonde :succes) 0))
+        (echec  (plist-get sonde :echec)))
+    (cond ((metal-agent--auth-code-membre-p code succes) 'oui)
+          ((metal-agent--auth-code-membre-p code echec)  'non)
+          (t 'inconnu))))
+
+(defun metal-agent--auth-sonde-commande (id sonde)
+  "Binaire exécutable de la SONDE de ID, ou nil."
+  (let ((cmd (or (plist-get sonde :commande)
+                 (metal-agent--provider-prop :command id))))
+    (and cmd (executable-find cmd))))
+
+(defun metal-agent--auth-lancer-sonde (id rappel)
+  "Interroger la CLI de ID sans bloquer ; appeler RAPPEL avec l'état.
+RAPPEL reçoit `oui', `non' ou `inconnu'.  La sonde reçoit un EOF
+immédiat sur stdin : une CLI qui consulte stdin (Codex, Claude Code)
+figerait sinon Emacs sous Windows, exactement comme au moment de
+l'exécution d'un prompt."
+  (let* ((sonde (metal-agent--auth-info-pour id :auth-sonde))
+         (bin   (and sonde (metal-agent--auth-sonde-commande id sonde))))
+    (if (not bin)
+        (funcall rappel 'inconnu)
+      (let ((buf (generate-new-buffer (format " *metal-auth-%s*" id)))
+            (delai (or (plist-get sonde :timeout) metal-agent-auth-sonde-timeout))
+            (fini nil)
+            (minuterie nil)
+            (proc nil))
+        ;; Fermeture explicite plutôt que `cl-labels' : la clôture est
+        ;; appelée depuis un sentinelle et depuis une minuterie, donc
+        ;; longtemps après la sortie de ce `let'.
+        (let ((terminer nil))
+          (setq terminer
+                (lambda (etat &optional tuer)
+                  (unless fini
+                    (setq fini t)
+                    (when (timerp minuterie) (cancel-timer minuterie))
+                    (when (and tuer (process-live-p proc))
+                      (ignore-errors (delete-process proc)))
+                    (when (buffer-live-p buf) (kill-buffer buf))
+                    (funcall rappel etat))))
+          (condition-case nil
+              (progn
+                (setq proc
+                      (make-process
+                       :name (format "metal-auth-%s" id)
+                       :buffer buf
+                       :noquery t
+                       :connection-type 'pipe
+                       :command (cons bin (plist-get sonde :args))
+                       :sentinel
+                       (lambda (p _evt)
+                         (when (memq (process-status p) '(exit signal))
+                           (funcall terminer
+                                    (metal-agent--auth-verdict-sonde
+                                     sonde (process-exit-status p)))))))
+                (ignore-errors (process-send-eof proc))
+                (setq minuterie
+                      (run-at-time delai nil
+                                   (lambda () (funcall terminer 'inconnu t)))))
+            (error (funcall terminer 'inconnu t))))))))
+
+(defun metal-agent--auth-cache-lire (id)
+  "Entrée de cache encore fraîche pour ID, ou nil."
+  (let ((e (gethash id metal-agent--auth-cache)))
+    (when (and e
+               (or (null metal-agent-auth-ttl)
+                   (< (float-time (time-since (plist-get e :horodatage)))
+                      metal-agent-auth-ttl)))
+      e)))
+
+(defun metal-agent--auth-cache-ecrire (id etat canal)
+  "Mémoriser ÉTAT pour ID, obtenu par CANAL, et retourner ÉTAT."
+  (let ((ancien (plist-get (gethash id metal-agent--auth-cache) :etat)))
+    (puthash id (list :etat etat :canal canal :horodatage (current-time))
+             metal-agent--auth-cache)
+    (unless (eq ancien etat)
+      (run-hook-with-args 'metal-agent-auth-changement-hook id etat))
+    etat))
+
+(defun metal-agent-auth-invalider (&optional id)
+  "Oublier l'état d'auth en cache de ID — ou de tous les agents si ID est nil.
+À appeler après une installation, un login, ou depuis un bouton
+« Revérifier » de l'Assistant."
+  (interactive)
+  (if id
+      (remhash id metal-agent--auth-cache)
+    (clrhash metal-agent--auth-cache))
+  nil)
+
+(defun metal-agent-auth-noter (id etat)
+  "Enregistrer ÉTAT pour ID à partir de l'usage réel de l'agent.
+Une erreur d'auth vue pendant une vraie exécution est la preuve la plus
+fiable qui soit : elle prime sur toute sonde."
+  (when id
+    (metal-agent--auth-cache-ecrire id etat 'usage)))
+
+(defun metal-agent-etat-auth (id &optional forcer)
+  "État d'auth de ID : `oui', `non', `inconnu' ou `en-cours'.
+
+Ne bloque JAMAIS : la valeur en cache est retournée immédiatement et la
+sonde CLI tourne en arrière-plan ; `metal-agent-auth-changement-hook'
+signale le résultat.  Avec FORCER non nil, le cache est ignoré.
+
+Ordre des canaux : variable d'environnement, sonde CLI, fichiers de
+credentials.  `inconnu' signifie « pas de preuve », pas « non
+authentifié » — l'appelant doit l'afficher comme tel."
+  (let* ((cmd (metal-agent--provider-prop :command id))
+         (installe (and cmd (executable-find cmd))))
+    (cond
+     ((not installe) 'inconnu)
+     ((eq 'oui (metal-agent--auth-etat-env id))
+      (metal-agent--auth-cache-ecrire id 'oui 'env))
+     (t
+      (let ((frais (unless forcer (metal-agent--auth-cache-lire id))))
+        (cond
+         (frais (plist-get frais :etat))
+         ((memq id metal-agent--auth-en-cours)
+          (or (plist-get (gethash id metal-agent--auth-cache) :etat) 'en-cours))
+         (t
+          (push id metal-agent--auth-en-cours)
+          (metal-agent--auth-lancer-sonde
+           id
+           (lambda (etat)
+             (setq metal-agent--auth-en-cours
+                   (delq id metal-agent--auth-en-cours))
+             (if (memq etat '(oui non))
+                 (metal-agent--auth-cache-ecrire id etat 'sonde)
+               (metal-agent--auth-cache-ecrire
+                id (metal-agent--auth-etat-fichiers id) 'fichiers))))
+          (or (plist-get (gethash id metal-agent--auth-cache) :etat)
+              'en-cours))))))))
+
+(defun metal-agent-authentifie-p (id)
+  "Non-nil seulement si ID est *prouvé* authentifié.
+Conservée pour les appelants booléens ; préférer `metal-agent-etat-auth'
+qui distingue `non' de `inconnu'."
+  (eq 'oui (metal-agent-etat-auth id)))
+
+(defun metal-agent--auth-ids-connus ()
+  "Liste des IDs d'agents à diagnostiquer."
+  (delete-dups
+   (append (and (boundp 'metal-deps-agents-catalogue)
+                (mapcar #'car metal-deps-agents-catalogue))
+           (mapcar #'car metal-agent--providers))))
+
+(defun metal-agent-diagnostiquer-auth (&optional provider-id)
+  "Afficher le détail de la détection d'auth pour chaque agent.
+
+Montre, canal par canal, ce qui a été testé et ce qui a répondu : les
+variables d'environnement, la sonde CLI avec son code de sortie, et
+chaque chemin de credentials après résolution des variables.  C'est
+cette commande qu'un utilisateur distant doit lancer pour dire *quoi* a
+échoué plutôt que « ça ne marche pas ».
+
+Ici la sonde est lancée en synchrone (stdin sur le périphérique nul),
+contrairement au panneau qui l'exécute en arrière-plan."
+  (interactive)
+  (let ((ids (if provider-id (list provider-id) (metal-agent--auth-ids-connus)))
+        (buf (get-buffer-create "*Metal Agent — Diagnostic auth*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Diagnostic d'authentification — %s\n"
+                        (format-time-string "%Y-%m-%d %H:%M:%S")))
+        (insert (format "system-type : %s\nHOME        : %s\n~ résolu    : %s\n\n"
+                        system-type
+                        (or (getenv "HOME") "(non défini)")
+                        (expand-file-name "~")))
+        (dolist (id ids)
+          (let* ((label (or (metal-agent--provider-prop :label id)
+                            (symbol-name id)))
+                 (cmd   (metal-agent--provider-prop :command id))
+                 (bin   (and cmd (executable-find cmd)))
+                 (vars  (metal-agent--auth-info-pour id :auth-env))
+                 (sonde (metal-agent--auth-info-pour id :auth-sonde))
+                 (etat-env (metal-agent--auth-etat-env id))
+                 (code nil)
+                 (etat-sonde 'inconnu))
+            (insert (format "── %s  (%s)\n" label id))
+            (insert (format "   commande       : %s → %s\n"
+                            (or cmd "—") (or bin "INTROUVABLE")))
+            (insert (format "   :auth-env      : %s\n"
+                            (if vars
+                                (mapconcat
+                                 (lambda (v)
+                                   (format "%s=%s" v
+                                           (let ((val (getenv v)))
+                                             (if (and val (not (string-empty-p val)))
+                                                 "défini" "vide"))))
+                                 vars ", ")
+                              "— (non déclaré)")))
+            (if (not (and sonde bin))
+                (insert "   :auth-sonde    : — (non déclarée)\n")
+              (let ((sbin (metal-agent--auth-sonde-commande id sonde)))
+                (setq code (apply #'call-process sbin null-device nil nil
+                                  (plist-get sonde :args)))
+                (setq etat-sonde (metal-agent--auth-verdict-sonde sonde code))
+                (insert (format "   :auth-sonde    : %s → code %s → %s\n"
+                                (mapconcat #'identity
+                                           (cons sbin (plist-get sonde :args)) " ")
+                                code etat-sonde))))
+            (insert "   :auth-fichiers :\n")
+            (let ((cands (metal-agent--auth-candidats id)))
+              (if (null cands)
+                  (insert "      — (aucun déclaré pour cette plateforme)\n")
+                (dolist (c cands)
+                  (insert (format "      %-8s %s\n"
+                                  (cond ((null (cdr c)) "VAR?")
+                                        ((file-exists-p (cdr c)) "PRÉSENT")
+                                        (t "absent"))
+                                  (or (cdr c)
+                                      (format "%s  (variable non définie)"
+                                              (car c))))))))
+            (let* ((etat-fic (metal-agent--auth-etat-fichiers id))
+                   (verdict (cond ((not bin) 'inconnu)
+                                  ((eq etat-env 'oui) 'oui)
+                                  ((memq etat-sonde '(oui non)) etat-sonde)
+                                  (t etat-fic)))
+                   (canal (cond ((not bin) 'absent)
+                                ((eq etat-env 'oui) 'env)
+                                ((memq etat-sonde '(oui non)) 'sonde)
+                                (t 'fichiers))))
+              (insert (format "      verdict fichiers : %s\n" etat-fic))
+              (when bin
+                (metal-agent--auth-cache-ecrire id verdict canal))
+              (insert (format "   VERDICT        : %s  (canal : %s)\n\n"
+                              verdict canal)))))
+        (insert "Rappel : « inconnu » signifie « aucune preuve », pas « non authentifié ».\n")
+        (goto-char (point-min))
+        (special-mode)))
+    (display-buffer buf)))
 
 ;;; --- Panneau de configuration (buffer dédié) -----------------------
 

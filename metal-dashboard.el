@@ -440,23 +440,43 @@ guillemets, chevrons, parenthèses Markdown, retours de ligne."
     ;; Retirer la ponctuation ou les délimiteurs collés à la fin du lien.
     (replace-regexp-in-string "[].,;:!?'\")]+\\'" "" (match-string 0 chaine))))
 
-(defun metal-dashboard--signets-titre-distant (url)
-  "Retourner le contenu de la balise <title> de URL, ou nil.
-Échoue silencieusement (hors ligne, délai dépassé, page sans titre)."
-  (ignore-errors
-    (let ((tampon (url-retrieve-synchronously url t t 4)))
-      (when (buffer-live-p tampon)
-        (with-current-buffer tampon
-          (prog1
-              (progn
-                (goto-char (point-min))
-                (when (re-search-forward "<title[^>]*>\\([^<]*\\)</title>" nil t)
-                  (let ((titre (string-trim
-                                (replace-regexp-in-string
-                                 "[ \t\n\r]+" " "
-                                 (xml-substitute-special (match-string 1))))))
-                    (unless (string-empty-p titre) titre))))
-            (kill-buffer tampon)))))))
+(defun metal-dashboard--signets-titre-extraire ()
+  "Retourner le titre HTML du tampon courant, ou nil.
+Le tampon contient la réponse brute de `url-retrieve\=' : ses octets ne
+sont pas décodés, d'où le `decode-coding-string\=' — sans lui, tout titre
+accentué revenait en mojibake."
+  (goto-char (point-min))
+  (when (re-search-forward "<title[^>]*>\\([^<]*\\)</title>" nil t)
+    (let ((titre (string-trim
+                  (replace-regexp-in-string
+                   "[ \t\n\r]+" " "
+                   (xml-substitute-special
+                    (decode-coding-string (match-string 1) 'utf-8))))))
+      (unless (string-empty-p titre) titre))))
+
+(defun metal-dashboard--signets-titre-async (url)
+  "Lancer la récupération du titre de URL ; retourner une cellule résultat.
+Le titre est déposé dans le `car\=' de la cellule dès que la page répond.
+
+La requête ne bloque plus Emacs : `url-retrieve-synchronously\=' gelait
+tout, et son argument TIMEOUT ne borne que la boucle d'attente — la
+résolution DNS et la poignée de main TLS d'`open-network-stream' lui
+échappent, et chaque redirection relance le chrono. L'en-tête Range
+demande en outre les premiers kilooctets seulement : le titre est dans
+la tête du document, inutile de rapatrier la page entière (les serveurs
+qui ignorent Range renvoient simplement tout, sans dommage)."
+  (let ((cellule (cons nil nil))
+        (url-request-extra-headers '(("Range" . "bytes=0-8191"))))
+    (ignore-errors
+      (url-retrieve
+       url
+       (lambda (statut cellule)
+         (unwind-protect
+             (unless (plist-get statut :error)
+               (setcar cellule (metal-dashboard--signets-titre-extraire)))
+           (kill-buffer (current-buffer))))
+       (list cellule) t t))
+    cellule))
 
 (defun metal-dashboard--signets-sections (filepath)
   "Retourner la liste des titres de niveau 1 du fichier FILEPATH."
@@ -504,36 +524,56 @@ Mettre « ** » pour en faire des titres de niveau 2."
   :type 'string
   :group 'metal-dashboard)
 
+(defun metal-dashboard--signets-inserer-ligne (section ligne)
+  "Insérer LIGNE à la fin de SECTION dans le tampon courant.
+SECTION est créée à la fin du tampon si elle n'existe pas."
+  (goto-char (point-min))
+  (if (re-search-forward
+       (format "^\\* +%s[ \t]*$" (regexp-quote section)) nil t)
+      (progn
+        (forward-line 1)
+        (if (re-search-forward "^\\* " nil t)
+            (goto-char (match-beginning 0))
+          (goto-char (point-max)))
+        (skip-chars-backward " \t\n"))
+    (goto-char (point-max))
+    (skip-chars-backward " \t\n")
+    (insert (format "\n\n* %s" section)))
+  (insert "\n" ligne)
+  (goto-char (point-max))
+  (unless (bolp) (insert "\n")))
+
 (defun metal-dashboard--signets-inserer (filepath section url titre)
   "Insérer le signet URL/TITRE à la fin de SECTION dans FILEPATH.
 L'entrée est écrite avec `metal-dashboard-signets-prefixe'.  La section
-est créée à la fin du fichier si elle n'existe pas."
-  (with-current-buffer (find-file-noselect filepath)
-    (save-excursion
-      (goto-char (point-min))
-      (if (re-search-forward
-           (format "^\\* +%s[ \t]*$" (regexp-quote section)) nil t)
-          (progn
-            (forward-line 1)
-            (if (re-search-forward "^\\* " nil t)
-                (goto-char (match-beginning 0))
-              (goto-char (point-max)))
-            (skip-chars-backward " \t\n"))
-        (goto-char (point-max))
-        (skip-chars-backward " \t\n")
-        (insert (format "\n\n* %s" section)))
-      (insert (format "\n%s[[%s][%s]]"
-                      metal-dashboard-signets-prefixe url
-                      (if (string-empty-p titre) url titre)))
-      (when (eobp) (insert "\n")))
-    (save-buffer)))
+est créée à la fin du fichier si elle n'existe pas.
+
+Si aucun tampon ne visite FILEPATH, l'écriture passe par un tampon
+temporaire : `find-file-noselect' déclencherait l'initialisation
+complète d'org-mode — font-lock sur tout le fichier, cache
+org-element — pour ajouter une seule ligne."
+  (let ((ligne (format "%s[[%s][%s]]"
+                       metal-dashboard-signets-prefixe url
+                       (if (string-empty-p titre) url titre)))
+        (tampon (find-buffer-visiting filepath)))
+    (if tampon
+        (with-current-buffer tampon
+          (save-excursion
+            (metal-dashboard--signets-inserer-ligne section ligne))
+          (save-buffer))
+      (with-temp-buffer
+        (when (file-exists-p filepath)
+          (insert-file-contents filepath))
+        (metal-dashboard--signets-inserer-ligne section ligne)
+        (write-region (point-min) (point-max) filepath nil 'silence)))))
 
 (defun metal-dashboard-signets-ajouter-lien ()
   "Ajouter un signet à partir du lien copié dans le presse-papiers.
 L'adresse est reprise automatiquement du presse-papiers ; elle n'est
 demandée que si celui-ci n'en contient aucune.  Demande ensuite la liste
-de destination (si plusieurs existent), le titre — récupéré depuis la
-page distante — puis la section Org de niveau 1 où classer le signet."
+de destination (si plusieurs existent), la section Org de niveau 1 où
+classer le signet, puis le titre — récupéré en arrière-plan depuis la
+page distante."
   (interactive)
   (let ((fichiers (mapcar #'car (metal-dashboard--signets-liste-fichiers))))
     (unless fichiers
@@ -554,16 +594,19 @@ page distante — puis la section Org de niveau 1 où classer le signet."
                      (read-string "Aucun lien dans le presse-papiers, URL : ")))))
       (unless (metal-dashboard--signets-url-p url)
         (user-error "Adresse invalide : %s" (or url "")))
-      (let* ((titre (read-string
-                     "Titre : "
-                     (or (metal-dashboard--signets-titre-distant url) "")))
+      ;; La requête réseau est lancée d'abord et l'invite de section — qui
+      ;; ne consulte que le disque — passe avant l'invite de titre : le
+      ;; temps de choisir la section, la réponse distante est arrivée et
+      ;; l'attente devient invisible.
+      (let* ((attente (metal-dashboard--signets-titre-async url))
              (sections (metal-dashboard--signets-trier-sections
                         (or (metal-dashboard--signets-sections fichier)
                             '("Général"))))
              (section (completing-read
                        "Section : "
                        (metal-dashboard--signets-table sections)
-                       nil nil nil nil (car sections))))
+                       nil nil nil nil (car sections)))
+             (titre (read-string "Titre : " (or (car attente) ""))))
         (metal-dashboard--signets-inserer fichier section url titre)
         (message "Signet ajouté dans %s (%s)"
                  (file-name-nondirectory fichier) section)))))

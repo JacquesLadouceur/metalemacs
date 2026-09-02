@@ -63,15 +63,34 @@
 ;;               Linux, et redirigée vers Terminal.app sur macOS.  Le cas
 ;;               s'applique aussi aux désinstallations : « brew uninstall
 ;;               --cask » appelle sudo pour retirer le reçu pkgutil.
+;; Version 4.1 : PATH du shell sous macOS.  Deux PATH coexistent et se
+;;               corrigeaient jusqu'ici séparément : celui d'Emacs (traité
+;;               par `metal-deps--ajouter-au-path') et celui du shell
+;;               interactif, écrit dans ~/.zshrc.  L'installeur
+;;               d'Antigravity dépose `agy' dans ~/.local/bin et ajoute sa
+;;               ligne de PATH à ~/.bashrc, que zsh — shell par défaut de
+;;               macOS depuis Catalina — ne lit jamais : d'où le
+;;               « agy: command not found » dans Terminal.app alors que le
+;;               binaire est bien installé.  L'Assistant vérifie désormais
+;;               la déclaration des dossiers d'installation utilisateur
+;;               dans les fichiers de démarrage RÉELLEMENT lus par le shell
+;;               de l'utilisateur, et propose « Corriger ».  Côté Emacs,
+;;               ~/.local/bin est ajouté dès le chargement plutôt qu'au
+;;               premier rendu de l'Assistant.
 ;;
 ;; Commandes principales :
 ;;   M-x metal-deps-afficher-etat     - Interface graphique avec boutons
+;;   M-x metal-deps-verifier-path     - Diagnostic du PATH (macOS/Linux)
 ;;   M-x metal-deps-installer-logiciels   - Installe tous les logiciels
 ;;   M-x metal-deps-installer-tout    - Installe tous les composants
 
 ;;; Code:
 
 (require 'cl-lib)
+;; `string-join' / `string-empty-p' / `string-trim' : déjà utilisés
+;; ailleurs dans ce fichier sans require explicite.  Sur Emacs 27
+;; (Catalina) ils vivent encore dans subr-x seul.
+(require 'subr-x)
 (require 'widget)
 (require 'url)
 (require 'ansi-color)
@@ -2585,22 +2604,26 @@ du fichier catalogue pour la liste complete des champs.")
              (goto-char (point-min))
              (re-search-forward "Claude Code-credentials" nil t)))))
 
+;; (defun metal-deps--agent-authentifie-p (spec)
+;;   "Retourne t si l'agent défini par SPEC semble authentifié.
+;; Vérifie dans l'ordre :
+;;   1. La fonction :auth-verifier (si définie).
+;;   2. Au moins un des :auth-fichiers existe.
+;;   3. Au moins une des :auth-env est définie et non vide."
+;;   (let ((verifier  (plist-get spec :auth-verifier))
+;;         (fichiers  (plist-get spec :auth-fichiers))
+;;         (env-vars  (plist-get spec :auth-env)))
+;;     (or (and verifier
+;;              (functionp verifier)
+;;              (ignore-errors (funcall verifier)))
+;;         (cl-some (lambda (f) (file-exists-p (expand-file-name f))) fichiers)
+;;         (cl-some (lambda (v) (let ((val (getenv v)))
+;;                                (and val (not (string-empty-p val)))))
+;;                  env-vars))))
+
 (defun metal-deps--agent-authentifie-p (spec)
-  "Retourne t si l'agent défini par SPEC semble authentifié.
-Vérifie dans l'ordre :
-  1. La fonction :auth-verifier (si définie).
-  2. Au moins un des :auth-fichiers existe.
-  3. Au moins une des :auth-env est définie et non vide."
-  (let ((verifier  (plist-get spec :auth-verifier))
-        (fichiers  (plist-get spec :auth-fichiers))
-        (env-vars  (plist-get spec :auth-env)))
-    (or (and verifier
-             (functionp verifier)
-             (ignore-errors (funcall verifier)))
-        (cl-some (lambda (f) (file-exists-p (expand-file-name f))) fichiers)
-        (cl-some (lambda (v) (let ((val (getenv v)))
-                               (and val (not (string-empty-p val)))))
-                 env-vars))))
+  "Compatibilité : non-nil seulement si l'agent est *prouvé* authentifié."
+  (eq 'oui (metal-agent-etat-auth (car (rassq spec metal-deps-agents-catalogue)))))
 
 (defun metal-deps--quote-safe (s)
   "Quote S pour le shell sans backslasher inutilement (cf. `@google/x')."
@@ -3104,6 +3127,243 @@ ET CLI présente sur le système."
           :agent-id      id)))
 
 ;;; ═══════════════════════════════════════════════════════════════════
+;;; PATH du shell (macOS et Linux)
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; Deux PATH coexistent, et corriger l'un ne corrige pas l'autre :
+;;
+;;   — celui d'Emacs, rafraîchi par `metal-deps--ajouter-au-path' et
+;;     `metal-deps--configurer-chemins' ;
+;;   — celui du shell interactif, écrit dans ~/.zshrc, que l'utilisateur
+;;     retrouve dans Terminal.app.
+;;
+;; Le cas typique est celui d'`agy' : son installeur officiel s'exécute
+;; sous bash et écrit sa ligne de PATH dans ~/.bashrc — que zsh, shell par
+;; défaut de macOS depuis Catalina, ne lit jamais.  Le binaire est bien
+;; dans ~/.local/bin, mais le terminal répond « command not found ».
+;;
+;; La vérification est une ANALYSE STATIQUE des fichiers de démarrage,
+;; pas un lancement du shell.  Un `zsh -lic "echo $PATH"' donnerait la
+;; réponse exacte, mais ferait dépendre l'Assistant d'une configuration
+;; étudiante inconnue : un shell interactif qui attend une saisie fige
+;; Emacs, `call-process' n'ayant pas de délai d'expiration.
+
+(defcustom metal-deps-path-dossiers
+  '("~/.local/bin" "/opt/homebrew/bin" "/opt/homebrew/sbin" "~/.npm-global/bin")
+  "Dossiers d'installation utilisateur qui doivent figurer dans le PATH.
+Seuls ceux qui existent réellement sur le disque sont pris en compte :
+inutile de déclarer un dossier vide dans le fichier du shell."
+  :type '(repeat directory)
+  :group 'metal-deps)
+
+(defconst metal-deps--path-marqueur
+  "# MetalEmacs — PATH (bloc géré par l'Assistant, ne pas modifier)"
+  "Ligne de repère du bloc écrit par MetalEmacs dans le fichier du shell.
+Sert à l'idempotence : le bloc est réécrit sur place, jamais dupliqué.")
+
+(defun metal-deps--path-shell-nom ()
+  "Retourne le nom du shell de connexion (\"zsh\", \"bash\", \"fish\"…)."
+  (let ((shell (getenv "SHELL")))
+    (if (and shell (not (string-empty-p shell)))
+        (file-name-nondirectory shell)
+      "zsh")))
+
+(defun metal-deps--path-fichiers-lus ()
+  "Fichiers de démarrage réellement lus par le shell de l'utilisateur.
+C'est le cœur du diagnostic : une déclaration de PATH présente dans
+~/.bashrc ne compte PAS si le shell est zsh.  `/etc/paths' et
+`/etc/paths.d' sont inclus sur macOS, où `path_helper' les traite au
+démarrage de tout shell de connexion."
+  (append
+   (pcase (metal-deps--path-shell-nom)
+     ("bash" '("~/.bash_profile" "~/.bashrc" "~/.profile"))
+     ("fish" '("~/.config/fish/config.fish"))
+     (_      '("~/.zshenv" "~/.zprofile" "~/.zshrc")))
+   (when (eq system-type 'darwin)
+     (cons "/etc/paths"
+           (ignore-errors
+             (directory-files "/etc/paths.d" t "\\`[^.]"))))))
+
+(defun metal-deps--path-fichier-cible ()
+  "Fichier de configuration où écrire la correction."
+  (expand-file-name
+   (pcase (metal-deps--path-shell-nom)
+     ("bash" "~/.bash_profile")
+     ("fish" "~/.config/fish/config.fish")
+     (_      "~/.zshrc"))))
+
+(defun metal-deps--path-dossiers-presents ()
+  "Dossiers de `metal-deps-path-dossiers' existant sur le disque."
+  (cl-remove-if-not
+   #'file-directory-p
+   (mapcar (lambda (d) (directory-file-name (expand-file-name d)))
+           metal-deps-path-dossiers)))
+
+(defun metal-deps--path-declare-p (dossier)
+  "Retourne non-nil si DOSSIER est déclaré dans un fichier lu par le shell.
+Les trois écritures usuelles sont reconnues (chemin absolu, $HOME, ~) et
+les lignes commentées sont ignorées."
+  (let ((motifs (list dossier
+                      (replace-regexp-in-string
+                       (concat "\\`" (regexp-quote (expand-file-name "~")))
+                       "$HOME" dossier)
+                      (replace-regexp-in-string
+                       (concat "\\`" (regexp-quote (expand-file-name "~")))
+                       "~" dossier))))
+    (cl-some
+     (lambda (fichier)
+       (let ((f (expand-file-name fichier)))
+         (and (file-readable-p f)
+              (with-temp-buffer
+                (insert-file-contents f)
+                (cl-some
+                 (lambda (motif)
+                   (goto-char (point-min))
+                   (re-search-forward
+                    (concat "^[^#\n]*" (regexp-quote motif)) nil t))
+                 motifs)))))
+     (metal-deps--path-fichiers-lus))))
+
+(defun metal-deps--path-manquants ()
+  "Dossiers présents sur le disque mais absents du PATH du shell.
+Mémoïsé : le rendu de l'Assistant interroge le même état plusieurs fois."
+  (metal-deps--memo
+   'path-shell-manquants
+   (lambda ()
+     (cl-remove-if #'metal-deps--path-declare-p
+                   (metal-deps--path-dossiers-presents)))))
+
+(defun metal-deps--path-shell-correct-p ()
+  "Prédicat d'état pour l'Assistant : t si le PATH du shell est complet."
+  (null (metal-deps--path-manquants)))
+
+(defun metal-deps--path-description ()
+  "Description dynamique affichée dans l'Assistant."
+  (let ((manquants (metal-deps--path-manquants))
+        (fichier (file-name-nondirectory (metal-deps--path-fichier-cible))))
+    (if manquants
+        (format "%s absent%s de %s"
+                (mapconcat #'abbreviate-file-name manquants ", ")
+                (if (cdr manquants) "s" "") fichier)
+      (format "%s complet (%s)" fichier (metal-deps--path-shell-nom)))))
+
+(defun metal-deps--path-ligne-export (dossiers)
+  "Retourne la ligne d'export à écrire pour DOSSIERS, selon le shell."
+  (let ((abreges (mapcar (lambda (d)
+                           (replace-regexp-in-string
+                            (concat "\\`" (regexp-quote (expand-file-name "~")))
+                            "$HOME" d))
+                         dossiers)))
+    (if (string= (metal-deps--path-shell-nom) "fish")
+        (concat "fish_add_path " (string-join abreges " "))
+      (concat "export PATH=\"" (string-join abreges ":") ":$PATH\""))))
+
+(defun metal-deps-corriger-path-shell ()
+  "Déclare les dossiers d'installation utilisateur dans le fichier du shell.
+Idempotente : le bloc repéré par `metal-deps--path-marqueur' est réécrit
+sur place s'il existe déjà, jamais dupliqué — un étudiant peut donc
+cliquer « Corriger » autant de fois qu'il veut.  Une copie de sauvegarde
+du fichier est faite avant toute écriture.
+
+Le PATH de la session Emacs est rafraîchi dans la foulée ; le PATH du
+terminal, lui, ne changera qu'à l'ouverture d'un nouvel onglet."
+  (interactive)
+  (let* ((dossiers (metal-deps--path-dossiers-presents))
+         (fichier (metal-deps--path-fichier-cible))
+         (bloc (concat metal-deps--path-marqueur "\n"
+                       (metal-deps--path-ligne-export dossiers) "\n")))
+    (if (null dossiers)
+        (message "Aucun dossier à déclarer : rien à corriger.")
+      (make-directory (file-name-directory fichier) t)
+      (when (file-exists-p fichier)
+        (copy-file fichier (concat fichier ".metal-sauvegarde") t)
+        (metal-deps--journaliser "Sauvegarde : %s.metal-sauvegarde" fichier))
+      (with-temp-buffer
+        (when (file-readable-p fichier)
+          (insert-file-contents fichier))
+        ;; Retirer un bloc MetalEmacs antérieur (marqueur + ligne suivante)
+        ;; avant de réécrire : c'est ce qui rend l'opération rejouable et
+        ;; permet d'ajouter un dossier apparu depuis la première correction.
+        (goto-char (point-min))
+        (while (re-search-forward
+                (concat "^" (regexp-quote metal-deps--path-marqueur) "\n.*\n?")
+                nil t)
+          (replace-match ""))
+        (goto-char (point-max))
+        (unless (or (bobp) (bolp)) (insert "\n"))
+        (insert "\n" bloc)
+        ;; Fins de ligne Unix imposées : un fichier de shell en CRLF fait
+        ;; échouer zsh sur « command not found: $'\r' ».
+        (let ((coding-system-for-write 'utf-8-unix))
+          (write-region (point-min) (point-max) fichier nil 'silencieux)))
+      ;; Côté Emacs, appliquer immédiatement.
+      (dolist (d dossiers) (metal-deps--ajouter-au-path d))
+      (metal-deps--cache-vider)
+      (metal-deps--journaliser "PATH du shell corrigé dans %s : %s"
+                               fichier (string-join dossiers ", "))
+      (message "PATH déclaré dans %s — ouvrez un nouveau terminal."
+               (abbreviate-file-name fichier)))))
+
+(defun metal-deps-lier-agy ()
+  "Crée un lien `agy' quand seul l'exécutable `antigravity' est présent.
+Le cask Homebrew installe le binaire sous le nom `antigravity', alors que
+le catalogue d'agents et le CLI attendent tous deux `agy'."
+  (interactive)
+  (let ((source (executable-find "antigravity"))
+        (cible (expand-file-name "~/.local/bin/agy")))
+    (cond
+     ((executable-find "agy")
+      (message "agy est déjà accessible."))
+     ((null source)
+      (message "Ni agy ni antigravity ne sont installés."))
+     ((y-or-n-p (format "Créer le lien %s vers %s ? "
+                        (abbreviate-file-name cible) source))
+      (make-directory (file-name-directory cible) t)
+      (make-symbolic-link source cible t)
+      (metal-deps--ajouter-au-path (file-name-directory cible))
+      (metal-deps--cache-vider)
+      (metal-deps--journaliser "Lien agy créé vers %s" source)
+      (message "Lien créé : %s" (abbreviate-file-name cible))))))
+
+;;;###autoload
+(defun metal-deps-verifier-path ()
+  "Affiche un diagnostic du PATH : Emacs, shell, et exécutables attendus."
+  (interactive)
+  (metal-deps--cache-vider)
+  (let ((manquants (metal-deps--path-manquants)))
+    (with-current-buffer (get-buffer-create "*MetalEmacs PATH*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "  Diagnostic du PATH\n  " (make-string 66 ?─) "\n\n")
+        (insert (format "  Système : %s\n" (metal-deps--nom-systeme)))
+        (insert (format "  Shell   : %s\n" (metal-deps--path-shell-nom)))
+        (insert (format "  Fichier : %s\n\n"
+                        (abbreviate-file-name (metal-deps--path-fichier-cible))))
+        (insert "  Fichiers lus par ce shell\n")
+        (dolist (f (metal-deps--path-fichiers-lus))
+          (insert (format "    %-40s %s\n" (abbreviate-file-name f)
+                          (if (file-readable-p (expand-file-name f))
+                              "présent" "absent"))))
+        (insert "\n  Dossiers attendus\n")
+        (dolist (d (mapcar (lambda (x) (directory-file-name (expand-file-name x)))
+                           metal-deps-path-dossiers))
+          (insert (format "    %-40s %s\n" (abbreviate-file-name d)
+                          (cond ((not (file-directory-p d)) "absent du disque")
+                                ((member d manquants) "hors PATH du shell")
+                                (t "déclaré")))))
+        (insert "\n  Exécutables\n")
+        (dolist (x '("agy" "claude" "codex" "quarto" "swipl" "node" "git"))
+          (insert (format "    %-40s %s\n" x
+                          (or (executable-find x) "introuvable dans Emacs"))))
+        (when manquants
+          (insert "\n  M-x metal-deps-corriger-path-shell pour corriger.\n"))
+        (goto-char (point-min))
+        (special-mode)))
+    (display-buffer "*MetalEmacs PATH*")
+    manquants))
+
+
+;;; ═══════════════════════════════════════════════════════════════════
 ;;; Liste des outils
 ;;; ═══════════════════════════════════════════════════════════════════
 
@@ -3127,6 +3387,18 @@ ET CLI présente sur le système."
      :desinstaller metal-deps-desinstaller-xcode-clt
      :categorie prerequis 
      :macos-seulement t)
+    ;; PATH du shell : `~/.local/bin' n'est pas dans le PATH par défaut de
+    ;; macOS, et l'installeur d'agy écrit sa ligne dans ~/.bashrc, ignoré
+    ;; par zsh.  `:libelle-installer' remplace « Installer » par
+    ;; « Corriger » : rien n'est installé ici, un fichier est amendé.
+    (:nom "PATH du terminal"
+     :verifier metal-deps--path-shell-correct-p
+     :installer metal-deps-corriger-path-shell
+     :libelle-installer "Corriger"
+     :desinstaller nil
+     :categorie prerequis
+     :description metal-deps--path-description
+     :condition (lambda () (memq system-type '(darwin gnu/linux))))
     
     ;; Gestionnaires de paquets
     (:nom "Homebrew" 
@@ -3688,11 +3960,16 @@ chaud."
                                                  (funcall telecharger))
                                        "Télécharger")
                         (widget-insert "  ")))
-                    (let ((fn installeur))
+                    (let ((fn installeur)
+                          ;; `:libelle-installer' permet à une entrée qui
+                          ;; n'installe rien (correction du PATH) d'afficher
+                          ;; un verbe juste plutôt que « Installer ».
+                          (libelle (or (plist-get outil :libelle-installer)
+                                       "Installer")))
                       (widget-create 'push-button
                                      :notify (lambda (&rest _)
                                                (metal-deps--executer-et-rafraichir fn))
-                                     "Installer"))))
+                                     libelle))))
                   ;; Padder le bouton principal à largeur fixe (16 chars)
                   ;; pour aligner la colonne suivante.
                   (let* ((largeur-bouton (string-width
@@ -3945,6 +4222,16 @@ conflits entre gestionnaires de paquets."
       (when (file-exists-p (expand-file-name "brew" brew-bin))
         (add-to-list 'exec-path brew-bin)
         (setenv "PATH" (concat brew-bin ":" (getenv "PATH"))))))
+
+  ;; Dossiers d'installation utilisateur (macOS et Linux).  Emacs lancé en
+  ;; mode graphique n'hérite pas du PATH du shell de connexion : sans cet
+  ;; ajout, `executable-find' ne voit pas ~/.local/bin — donc pas `agy' —
+  ;; tant qu'un rendu de l'Assistant n'a pas appelé
+  ;; `metal-deps--rafraichir-path-agent'.  Fait ici, au chargement, pour
+  ;; que metal-agent trouve la CLI dès le premier appel de la session.
+  (when (memq system-type '(darwin gnu/linux))
+    (dolist (d '("~/.local/bin" "~/.npm-global/bin"))
+      (metal-deps--ajouter-au-path (expand-file-name d))))
 
   ;; SWI-Prolog sur macOS via le bundle officiel (.dmg) : l'exécutable
   ;; `swipl' vit dans /Applications/SWI-Prolog.app/Contents/MacOS, hors

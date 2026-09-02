@@ -756,6 +756,32 @@ Pointe par défaut vers `Signets.org' dans `metal-org-signets-dir'.
 (defvar metal-org--sections-cache nil
   "Cache : (MODTIME . SECTIONS).")
 
+(defcustom metal-org-dnd-demander-fichier t
+  "Si non-nil, le drop demande d'abord dans quel fichier de signets classer.
+À nil, le lien est classé directement dans le fichier actif
+`metal-org-links-file\=' et le glisser-déposer n'affiche plus qu'un seul
+menu ; on change alors de fichier avec `metal-org-selectionner-signets\='
+ou depuis le tableau de bord."
+  :type 'boolean
+  :group 'metal-org)
+
+(defcustom metal-org-dnd-chrono nil
+  "Si non-nil, journaliser la durée de chaque étape du drop dans *Messages*.
+Sert à situer une lenteur : latence entre le dépôt et l'affichage du
+premier menu, lecture du dossier, lecture des sections, écriture."
+  :type 'boolean
+  :group 'metal-org)
+
+(defmacro metal-org--chrono (etiquette &rest corps)
+  "Exécuter CORPS et journaliser sa durée sous ETIQUETTE si le chrono est actif."
+  (declare (indent 1))
+  `(if (not metal-org-dnd-chrono)
+       (progn ,@corps)
+     (let ((metal-org--chrono-debut (current-time)))
+       (prog1 (progn ,@corps)
+         (message "⏱ %s : %.3f s" ,etiquette
+                  (float-time (time-since metal-org--chrono-debut)))))))
+
 (defun metal-org--migrer-signets-si-besoin ()
   "Déplacer l'ancien `Signets.org' unique vers le nouveau dossier.
 Migration unique : l'ancien emplacement était un fichier unique
@@ -792,12 +818,18 @@ Invalide le cache des sections pour forcer une relecture."
   "Liste des fichiers de signets (`.org') du dossier, l'actif en tête.
 Retourne une liste de chemins absolus. Le fichier actif
 `metal-org-links-file' apparaît toujours en premier (dernier utilisé),
-suivi des autres fichiers triés par nom."
-  (let* ((dir (file-name-directory (expand-file-name metal-org-links-file)))
-         (actif (expand-file-name metal-org-links-file))
+suivi des autres fichiers triés par nom.
+
+La comparaison se fait sur les noms développés et non avec
+`file-equal-p', qui appelle `file-truename' sur chaque candidat : sur un
+dossier dont les fichiers sont liés vers iCloud, cela traverse un lien
+symbolique par fichier et peut déclencher la matérialisation d'un
+fichier non téléchargé."
+  (let* ((actif (expand-file-name metal-org-links-file))
+         (dir (file-name-directory actif))
          (tous (when (file-directory-p dir)
                  (directory-files dir t "\\.org\\'" t)))
-         (autres (sort (seq-remove (lambda (f) (file-equal-p f actif)) tous)
+         (autres (sort (seq-remove (lambda (f) (string= f actif)) tous)
                        #'string<)))
     (if (file-exists-p actif)
         (cons actif autres)
@@ -830,73 +862,126 @@ suivi des autres fichiers triés par nom."
           (setq metal-org--sections-cache (cons modtime sections))
           sections)))))
 
+(defun metal-org--inserer-sous-section (section ligne)
+  "Insérer LIGNE à la fin de SECTION dans le tampon courant.
+SECTION est créée à la fin du tampon si elle n'existe pas. LIGNE ne
+comporte pas de saut de ligne final. Le titre de section est ancré en
+fin de ligne : sans cela, « Cours » se serait inséré dans « Cours
+avancés »."
+  (goto-char (point-min))
+  (if (re-search-forward
+       (format "^\\* +%s[ \t]*$" (regexp-quote section)) nil t)
+      (progn
+        (forward-line 1)
+        (if (re-search-forward "^\\* " nil t)
+            (goto-char (match-beginning 0))
+          (goto-char (point-max)))
+        (skip-chars-backward " \t\n")
+        (insert "\n" ligne))
+    (goto-char (point-max))
+    (skip-chars-backward " \t\n")
+    (insert (format "\n\n* %s\n%s" section ligne)))
+  (goto-char (point-max))
+  (unless (bolp) (insert "\n")))
+
 (defun metal-org--insert-link (section title url)
   "Insère le lien URL avec TITLE sous SECTION dans le fichier de signets.
-Écriture directe en mode brut — ne charge jamais org-mode."
-  (let ((link-line (format "- [[%s][%s]]\n" url title))
-        (buf (get-buffer (file-name-nondirectory metal-org-links-file))))
-    (if buf
-        ;; Buffer déjà ouvert — modifier en place
-        (with-current-buffer buf
-          (let ((inhibit-read-only t))
-            (goto-char (point-min))
-            (if (re-search-forward (format "^\\* %s" (regexp-quote section)) nil t)
-                (progn
-                  (if (re-search-forward "^\\* " nil t)
-                      (forward-line -1)
-                    (goto-char (point-max)))
-                  (unless (bolp) (insert "\n"))
-                  (insert link-line))
-              (goto-char (point-max))
-              (unless (bolp) (insert "\n"))
-              (insert (format "\n* %s\n%s" section link-line)))
-            (save-buffer)))
-      ;; Buffer pas ouvert — écriture rapide
-      (with-temp-buffer
-        (insert-file-contents metal-org-links-file)
-        (goto-char (point-min))
-        (if (re-search-forward (format "^\\* %s" (regexp-quote section)) nil t)
-            (progn
-              (if (re-search-forward "^\\* " nil t)
-                  (forward-line -1)
-                (goto-char (point-max)))
-              (unless (bolp) (insert "\n"))
-              (insert link-line))
-          (goto-char (point-max))
-          (unless (bolp) (insert "\n"))
-          (insert (format "\n* %s\n%s" section link-line)))
-        (write-region (point-min) (point-max) metal-org-links-file)))
+Écriture directe en mode brut — ne charge jamais org-mode.
+
+Le tampon éventuel est retrouvé par `find-buffer-visiting' et non par
+`get-buffer' sur le nom de base : ce dernier manquait les tampons
+renommés par uniquify (« Signets.org<2> ») et pouvait viser un tampon
+homonyme visitant un tout autre fichier, laissant alors coexister une
+écriture par `write-region' et un tampon périmé."
+  (let ((ligne (format "- [[%s][%s]]" url title))
+        (buf (find-buffer-visiting metal-org-links-file)))
+    (metal-org--chrono "écriture"
+      (if buf
+          ;; Tampon déjà ouvert — modifier en place
+          (with-current-buffer buf
+            (let ((inhibit-read-only t))
+              (save-excursion
+                (metal-org--inserer-sous-section section ligne))
+              (save-buffer)))
+        ;; Tampon pas ouvert — écriture rapide
+        (with-temp-buffer
+          (insert-file-contents metal-org-links-file)
+          (metal-org--inserer-sous-section section ligne)
+          (write-region (point-min) (point-max)
+                        metal-org-links-file nil 'silence))))
     ;; Invalider le cache
     (setq metal-org--sections-cache nil)
     (message "✓ Lien ajouté sous « %s » : %s" section title)))
 
+(defvar metal-org--drop-en-attente nil
+  "URL déposée, en attente de traitement par `metal-org--drop-traiter'.")
+
+(defvar metal-org--drop-instant nil
+  "Instant du dépôt, pour mesurer la latence jusqu'au premier menu.")
+
+(defun metal-org--drop-traiter ()
+  "Traiter le drop en attente, une fois la commande courante terminée.
+Si une lecture au minibuffer est en cours au moment du dépôt, le
+traitement est reporté à la commande suivante plutôt que d'ouvrir un
+minibuffer récursif."
+  (remove-hook 'post-command-hook #'metal-org--drop-traiter)
+  (let ((url metal-org--drop-en-attente))
+    (when url
+      (if (minibufferp)
+          (add-hook 'post-command-hook #'metal-org--drop-traiter)
+        (setq metal-org--drop-en-attente nil)
+        (metal-org--prompt-and-save url)))))
+
 (defun metal-org-handle-url-drop (url _action)
   "Intercepte le drop d'une URL instantanément.
-Diffère l'affichage du menu via `run-at-time' pour ne pas bloquer le DnD."
-  ;; Nettoyer l'URL (enlever newlines, espaces, préfixe file://)
-  (let ((clean-url (string-trim (replace-regexp-in-string "[\n\r]" "" url))))
-    ;; Retourner immédiatement — le menu s'affiche après
-    (run-at-time 0 nil #'metal-org--prompt-and-save clean-url))
+Le menu n'est pas affiché depuis le gestionnaire lui-même : rendre la
+main tout de suite laisse la session de glisser se terminer côté
+système. La suite est programmée sur `post-command-hook', c'est-à-dire
+à la fin de la commande qui traite l'événement `drag-n-drop'.
+
+Elle ne l'est plus sur `run-at-time' : le rappel d'un minuteur
+s'exécute hors du contexte d'événement, et un menu natif posté depuis là
+n'apparaît qu'au prochain événement reçu par l'application — d'où
+l'impression que le dépôt ne répond pas tant qu'on ne bouge pas la
+souris. Un minuteur de repos subsiste comme filet, au cas où le drop
+serait traité hors de la boucle de commandes ; il ne fait rien si le
+`post-command-hook' a déjà servi."
+  (setq metal-org--drop-instant (current-time))
+  (setq metal-org--drop-en-attente
+        (string-trim (replace-regexp-in-string "[\n\r]" "" url)))
+  (add-hook 'post-command-hook #'metal-org--drop-traiter)
+  (run-with-idle-timer 0.3 nil #'metal-org--drop-traiter)
   ;; Retourner 'private pour signaler à Emacs que le drop est géré
   'private)
 
 (defun metal-org--prompt-and-save (url)
-  "Affiche deux menus popup : d'abord le fichier de signets, puis la section.
-Le fichier actif (dernier utilisé) est proposé en premier. Une option
-permet de créer un nouveau fichier de signets."
+  "Affiche les menus popup de classement du lien URL.
+D'abord le fichier de signets — sauf si `metal-org-dnd-demander-fichier'
+est nil, auquel cas le fichier actif est retenu sans rien demander —
+puis la section. Le fichier actif (dernier utilisé) est proposé en
+premier. Une option permet de créer un nouveau fichier de signets."
   (metal-org-links-ensure-file)
+  (when (and metal-org-dnd-chrono metal-org--drop-instant)
+    (message "⏱ dépôt → menu : %.3f s"
+             (float-time (time-since metal-org--drop-instant))))
   ;; --- Étape 1 : choisir le fichier de signets ---------------------------
-  (let* ((fichiers (metal-org--signets-fichiers))
+  ;; Sautée si `metal-org-dnd-demander-fichier' est nil : le lien va alors
+  ;; dans le fichier actif et le dépôt n'affiche qu'un seul menu.
+  (let* ((fichiers (when metal-org-dnd-demander-fichier
+                     (metal-org--chrono "liste des fichiers"
+                       (metal-org--signets-fichiers))))
          (fichier-items (append
                          (mapcar (lambda (f)
                                    (cons (file-name-nondirectory f) f))
                                  fichiers)
                          '(("---")  ;; séparateur
                            ("✚ Nouveau fichier de signets..." . __new-file__))))
-         (choix-fichier (x-popup-menu
-                         (list '(300 300) (selected-frame))
-                         (list "🔖 Classer dans quel fichier ?"
-                               (cons "" fichier-items)))))
+         (choix-fichier (if metal-org-dnd-demander-fichier
+                            (x-popup-menu
+                             (list '(300 300) (selected-frame))
+                             (list "🔖 Classer dans quel fichier ?"
+                                   (cons "" fichier-items)))
+                          (expand-file-name metal-org-links-file))))
     (when choix-fichier
       (let ((fichier
              (if (eq choix-fichier '__new-file__)
@@ -914,7 +999,8 @@ permet de créer un nouveau fichier de signets."
         (metal-org-selectionner-signets fichier)
         (metal-org-links-ensure-file)
         ;; --- Étape 2 : choisir la section -------------------------------
-        (let* ((sections (metal-org-get-sections))
+        (let* ((sections (metal-org--chrono "lecture des sections"
+                           (metal-org-get-sections)))
                (menu-items (append
                             (mapcar (lambda (s) (cons s s)) sections)
                             '(("---")  ;; séparateur
