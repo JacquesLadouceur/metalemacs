@@ -77,6 +77,32 @@
 ;;               de l'utilisateur, et propose « Corriger ».  Côté Emacs,
 ;;               ~/.local/bin est ajouté dès le chargement plutôt qu'au
 ;;               premier rendu de l'Assistant.
+;; Version 4.2 : Consoles interactives.  Un tampon de console ordinaire
+;;               n'offrait aucune voie d'entrée : quand un installateur
+;;               posait une question (« Do you want to proceed? [Y/n] »
+;;               de Homebrew), la frappe de « y » était traitée comme une
+;;               commande d'édition dans un tampon en lecture seule, et
+;;               l'installation restait bloquée sur son invite.  Le cas
+;;               était déjà connu pour Node.js, où il avait été réglé
+;;               localement par `compile' avec COMINT = t ; la réponse est
+;;               désormais centrale : `metal-console-lancer' met le tampon
+;;               en `comint-mode', ce dont héritent tous les installateurs
+;;               qui passent par lui (SWI-Prolog, Poppler, Ghostscript,
+;;               Quarto, Scoop, ripgrep, draw.io…).  En complément, les
+;;               commandes Homebrew sont lancées avec `NONINTERACTIVE=1'
+;;               et `HOMEBREW_ASK=' vidée, pour que l'invite ne se
+;;               présente pas du tout.
+;;               Deux appels qui passaient par `metal-console-brancher'
+;;               rejoignent `metal-console-lancer', leur commande pouvant
+;;               poser une question : « brew install ripgrep » sur macOS
+;;               et « scoop install miktex » sur Windows.  Leur sentinelle
+;;               propre chaîne désormais `metal-console--sentinelle'.
+;;               La sélection de la fenêtre est extraite dans
+;;               `metal-console--selectionner-plus-tard', appelée aussi
+;;               par les six lancements via `compile' (Node.js et agents
+;;               IA), déjà en comint mais dont la fenêtre n'était
+;;               qu'affichée.  Elle s'abstient si un minibuffer est actif
+;;               ou si une installation séquentielle est en cours.
 ;;
 ;; Commandes principales :
 ;;   M-x metal-deps-afficher-etat     - Interface graphique avec boutons
@@ -94,6 +120,9 @@
 (require 'widget)
 (require 'url)
 (require 'ansi-color)
+;; `comint' fournit l'entrée clavier des consoles : sans lui, un
+;; installateur qui pose une question reste bloqué sur son invite.
+(require 'comint)
 (eval-when-compile (require 'wid-edit))
 
 ;; Rendu des icônes : déléguer à `metal-icones' comme le font le tableau de
@@ -376,6 +405,19 @@ l'Assistant devient instantanée."
 ;; redisplay.  Sans ce filtre, la sortie s'accumule sans être affichée
 ;; tant qu'aucun événement clavier ou souris ne réveille le redisplay —
 ;; d'où la console qui semble figée tant qu'on n'a pas cliqué dedans.
+;;
+;; La console est en `comint-mode'.  C'est ce qui permet de RÉPONDRE aux
+;; installateurs : un tampon ordinaire n'a aucune voie d'entrée vers le
+;; processus, et la frappe d'un « y » à l'invite « Do you want to
+;; proceed? [Y/n] » n'atteint jamais Homebrew — elle est interprétée
+;; comme une commande d'édition, dans un tampon en lecture seule.  Deux
+;; conséquences pratiques sur le reste du code :
+;;   — c'est `comint-output-filter' qui insère la sortie (le filtre s'y
+;;     délègue), parce que lui seul avance `process-mark' ; sans cela,
+;;     RET renverrait au processus tout le texte accumulé depuis le
+;;     début du tampon, et non la seule saisie ;
+;;   — `process-mark' doit être posé à la fin du tampon dès la création
+;;     du processus, l'en-tête ayant été inséré avant.
 
 (defconst metal-console-prefixe "*Metal Console: "
   "Préfixe commun à tous les tampons de console MetalEmacs.
@@ -407,17 +449,28 @@ Trois soins que le filtre par défaut ne prend pas :
 - les séquences ANSI des installateurs deviennent des couleurs plutôt
   que des suites de caractères parasites ;
 - `redisplay' est demandé explicitement AVEC l'argument FORCE, sinon
-  Emacs le diffère jusqu'au prochain événement d'entrée."
+  Emacs le diffère jusqu'au prochain événement d'entrée.
+
+Dans une console en `comint-mode', l'insertion est déléguée à
+`comint-output-filter', qui rend les trois mêmes soins (les couleurs par
+`ansi-color-process-output', présent d'office dans
+`comint-output-filter-functions') et fait en plus l'essentiel : avancer
+`process-mark'.  Sans cette délégation, la marque resterait en arrière et
+RET enverrait au processus tout le texte accumulé depuis le début.  Seul
+le `redisplay' forcé reste à notre charge."
   (when (buffer-live-p (process-buffer proc))
-    (with-current-buffer (process-buffer proc)
-      (let ((inhibit-read-only t)
-            (debut (point-max)))
-        (save-excursion
-          (goto-char debut)
-          (insert chaine)
-          (ansi-color-apply-on-region debut (point-max)))
-        (dolist (fen (get-buffer-window-list (current-buffer) nil t))
-          (set-window-point fen (point-max)))))
+    (if (with-current-buffer (process-buffer proc)
+          (derived-mode-p 'comint-mode))
+        (comint-output-filter proc chaine)
+      (with-current-buffer (process-buffer proc)
+        (let ((inhibit-read-only t)
+              (debut (point-max)))
+          (save-excursion
+            (goto-char debut)
+            (insert chaine)
+            (ansi-color-apply-on-region debut (point-max)))
+          (dolist (fen (get-buffer-window-list (current-buffer) nil t))
+            (set-window-point fen (point-max))))))
     (redisplay t)))
 
 (defun metal-console--sentinelle (proc evenement)
@@ -432,6 +485,35 @@ Trois soins que le filtre par défaut ne prend pas :
                     "\n✓ Terminé.\n"
                   (format "\n⚠ %s\n" (string-trim (or evenement "")))))))
     (redisplay t)))
+
+(defun metal-console--selectionner-plus-tard (tampon)
+  "Sélectionne la fenêtre de TAMPON au tour de boucle de commande suivant.
+TAMPON peut être un tampon ou un nom de tampon.
+
+Le report d'un tour est le coeur de l'affaire.  Une console est presque
+toujours lancée depuis un bouton de l'Assistant, et `widget-button-click'
+enveloppe l'action du bouton dans `save-selected-window' : une sélection
+faite pendant le callback serait défaite au retour du clic, sans trace.
+Le point resterait dans l'Assistant — tampon de widgets en lecture seule
+— et la réponse à une invite d'installateur (« Do you want to proceed?
+[y/n] ») s'y heurterait au lieu d'atteindre le processus.
+
+Deux réserves, qui protègent le travail en cours :
+- rien n'est sélectionné tant qu'un minibuffer est actif, une saisie en
+  cours (mot de passe sudo, `yes-or-no-p') primant sur l'affichage ;
+- rien n'est sélectionné pendant une installation séquentielle, qui
+  enchaîne les consoles : le point sauterait à chaque étape.  Pendant une
+  file d'attente, répondre à une invite suppose donc de cliquer dans la
+  console, comme avant."
+  (run-at-time
+   0 nil
+   (lambda ()
+     (let* ((tp (get-buffer tampon))
+            (fenetre (and (buffer-live-p tp) (get-buffer-window tp))))
+       (when (and (window-live-p fenetre)
+                  (not (active-minibuffer-window))
+                  (not (bound-and-true-p metal-deps--installation-en-cours)))
+         (select-window fenetre))))))
 
 (defun metal-console-brancher (proc &optional etiquette)
   "Branche PROC sur la mécanique de console : tampon vidé, affiché, filtré.
@@ -450,6 +532,23 @@ dans un `set-process-sentinel'."
                                  (or etiquette (buffer-name tampon))))
       (set-process-filter proc #'metal-console--filtre)))
   proc)
+
+(defun metal-deps--brew-non-interactif (commande)
+  "Retourne COMMANDE, précédée des variables qui font taire Homebrew.
+`NONINTERACTIVE' supprime les invites de confirmation, que l'étudiant n'a
+aucune raison d'arbitrer.  `HOMEBREW_ASK' est vidée séparément : c'est
+elle qui commande l'invite « Do you want to proceed with the
+installation? [y/n] » affichée avant la mise à niveau des dépendances, et
+`NONINTERACTIVE' ne la neutralise pas.  Homebrew tient une variable vide
+pour absente.  Les deux dernières épargnent une mise à jour complète du
+dépôt et les rappels d'environnement à chaque installation.  Sans effet sur une commande qui
+n'appelle pas `brew', et jamais appliquée sous Windows, où la syntaxe
+« VAR=1 commande » n'existe pas."
+  (if (and (not (eq system-type 'windows-nt))
+           (string-match-p "\\_<brew\\_>" commande))
+      (concat "NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 "
+              "HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_ASK= " commande)
+    commande))
 
 (defun metal-deps--lancer-dans-terminal (commande &optional titre)
   "Exécute COMMANDE dans Terminal.app, avec un vrai terminal (macOS).
@@ -510,17 +609,51 @@ Le troisième argument existe pour la seule compatibilité d'appel avec
          (metal-deps--lancer-dans-terminal commande etiquette)))))
   (let* ((nom (metal-console-nom (or etiquette "Commande")))
          (tampon (get-buffer-create nom))
-         (encours (get-buffer-process tampon)))
+         (encours (get-buffer-process tampon))
+         (commande (metal-deps--brew-non-interactif commande)))
     (when (process-live-p encours)
       (user-error "Une opération est déjà en cours dans %s" nom))
     (with-current-buffer tampon
       (let ((inhibit-read-only t))
-        (erase-buffer)
+        (erase-buffer))
+      ;; `comint-mode' AVANT l'insertion de l'en-tête : il tue les
+      ;; variables locales du tampon.  Il donne à la console sa voie
+      ;; d'entrée — RET envoie la ligne au processus — ce sans quoi
+      ;; aucune invite d'installateur n'est répondable.
+      (unless (derived-mode-p 'comint-mode)
+        (comint-mode))
+      ;; L'en-tête est écrit par nous, pas par le processus : sans cela
+      ;; il tomberait dans la zone de saisie et serait renvoyé au
+      ;; processus à la première réponse de l'utilisateur.
+      (setq-local comint-prompt-read-only nil)
+      ;; `all' rend le soin que prenait le filtre maison : le point de
+      ;; CHAQUE fenêtre affichant la console suit la sortie, y compris
+      ;; quand la fenêtre n'est pas sélectionnée.  À la valeur par défaut
+      ;; (nil), comint ne fait suivre que la fenêtre sélectionnée, et la
+      ;; console d'une side-window resterait figée sur ses premières
+      ;; lignes.
+      (setq-local comint-scroll-to-bottom-on-output 'all)
+      (let ((inhibit-read-only t))
         (insert (format-time-string "[%H:%M:%S] ") commande "\n"
                 (make-string 60 ?─) "\n")))
+    ;; SÉLECTIONNER la fenêtre, et pas seulement l'afficher.  Une console
+    ;; est lancée depuis l'Assistant, tampon de widgets en lecture seule :
+    ;; si le point y reste, la réponse à une invite d'installateur
+    ;; (« Do you want to proceed? [y/n] ») ne descend pas dans la console
+    ;; mais se heurte au « Buffer is read-only » de l'Assistant.  Rendre la
+    ;; console interactive ne servait donc à rien tant que le clavier ne
+    ;; lui parvenait pas.
+    ;; Le report d'un tour de boucle et ses deux réserves sont expliqués
+    ;; dans `metal-console--selectionner-plus-tard'.
     (display-buffer tampon)
+    (metal-console--selectionner-plus-tard tampon)
     (metal-deps--journaliser "Console %s : %s" nom commande)
     (let ((proc (start-process-shell-command nom tampon commande)))
+      ;; `process-mark' est posé par `start-process' au point courant du
+      ;; tampon ; on le reporte après l'en-tête, faute de quoi la
+      ;; première saisie renverrait aussi ces deux lignes au processus.
+      (with-current-buffer tampon
+        (set-marker (process-mark proc) (point-max)))
       (set-process-filter proc #'metal-console--filtre)
       (set-process-sentinel proc #'metal-console--sentinelle)
       proc)))
@@ -1358,8 +1491,13 @@ commande de l'agent (`:commande') soit visible sans redémarrer Emacs :
                 ;; COMINT = t : buffer interactif.  brew demande « Do you want
                 ;; to proceed? [y/n] » ; sans comint, le buffer est en lecture
                 ;; seule et « y » déclenche « y is undefined » au lieu d'être
-                ;; transmis au processus.
-                (compile "brew install node" t)))
+                ;; transmis au processus.  Depuis la version 4.2, la même
+                ;; garantie vaut pour `metal-console-lancer' ; ce cas-ci reste
+                ;; sur `compile' parce qu'il dépend de
+                ;; `compilation-finish-functions' pour rafraîchir le PATH.
+                (metal-console--selectionner-plus-tard
+                 (compile (metal-deps--brew-non-interactif "brew install node")
+                          t))))
           (metal-deps--afficher-aide
            "Installer Node.js — Homebrew requis"
            (concat
@@ -1404,6 +1542,7 @@ commande de l'agent (`:commande') soit visible sans redémarrer Emacs :
           (metal-deps--journaliser "Installation de Node.js via Scoop")
           (when (yes-or-no-p "Installer Node.js via Scoop (scoop install nodejs) ? ")
             (let ((buf (compile "scoop install nodejs" t)))
+              (metal-console--selectionner-plus-tard buf)
               ;; `compile' est asynchrone : rafraîchir le PATH de la
               ;; session et re-rendre l'Assistant UNE FOIS l'installation
               ;; terminée, pour que `node' apparaisse installé sans
@@ -1451,7 +1590,9 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
               (metal-deps--journaliser "Désinstallation Node.js via Homebrew")
               (let ((compilation-buffer-name-function
                      (lambda (_) (metal-console-nom "Désinstallation Node.js"))))
-                (compile "brew uninstall node" t)))
+                (metal-console--selectionner-plus-tard
+                 (compile (metal-deps--brew-non-interactif "brew uninstall node")
+                          t))))
           (metal-deps--afficher-aide
            "Désinstaller Node.js"
            (concat
@@ -1496,7 +1637,8 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
         (when (yes-or-no-p
                "Désinstaller Node.js (scoop uninstall nodejs) ?  D'autres outils peuvent en dépendre. ")
           (metal-deps--journaliser "Désinstallation Node.js via Scoop")
-          (compile "scoop uninstall nodejs" t))
+          (metal-console--selectionner-plus-tard
+           (compile "scoop uninstall nodejs" t)))
       (metal-deps--afficher-aide
        "Désinstaller Node.js sur Windows"
        "Désinstaller via :\n  • Panneau de configuration > Programmes\n  • ou la commande Scoop si vous l'avez utilisée à l'install")))))
@@ -2445,17 +2587,20 @@ dans les fichiers de projet."
        (if (metal-deps--brew-present-p)
            (let ((buf-name (metal-console-nom "ripgrep Install")))
              (message "📦 Installation de ripgrep via Homebrew...")
+             ;; Via `metal-console-lancer' plutôt que `metal-console-brancher' :
+             ;; « brew install » peut poser sa question de confirmation, à
+             ;; laquelle seule une console en comint permet de répondre.  La
+             ;; sentinelle propre à ripgrep chaîne `metal-console--sentinelle'
+             ;; pour ne pas perdre la ligne de verdict en fin de console.
              (set-process-sentinel
-              (metal-console-brancher
-               (start-process-shell-command "ripgrep-install" buf-name
-                                            "brew install ripgrep"))
-              (lambda (proc _event)
+              (metal-console-lancer "brew install ripgrep" "ripgrep Install")
+              (lambda (proc evenement)
+                (metal-console--sentinelle proc evenement)
                 (when (eq (process-status proc) 'exit)
                   (if (= (process-exit-status proc) 0)
                       (message "✅ ripgrep installé avec succès")
                     (message "❌ Erreur lors de l'installation de ripgrep. Voir %s"
-                             buf-name)))))
-             (display-buffer buf-name))
+                             buf-name))))))
          (browse-url "https://github.com/BurntSushi/ripgrep/releases")
          (message "Téléchargez ripgrep depuis le site web")))
       ('windows-nt
@@ -2509,11 +2654,14 @@ dans les fichiers de projet."
     (metal-deps--scoop-ensure-7zip)
     (message "📦 Installation de MiKTeX via Scoop (peut prendre plusieurs minutes)...")
     (let ((buf-name (metal-console-nom "MiKTeX Install")))
+      ;; Via `metal-console-lancer' : console en comint, donc répondable si
+      ;; Scoop pose une question, et fenêtre sélectionnée.  La sentinelle
+      ;; propre à MiKTeX chaîne `metal-console--sentinelle' pour garder la
+      ;; ligne de verdict.
       (set-process-sentinel
-       (metal-console-brancher
-        (start-process-shell-command "miktex-install" buf-name
-                                     "scoop install miktex"))
-       (lambda (proc _event)
+       (metal-console-lancer "scoop install miktex" "MiKTeX Install")
+       (lambda (proc evenement)
+         (metal-console--sentinelle proc evenement)
          (when (eq (process-status proc) 'exit)
            (if (= (process-exit-status proc) 0)
                (progn
@@ -2528,8 +2676,7 @@ dans les fichiers de projet."
                  ;; Mettre à jour le PATH
                  (metal-deps--configurer-chemin-miktex)
                  (message "✅ MiKTeX installé et configuré (auto-installation des paquets activée)"))
-             (message "❌ Erreur lors de l'installation de MiKTeX. Voir %s" buf-name)))))
-      (display-buffer buf-name))))
+             (message "❌ Erreur lors de l'installation de MiKTeX. Voir %s" buf-name))))))))
 
 (defun metal-deps--configurer-chemin-miktex ()
   "Ajoute MiKTeX au PATH d'Emacs si installé via Scoop."
@@ -2956,6 +3103,7 @@ affiche un buffer d'aide avec les instructions manuelles (champ
               (let ((buf (compile cmdline t))
                     (agent-spec spec))
                 (when (buffer-live-p buf)
+                  (metal-console--selectionner-plus-tard buf)
                   (with-current-buffer buf
                     (when (fboundp 'ansi-color-compilation-filter)
                       (add-hook 'compilation-filter-hook
@@ -3095,7 +3243,7 @@ laisserait l'utilisateur devant un état à moitié défait."
                    (compilation-buffer-name-function
                     (lambda (_) (metal-console-nom (format "Désinstallation %s" nom)))))
               (metal-deps--journaliser "Désinstallation CLI : %s" cmdline)
-              (compile cmdline t)
+              (metal-console--selectionner-plus-tard (compile cmdline t))
               (message "Désinstallation de « %s » lancée…" nom))
           ;; CLI absente : il n'y avait rien à retirer.
           (message "« %s » retiré du registre (CLI déjà absente)." nom))))))
