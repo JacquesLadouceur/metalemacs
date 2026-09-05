@@ -27,6 +27,8 @@
 (declare-function metal-quarto-contexte-dossier "metal-quarto" (dir))
 (declare-function metal-quarto--creer-metadata "metal-quarto" (dir))
 (declare-function metal-quarto--ajouter-include "metal-quarto" (chapitre))
+(declare-function metal-quarto--modele "metal-quarto" (nom))
+(declare-function metal-quarto-front-matter-document "metal-quarto" (&optional titre))
 (defvar metal-quarto-dossiers-chapitres)
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -981,12 +983,7 @@ Sinon, affiche un message d'erreur."
 (defun metal-dashboard-new-qmd ()
   "Créer une présentation Quarto."
   (interactive)
-  (let* ((template-file (expand-file-name "modeles/presentation-quarto.txt" user-emacs-directory))
-         (template (if (file-exists-p template-file)
-                       (with-temp-buffer
-                         (insert-file-contents template-file)
-                         (buffer-string))
-                     "---\ntitle: \"Titre\"\nformat:\n  beamer:\n    theme: metropolis\nlang: fr\n---\n\n")))
+  (let* ((template (metal-quarto--modele "presentation-quarto.txt")))
     (metal-dashboard--create-new-file
      ".qmd"
      "Présentation Quarto: "
@@ -997,32 +994,14 @@ Sinon, affiche un message d'erreur."
       (metal-dashboard--copier-ressources-quarto
        (file-name-directory buffer-file-name)))))
 
-(defun metal-dashboard--modele-document ()
-  "Front matter complète pour un document Quarto autonome."
-  (let ((f (expand-file-name "modeles/document-quarto.txt" user-emacs-directory)))
-    (if (file-exists-p f)
-        (with-temp-buffer
-          (insert-file-contents f)
-          (buffer-string))
-      (concat "---\n"
-              "title: \"Titre\"\n"
-              "lang: fr\n"
-              "filters:\n"
-              "  - metal-boites.lua\n"
-              "header-includes: |\n"
-              "  \\usepackage{metal-tcolorbox}\n"
-              "  \\usepackage{booktabs}\n"
-              "format:\n"
-              "  pdf: default\n"
-              "---\n\n"))))
-
 (defun metal-dashboard-new-qmd-document ()
   "Créer un document Quarto, avec ou sans en-tête selon le contexte du dossier.
 
 Si le dossier fournit déjà la configuration (via `_metadata.yml' complet, ou
 via un `_quarto.yml' ancêtre), le document est créé sans front matter et
 amorcé par un titre de section.  Sinon il reçoit la front matter complète du
-modèle `modeles/document-quarto.txt'.
+modèle partagé `modeles/quarto-config.txt', via
+`metal-quarto-front-matter-document'.
 
 Dans un dossier entièrement vide, le minibuffer propose de basculer en
 document réparti sur plusieurs fichiers.  Le squelette écrit alors est :
@@ -1057,7 +1036,7 @@ n'est jamais posée si le dossier contient déjà un .qmd."
      (if (eq ctx 'maitre) "Document maître: " "Document Quarto: ")
      (if (memq ctx '(chapitre metadata maitre))
          ""
-       (metal-dashboard--modele-document)))
+       (metal-quarto-front-matter-document)))
 
     (when (and buffer-file-name
                (string-suffix-p ".qmd" buffer-file-name t))

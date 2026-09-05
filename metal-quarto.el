@@ -315,10 +315,48 @@ normal."
 ;;; Projet Quarto et rendu
 ;;; ═══════════════════════════════════════════════════════════════════
 
+(defvar metal-quarto-modeles-dir
+  (expand-file-name "~/Documents/MetalEmacs/modeles/")
+  "Dossier des modèles Quarto personnels.
+Un modèle trouvé ici l'emporte sur celui livré avec MetalEmacs (sous-dossier
+`modeles/' de `user-emacs-directory'), suivant la même convention que les
+profils agentiques : une personnalisation survit ainsi aux mises à jour.")
+
+(defun metal-quarto--modele (nom)
+  "Retourner le contenu du modèle NOM, personnel d'abord, livré ensuite.
+Signale une erreur si aucun des deux n'existe : mieux vaut un message clair
+qu'un document plausible mais faux, produit par un gabarit de secours qui
+aurait divergé du modèle réel."
+  (let ((perso (expand-file-name nom metal-quarto-modeles-dir))
+        (livre (expand-file-name (concat "modeles/" nom) user-emacs-directory)))
+    (cond
+     ((file-exists-p perso) (with-temp-buffer (insert-file-contents perso)
+                                              (buffer-string)))
+     ((file-exists-p livre) (with-temp-buffer (insert-file-contents livre)
+                                              (buffer-string)))
+     (t (user-error "Modèle Quarto introuvable : %s (cherché dans %s et %s)"
+                    nom metal-quarto-modeles-dir
+                    (expand-file-name "modeles/" user-emacs-directory))))))
+
+(defun metal-quarto-front-matter-document (&optional titre)
+  "Front matter complète d'un document Quarto autonome, avec TITRE.
+Le corps de la configuration vient de `modeles/quarto-config.txt', le même
+fichier que celui écrit dans `_metadata.yml' par
+`metal-quarto--creer-metadata' : document autonome et document réparti sur
+plusieurs fichiers ne peuvent donc pas diverger."
+  (concat "---\n"
+          "title: \"" (or titre "Titre") "\"\n"
+          (metal-quarto--modele "quarto-config.txt")
+          "---\n\n"))
+
 (defun metal-quarto--creer-metadata (dir)
   "Écrire `_metadata.yml' dans DIR avec la configuration documentaire MetalEmacs.
 Retourne le chemin du fichier écrit.  Écrase sans demander : les appelants
 vérifient l'état du dossier avant d'appeler.
+
+Le contenu est celui de `modeles/quarto-config.txt', sans titre ni délimiteurs
+`---' : c'est la seule différence avec la front matter d'un document autonome,
+que `metal-quarto-front-matter-document' compose à partir du même modèle.
 
 Le fichier `_metadata.yml' applique des options communes à tous les .qmd du
 dossier sans transformer celui-ci en projet Quarto (ce qui forcerait la
@@ -332,36 +370,10 @@ s'en charge à la création du document.
 
 La police de caractères n'est pas précisée : le moteur LaTeX par défaut
 \(pdflatex\) utilisera Latin Modern, garanti présent sur toute distribution.
-Pour une autre police, ajouter `pdf-engine: xelatex' et `mainfont:' ici."
+Pour une autre police, ajouter `pdf-engine: xelatex' et `mainfont:' au modèle."
   (let ((file (expand-file-name "_metadata.yml" dir)))
     (with-temp-file file
-      (insert
-       "lang: fr\n"
-       "\n"
-       "filters:\n"
-       "  - metal-boites.lua\n"
-       "\n"
-       "header-includes: |\n"
-       "  \\usepackage{metal-tcolorbox}\n"
-       "  \\usepackage{booktabs}\n"
-       "\n"
-       "format:\n"
-       "  pdf:\n"
-       "    documentclass: scrartcl\n"
-       "    papersize: letter\n"
-       "    geometry:\n"
-       "      - margin=2cm\n"
-       "    number-sections: true\n"
-       "    toc: false\n"
-       "    fig-pos: \"H\"\n"
-       "    code-block-bg: true\n"
-       "    highlight-style: github\n"
-       "\n"
-       "execute:\n"
-       "  enabled: false\n"
-       "  echo: true\n"
-       "  warning: false\n"
-       "  message: false\n"))
+      (insert (metal-quarto--modele "quarto-config.txt")))
     file))
 
 (defvar metal-quarto-dossiers-chapitres

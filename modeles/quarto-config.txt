@@ -1,12 +1,14 @@
----
-title: "Titre"
-subtitle: "Sous-titre"
 lang: fr
+
 filters:
   - metal-boites.lua
+
 header-includes: |
   \usepackage{metal-tcolorbox}
   \usepackage{booktabs}
+  \setkomafont{title}{\usekomafont{disposition}\let\huge\LARGE}
+  \setkomafont{subtitle}{\usekomafont{disposition}\Large}
+
 format:
   pdf:
     documentclass: scrartcl
@@ -18,8 +20,9 @@ format:
     fig-pos: "H"
     code-block-bg: true
     highlight-style: github
+
 execute:
   enabled: false
   echo: true
----
-
+  warning: false
+  message: false

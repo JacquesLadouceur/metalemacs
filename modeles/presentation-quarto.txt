@@ -1,20 +1,34 @@
 ---
 title: "Titre"
 subtitle: "Sous-titre"
+lang: fr
+
+filters:
+  - metal-boites.lua
+
+header-includes: |
+  \usepackage{metal-tcolorbox}
+  \usepackage{booktabs}
+  \usepackage{setspace}
+
 format:
   beamer:
     theme: metropolis
     aspectratio: 169
     slide-level: 2
-    code-block-font-size: \scriptsize
+    fontsize: 10pt
+    incremental: false
     highlight-style: github
-filters:
-  - metal-boites.lua
-header-includes: |
-  \usepackage{metal-tcolorbox}
-  \usepackage{booktabs}
+
 execute:
   enabled: false
   echo: true
-lang: fr
+  warning: false
+  message: false
 ---
+
+# 1 · Première section
+
+## Première diapositive
+
+Contenu.
