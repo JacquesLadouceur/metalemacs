@@ -1220,6 +1220,28 @@ artefact NEUF, pas une correction du contenu source à réviser."
      (format "🔬 Analyse %s terminée — voir %s.%s"
              label buf-name (metal-agent--suffixe-duree)))))
 
+(defun metal-agent--signaler-non-authentifie ()
+  "Signaler que l'agent courant n'est pas authentifié et proposer le login.
+
+Enregistre l'état par preuve d'usage — la plus fiable qui soit, elle prime
+sur toute sonde — puis propose `metal-agent-authentifier-cli'.
+
+Appelée depuis les DEUX sorties possibles d'une session non authentifiée :
+la CLI qui sort en erreur, et celle qui sort avec le code 0 après n'avoir
+écrit qu'un message de connexion.  Rien ne garantit qu'une CLI distingue
+ces deux cas par son code de sortie ; agy, qui n'expose aucune
+sous-commande d'état d'authentification, est le cas type."
+  (metal-agent-auth-noter metal-agent-provider 'non)
+  (let ((label (metal-agent--current-label))
+        (buf-name (metal-agent--current-buffer-name)))
+    (metal-agent--show-status-message
+     (format "🔐 L'agent %s n'est pas authentifié.  Voir %s pour les détails."
+             label buf-name))
+    (when (yes-or-no-p
+           (format "Agent %s non authentifié.  Lancer l'assistant d'authentification maintenant ? "
+                   label))
+      (metal-agent-authentifier-cli))))
+
 (defun metal-agent--handle-codex-code-response (code raw)
   "Traiter la réponse Codex RAW.
 Si une proposition est obtenue et qu'elle diffère du code original,
@@ -1232,18 +1254,7 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
     (display-buffer (metal-agent--codex-buffer))
     (cond
      ((metal-agent--erreur-auth-p raw)
-      ;; Preuve par l'usage : elle prime sur toute sonde et corrige
-      ;; immédiatement l'affichage de l'Assistant.
-      (metal-agent-auth-noter metal-agent-provider 'non)
-      (let ((label (metal-agent--current-label))
-            (buf-name (metal-agent--current-buffer-name)))
-        (metal-agent--show-status-message
-         (format "🔐 L'agent %s n'est pas authentifié.  Voir %s pour les détails."
-                 label buf-name))
-        (when (yes-or-no-p
-               (format "Agent %s non authentifié.  Lancer l'assistant d'authentification maintenant ? "
-                       label))
-          (metal-agent-authentifier-cli))))
+      (metal-agent--signaler-non-authentifie))
      (t
       (let ((buf-name (metal-agent--current-buffer-name))
             (label (or (metal-agent--current-label) "Agent")))
@@ -1254,25 +1265,36 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
    (t
     (let ((proposed (metal-agent--extract-code-block raw)))
       (if (not proposed)
-          (let ((diag (metal-agent--diagnostiquer-reponse raw))
-                (buf-name (metal-agent--current-buffer-name)))
-            (message nil)
-            (metal-agent--show-status-message
-             (concat
-              (pcase diag
-                ('tronquee
-                 (format "⚠️ Réponse tronquée : l'agent s'est arrêté avant le marqueur de fin (réponse trop longue ou interrompue).  Voir %s ; relancez ou réduisez la portée."
-                         buf-name))
-                ('sans-marqueurs
-                 (format "⚠️ L'agent n'a pas respecté le format attendu (aucun marqueur).  Voir %s ; relancez."
-                         buf-name))
-                ('vide
-                 (format "⚠️ Réponse vide de l'agent.  Voir %s ; relancez." buf-name))
-                (_
-                 (format "👤 Aucune correction exploitable n'a été retournée.  Voir %s."
-                         buf-name)))
-              (metal-agent--suffixe-duree)))
-            (display-buffer (metal-agent--codex-buffer)))
+          ;; Sortie sans bloc exploitable.  Une CLI non authentifiée peut
+          ;; sortir avec le code 0 en n'ayant écrit qu'un message de
+          ;; connexion : sans ce test, le diagnostic d'extraction annonce
+          ;; « réponse vide » ou « format non respecté » et envoie
+          ;; l'utilisateur relancer indéfiniment une requête qui ne peut
+          ;; pas aboutir.
+          (if (metal-agent--erreur-auth-p raw)
+              (progn
+                (message nil)
+                (display-buffer (metal-agent--codex-buffer))
+                (metal-agent--signaler-non-authentifie))
+            (let ((diag (metal-agent--diagnostiquer-reponse raw))
+                  (buf-name (metal-agent--current-buffer-name)))
+              (message nil)
+              (metal-agent--show-status-message
+               (concat
+                (pcase diag
+                  ('tronquee
+                   (format "⚠️ Réponse tronquée : l'agent s'est arrêté avant le marqueur de fin (réponse trop longue ou interrompue).  Voir %s ; relancez ou réduisez la portée."
+                           buf-name))
+                  ('sans-marqueurs
+                   (format "⚠️ L'agent n'a pas respecté le format attendu (aucun marqueur).  Voir %s ; relancez."
+                           buf-name))
+                  ('vide
+                   (format "⚠️ Réponse vide de l'agent.  Voir %s ; relancez." buf-name))
+                  (_
+                   (format "👤 Aucune correction exploitable n'a été retournée.  Voir %s."
+                           buf-name)))
+                (metal-agent--suffixe-duree)))
+              (display-buffer (metal-agent--codex-buffer))))
         ;; ── Profil [Tâche] : la réponse est un artefact NEUF, pas une
         ;; correction du source.  On l'affiche en lecture seule au lieu
         ;; d'ouvrir Ediff (qui comparerait la sortie au contenu source,
