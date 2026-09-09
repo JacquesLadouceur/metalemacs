@@ -97,6 +97,61 @@ et à la fin de la dernière ligne."
         (message "❌ Conda introuvable. Installez-le via M-x metal-deps-installer-miniconda")
         nil)))
 
+(defun metal-conda--envs-par-balayage ()
+  "Repli : balayer `<conda-env-home-directory>/envs'.
+Ne voit que les environnements situés sous la racine d'installation.
+N'est utilisé que si l'interrogation de conda échoue."
+  (when conda-env-home-directory
+    (let* ((envs-dir (expand-file-name "envs" conda-env-home-directory))
+           (paths (when (file-directory-p envs-dir)
+                    (seq-filter #'file-directory-p
+                                (directory-files envs-dir t "^[^.]")))))
+      (cons (cons "base" (directory-file-name
+                          (expand-file-name conda-env-home-directory)))
+            (mapcar (lambda (p) (cons (file-name-nondirectory p) p))
+                    paths)))))
+
+(defun metal-conda--envs ()
+  "Retourne une alist (NOM . PRÉFIXE) des environnements Conda.
+
+Interroge conda lui-même (`conda env list --json') plutôt que de
+supposer que les environnements vivent sous la racine d'installation.
+C'est nécessaire parce que conda crée un environnement nommé dans le
+premier répertoire INSCRIPTIBLE de `envs_dirs' : quand
+`<racine>/envs' ne l'est pas (cas fréquent du cask Homebrew), il
+bascule sur ~/.conda/envs.  Un balayage de `<racine>/envs' rate alors
+des environnements pourtant bien créés et activables.
+
+Couvre du même coup les `envs_dirs' personnalisés déclarés dans un
+.condarc.  Retourne nil si conda est introuvable."
+  (let ((conda-exe (metal-conda--get-conda-exe)))
+    (when conda-exe
+      (or (ignore-errors
+            (with-temp-buffer
+              (when (and (zerop (call-process conda-exe nil t nil
+                                              "env" "list" "--json"))
+                         (fboundp 'json-parse-buffer))
+                (goto-char (point-min))
+                (let* ((data (json-parse-buffer :object-type 'alist))
+                       (prefixes (append (alist-get 'envs data) nil))
+                       (acc '()))
+                  (dolist (p prefixes (nreverse acc))
+                    (let* ((prefixe (directory-file-name p))
+                           (parent (file-name-nondirectory
+                                    (directory-file-name
+                                     (file-name-directory prefixe))))
+                           ;; Sous un répertoire `envs' → nom court.
+                           ;; Sinon, la première entrée est la racine
+                           ;; (conda la liste en tête) → « base ».
+                           (nom (cond
+                                 ((string= parent "envs")
+                                  (file-name-nondirectory prefixe))
+                                 ((assoc "base" acc)
+                                  (file-name-nondirectory prefixe))
+                                 (t "base"))))
+                      (push (cons nom prefixe) acc)))))))
+          (metal-conda--envs-par-balayage)))))
+
 (defun metal-conda--libmamba-installed-p ()
   "Vérifier si libmamba est configuré comme solver."
   (when-let ((conda-exe (metal-conda--get-conda-exe)))
@@ -735,15 +790,11 @@ Variantes directes :
   (unless (metal-conda--require-conda)
     (user-error "Conda n'est pas installé"))
   (require 'conda)
-  (let* ((envs-dir (expand-file-name "envs" conda-env-home-directory))
-         (env-paths (when (file-directory-p envs-dir)
-                      (directory-files envs-dir t "^[^.]")))
-         (env-alist (mapcar (lambda (p) (cons (file-name-nondirectory p) p))
-                            (or env-paths '())))
-         (env-alist-avec-base (cons (cons "base" conda-env-home-directory) env-alist))
-         (noms (mapcar #'car env-alist-avec-base))
+  (let* ((env-alist (or (metal-conda--envs)
+                        (user-error "Aucun environnement Conda détecté")))
+         (noms (mapcar #'car env-alist))
          (choix (completing-read "Choisir un environnement Conda : " noms nil t))
-         (chemin-complet (cdr (assoc choix env-alist-avec-base))))
+         (chemin-complet (cdr (assoc choix env-alist))))
     (if (not chemin-complet)
         (message "❌ Environnement '%s' introuvable" choix)
       (customize-save-variable 'metal-conda-environnement-defaut chemin-complet)
@@ -789,11 +840,14 @@ disponibles via completing-read."
    (list
     (if (not conda-env-home-directory)
         nil  ; si conda pas dispo, le unless suivant va afficher user-error
-      (let* ((envs-dir (expand-file-name "envs" conda-env-home-directory))
-             (env-paths (when (file-directory-p envs-dir)
-                          (directory-files envs-dir nil "^[^.]")))
-             ;; "base" en premier, puis les autres envs triés
-             (noms (cons "base" (sort (or env-paths '()) #'string<))))
+      ;; La liste vient de conda lui-même (voir `metal-conda--envs') :
+      ;; un balayage de `<racine>/envs' rate les environnements créés
+      ;; dans ~/.conda/envs ou dans un `envs_dirs' personnalisé.
+      ;; `conda activate NOM' les résout de toute façon par leur nom
+      ;; court, quel que soit le répertoire qui les héberge.
+      (let* ((tous (mapcar #'car (metal-conda--envs)))
+             (autres (sort (delete "base" (copy-sequence tous)) #'string<))
+             (noms (cons "base" autres)))
         (completing-read "Environnement Conda : " noms nil t nil nil "base")))))
   (unless conda-env-home-directory
     (user-error "Conda non disponible. Utilisez M-x metal-deps-installer-miniconda"))
