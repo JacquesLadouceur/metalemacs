@@ -1031,6 +1031,72 @@ Retourne t si la commande a été lancée."
   "Retourne t si MacPorts est installé."
   (not (null (executable-find "port"))))
 
+(defconst metal-deps--macports-prefixe "/opt/local"
+  "Racine d'une installation MacPorts.")
+
+(defun metal-deps--macports-bibliotheques-p ()
+  "Retourne t si MacPorts expose des bibliothèques liables.
+
+Contrairement à `metal-deps--macports-present-p', ce test ne dépend
+pas du PATH : le linker fouille /opt/local/lib même quand la commande
+`port' est introuvable.  C'est le cas qui compte pour une compilation
+native."
+  (and (eq system-type 'darwin)
+       (file-directory-p (expand-file-name "lib" metal-deps--macports-prefixe))))
+
+(defun metal-deps--purger-macports (valeur)
+  "Retire de VALEUR, une liste de chemins séparés, les entrées MacPorts.
+Retourne nil si plus rien ne subsiste, pour que `setenv' efface la
+variable au lieu de la vider."
+  (when valeur
+    (let ((reste (seq-remove
+                  (lambda (e) (string-prefix-p metal-deps--macports-prefixe e))
+                  (split-string valeur path-separator t))))
+      (when reste
+        (mapconcat #'identity reste path-separator)))))
+
+(defmacro metal-deps-sans-macports (&rest corps)
+  "Évaluer CORPS avec un environnement purgé de MacPorts.
+
+MacPorts installe ses bibliothèques dans /opt/local.  Sur les machines
+Apple Silicon, ces bibliothèques sont souvent en x86_64 — installation
+héritée d'un ancien Mac, ou reprise par l'Assistant de migration.  Le
+linker les trouve avant celles de Homebrew et échoue sur des symboles
+introuvables : c'est le cas typique de libz lors du build d'epdfinfo,
+qui laisse l'utilisateur devant un mur de « Undefined symbols for
+architecture arm64 » sans indication de la cause.
+
+MetalEmacs ne dépend jamais de MacPorts : on l'écarte donc purement et
+simplement, mais seulement le temps de CORPS.  L'environnement de
+l'utilisateur n'est pas modifié, et une installation MacPorts dont il
+se sert par ailleurs reste intacte."
+  (declare (indent 0) (debug t))
+  `(if (not (metal-deps--macports-bibliotheques-p))
+       (progn ,@corps)
+     (let* ((prefixe (if (file-directory-p "/opt/homebrew")
+                         "/opt/homebrew"
+                       "/usr/local"))
+            (process-environment (copy-sequence process-environment))
+            (exec-path (seq-remove
+                        (lambda (e)
+                          (string-prefix-p metal-deps--macports-prefixe e))
+                        exec-path)))
+       (setenv "PATH" (metal-deps--purger-macports (getenv "PATH")))
+       (setenv "PKG_CONFIG_PATH"
+               (metal-deps--purger-macports (getenv "PKG_CONFIG_PATH")))
+       (setenv "LIBRARY_PATH"
+               (or (metal-deps--purger-macports (getenv "LIBRARY_PATH"))
+                   (expand-file-name "lib" prefixe)))
+       (setenv "CPATH"
+               (or (metal-deps--purger-macports (getenv "CPATH"))
+                   (expand-file-name "include" prefixe)))
+       (metal-deps--journaliser
+        "MacPorts détecté dans %s — écarté le temps de la compilation"
+        metal-deps--macports-prefixe)
+       (message "ℹ️ MacPorts (%s) écarté le temps de la compilation"
+                metal-deps--macports-prefixe)
+       ,@corps)))
+
 (defun metal-deps--scoop-present-p ()
   "Retourne t si Scoop est installé."
   (or (executable-find "scoop")
@@ -4438,6 +4504,17 @@ conflits entre gestionnaires de paquets."
                                   user-emacs-directory)))
                   (when (file-exists-p autobuild)
                     (set-file-modes autobuild #o755))))))
+
+;; macOS : écarter MacPorts pendant la compilation de epdfinfo.
+;; Posé sur `pdf-tools-install' plutôt que dans
+;; `metal-deps-installer-pdf-tools' pour couvrir aussi l'appel direct,
+;; que les étudiants tapent naturellement puisque c'est le nom
+;; documenté en amont.
+(when (eq system-type 'darwin)
+  (advice-add 'pdf-tools-install :around
+              (lambda (fn &rest args)
+                (metal-deps-sans-macports (apply fn args)))
+              '((name . metal-deps--pdf-sans-macports))))
 
 (provide 'metal-deps)
 
