@@ -30,6 +30,19 @@
 ;; une RÉFÉRENCE : celle qui a été testée, servant de repli quand la
 ;; version du serveur n'est pas déterminable, et affichée à titre
 ;; indicatif par l'Assistant.
+;;
+;; RÈGLE DE CE FICHIER : aucun sous-processus ne passe par un shell.
+;; Les installateurs lançaient leur commande par
+;; `start-process-shell-command', c.-à-d. une CHAÎNE confiée à cmd.exe
+;; sous Windows.  Le chemin de pacman, produit par `expand-file-name'
+;; (donc en barres obliques), y traversait `shell-quote-argument', un
+;; `&&' et l'analyse de ligne de commande de `cmd /c' : cmd répondait
+;; « Le chemin d'accès spécifié est introuvable » (ERROR_PATH_NOT_FOUND)
+;; sur un binaire que `file-executable-p' venait de valider et que
+;; `call-process' lance sans peine quelques lignes plus haut.  Une LISTE
+;; d'arguments supprime la classe entière de pannes : plus de citation,
+;; plus d'interprétation, et plus de page de codes OEM sur les messages
+;; d'erreur — pacman, lui, écrit en UTF-8.
 
 ;;; Code:
 
@@ -127,6 +140,26 @@ avec les bibliothèques de Git for Windows."
     (when racine
       (let ((exe (expand-file-name "mingw64/bin/epdfinfo.exe" racine)))
         (and (file-executable-p exe) exe)))))
+
+(defvar pdf-info-epdfinfo-program)      ; défini par `pdf-info.el'
+
+(defun metal-pdf-serveur-brancher-programme ()
+  "Pointe `pdf-info-epdfinfo-program' sur le binaire fourni par MSYS2.
+Retourne le chemin retenu, ou nil.
+
+Sans ce branchement, `metal-pdf-serveur-programme' ne servait à rien :
+pdf-tools lançait le binaire de son dossier de compilation straight,
+qui sous Windows ne contient rien.  Le paquet MSYS2 pouvait donc être
+installé et le serveur rester introuvable au démarrage — les PDF
+retombant sur doc-view sans autre explication.
+
+Poser la valeur AVANT le chargement de `pdf-info' ne la perd pas : son
+`defcustom' respecte une variable déjà affectée."
+  (let ((exe (metal-pdf-serveur-programme)))
+    (when exe
+      (setq pdf-info-epdfinfo-program exe)
+      (metal-pdf-serveur-invalider-etat)
+      exe)))
 
 ;;; --- Clone straight ------------------------------------------------------
 
@@ -396,7 +429,12 @@ serveur fourni, ou recompiler le serveur depuis les sources du Lisp."
   (interactive)
   (if (metal-pdf-serveur-pilote-par-le-serveur-p)
       (cond
-       ((not (metal-pdf-serveur-msys2-present-p))
+       ((progn
+          ;; Le serveur peut être là depuis une session précédente sans que
+          ;; pdf-tools le sache : on rebranche avant de conclure quoi que
+          ;; ce soit.
+          (metal-pdf-serveur-brancher-programme)
+          (not (metal-pdf-serveur-msys2-present-p)))
         (user-error "MSYS2 requis — installez-le depuis l'Assistant"))
        ((not (metal-pdf-serveur-version-installee))
         (metal-pdf-serveur-installer))
@@ -414,6 +452,108 @@ serveur fourni, ou recompiler le serveur depuis les sources du Lisp."
           (metal-pdf-serveur--rafraichir-assistant))
       (user-error "pdf-tools n'est pas chargé"))))
 
+;;; --- Sous-processus : une liste d'arguments, jamais un shell -------------
+
+(defconst metal-pdf-serveur-codage-msys2 'utf-8-unix
+  "Codage de la sortie des outils MSYS2 (pacman), qui écrivent en UTF-8.")
+
+(defconst metal-pdf-serveur-codage-windows
+  (or locale-coding-system 'utf-8-unix)
+  "Codage de la sortie des outils Windows natifs (scoop, PowerShell).
+Eux suivent la page de codes du système, pas l'UTF-8.")
+
+(defun metal-pdf-serveur--nom-console (etiquette)
+  "Nom de tampon pour ETIQUETTE.
+Emprunte la normalisation de `metal-deps.el' quand elle est chargée, ce
+qui fait router le tampon vers la fenêtre de console dédiée plutôt que
+de le laisser s'ouvrir n'importe où."
+  (if (fboundp 'metal-console-nom)
+      (metal-console-nom etiquette)
+    (format "*%s*" etiquette)))
+
+(defun metal-pdf-serveur--console (etiquette programme args)
+  "Prépare et retourne le tampon de console d'ETIQUETTE.
+
+Le tampon est VIDÉ et reçoit un en-tête portant la commande exacte.  Il
+ne l'était pas : deux tentatives successives y empilaient leurs sorties,
+et la même erreur affichée deux fois passait pour une commande exécutée
+deux fois.  Sans l'en-tête, la commande lancée restait invisible — seul
+son message d'échec parvenait à l'utilisateur."
+  (let ((tampon (get-buffer-create (metal-pdf-serveur--nom-console etiquette))))
+    (with-current-buffer tampon
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format-time-string "[%H:%M:%S] ")
+                (mapconcat #'identity (cons programme args) " ") "\n"
+                (make-string 60 ?─) "\n"))
+      ;; Le tampon héritait du répertoire courant de l'Assistant.  Un
+      ;; répertoire inexistant fait échouer le démarrage du processus
+      ;; lui-même, avec un message qui n'a rien à voir avec la commande.
+      (setq default-directory (expand-file-name "~/")))
+    tampon))
+
+(defun metal-pdf-serveur--lancer (nom tampon programme args suite &optional codage)
+  "Lance PROGRAMME avec ARGS dans TAMPON ; appelle SUITE avec le code de sortie.
+ARGS est une liste transmise telle quelle : aucun shell n'intervient, donc
+aucune citation à faire ni à défaire.  CODAGE vaut par défaut celui de
+MSYS2."
+  (let* ((coding-system-for-read (or codage metal-pdf-serveur-codage-msys2))
+         (coding-system-for-write coding-system-for-read)
+         (proc (apply #'start-process nom tampon programme args)))
+    (set-process-sentinel
+     proc
+     (lambda (p _e)
+       (when (eq (process-status p) 'exit)
+         (funcall suite (process-exit-status p)))))
+    proc))
+
+;;; --- Trousseau pacman (Windows) ------------------------------------------
+;;
+;; L'installateur officiel de MSYS2 crée le trousseau de signatures à son
+;; premier lancement.  Scoop, lui, se contente de déposer l'archive : sans
+;; ce premier démarrage, tout `pacman -S' échoue en série sur les
+;; signatures PGP.  `metal-deps.el' greffe bien ce démarrage sur son bouton
+;; « MSYS2 », mais par un timer plafonné à vingt minutes : MSYS2 installé
+;; autrement, ou Emacs redémarré entre-temps, et la garantie disparaît.  On
+;; la reprend donc ici, juste avant d'en avoir besoin, et à partir de la
+;; racine que CE fichier a résolue.
+
+(defun metal-pdf-serveur--trousseau-present-p ()
+  "Non-nil si le trousseau pacman de MSYS2 existe déjà."
+  (let ((racine (metal-pdf-serveur-msys2-racine)))
+    (and racine
+         (file-exists-p
+          (expand-file-name "etc/pacman.d/gnupg/pubring.gpg" racine)))))
+
+(defun metal-pdf-serveur--initialiser-trousseau (suite)
+  "Fait le premier démarrage de MSYS2 si nécessaire, puis appelle SUITE.
+
+DEUX passages sont nécessaires : le premier crée le trousseau et
+l'arborescence, le second termine la mise à jour du runtime.  Les options
+comptent — `-defterm' évite l'ouverture d'une fenêtre mintty, `-no-start'
+empêche le détachement du processus, sans quoi la suite s'enchaînerait
+alors que les scripts tournent encore."
+  (let* ((racine (metal-pdf-serveur-msys2-racine))
+         (script (and racine (expand-file-name "msys2_shell.cmd" racine)))
+         (options '("-defterm" "-no-start" "-here" "-c" "exit")))
+    (if (or (null script)
+            (not (file-exists-p script))
+            (metal-pdf-serveur--trousseau-present-p))
+        (funcall suite)
+      (let ((tampon (metal-pdf-serveur--console "MSYS2 Init" script options))
+            (restants 2))
+        (display-buffer tampon)
+        (message "⏳ Premier démarrage de MSYS2 — patientez…")
+        (letrec ((passe
+                  (lambda (_code)
+                    (setq restants (1- restants))
+                    (if (> restants 0)
+                        (metal-pdf-serveur--lancer
+                         "msys2-init" tampon script options passe)
+                      (funcall suite)))))
+          (metal-pdf-serveur--lancer
+           "msys2-init" tampon script options passe))))))
+
 ;;; --- Installation, depuis l'Assistant ------------------------------------
 
 ;;;###autoload
@@ -428,16 +568,18 @@ MSYS2 fournit le serveur epdfinfo et ses DLL sous Windows."
     (unless (executable-find "scoop")
       (user-error "⚠ Scoop requis — installez-le d'abord depuis l'Assistant"))
     (message "📦 Installation de MSYS2 (~1 Go, plusieurs minutes)...")
-    (let ((tampon "*MSYS2 Install*"))
-      (set-process-sentinel
-       (start-process-shell-command "msys2-install" tampon "scoop install msys2")
-       (lambda (proc _e)
-         (when (eq (process-status proc) 'exit)
-           (if (= (process-exit-status proc) 0)
-               (message "✅ MSYS2 installé — installez le serveur epdfinfo")
-             (message "❌ Échec. Voir %s" tampon))
-           (metal-pdf-serveur--rafraichir-assistant))))
-      (display-buffer tampon))))
+    (let* ((scoop (executable-find "scoop"))
+           (args '("install" "msys2"))
+           (tampon (metal-pdf-serveur--console "MSYS2 Install" scoop args)))
+      (display-buffer tampon)
+      (metal-pdf-serveur--lancer
+       "msys2-install" tampon scoop args
+       (lambda (code)
+         (if (/= code 0)
+             (message "❌ Échec. Voir %s" (buffer-name tampon))
+           (message "✅ MSYS2 installé — installez le serveur epdfinfo"))
+         (metal-pdf-serveur--rafraichir-assistant))
+       metal-pdf-serveur-codage-windows))))
 
 ;;;###autoload
 (defun metal-pdf-serveur-desinstaller-msys2 ()
@@ -446,12 +588,17 @@ MSYS2 fournit le serveur epdfinfo et ses DLL sous Windows."
   (unless (metal-pdf-serveur-msys2-present-p)
     (user-error "MSYS2 n'est pas installé"))
   (when (yes-or-no-p "Retirer MSYS2 ? Les PDF repasseront à doc-view ")
-    (let ((tampon "*MSYS2 Uninstall*"))
-      (set-process-sentinel
-       (start-process-shell-command "msys2-uninstall" tampon
-                                    "scoop uninstall msys2")
-       (lambda (_p _e) (metal-pdf-serveur--rafraichir-assistant)))
-      (display-buffer tampon))))
+    (let ((scoop (executable-find "scoop"))
+          (args '("uninstall" "msys2")))
+      (unless scoop (user-error "Scoop introuvable"))
+      (let ((tampon (metal-pdf-serveur--console "MSYS2 Uninstall" scoop args)))
+        (display-buffer tampon)
+        (metal-pdf-serveur--lancer
+         "msys2-uninstall" tampon scoop args
+         (lambda (_code)
+           (setq pdf-info-epdfinfo-program nil)
+           (metal-pdf-serveur--rafraichir-assistant))
+         metal-pdf-serveur-codage-windows)))))
 
 ;;;###autoload
 (defun metal-pdf-serveur-installer ()
@@ -466,25 +613,51 @@ l'accord est donc acquis sans autre intervention."
   (let ((pacman (metal-pdf-serveur--pacman)))
     (unless pacman
       (user-error "MSYS2 introuvable — installez-le d'abord depuis l'Assistant"))
-    (message "📦 Installation du serveur epdfinfo (plusieurs minutes)...")
-    (let* ((tampon "*epdfinfo Install*")
-           (q (shell-quote-argument pacman))
-           (cmd (format "%s -Sy --noconfirm && %s -S --needed --noconfirm %s"
-                        q q metal-pdf-serveur-paquet-msys2)))
-      (set-process-sentinel
-       (start-process-shell-command "epdfinfo-install" tampon cmd)
-       (lambda (proc _e)
-         (when (eq (process-status proc) 'exit)
-           (if (/= (process-exit-status proc) 0)
-               (message "❌ Échec de l'installation. Voir %s" tampon)
-             (let ((v (metal-pdf-serveur-version-installee)))
-               (if (null v)
-                   (message "❌ Paquet installé mais version illisible")
-                 (metal-pdf-serveur-aligner-straight)
-                 (message "✅ Serveur %s installé, Lisp aligné — redémarrez Emacs"
-                          v))))
-           (metal-pdf-serveur--rafraichir-assistant))))
-      (display-buffer tampon))))
+    ;; Le trousseau d'abord : sans lui, les deux appels qui suivent
+    ;; échouent sur les signatures, avec un message que personne ne
+    ;; rattache à MSYS2.
+    (metal-pdf-serveur--initialiser-trousseau
+     (lambda () (metal-pdf-serveur--installer-paquet pacman)))))
+
+(defun metal-pdf-serveur--installer-paquet (pacman)
+  "Met MSYS2 à jour puis installe le paquet du serveur, avec PACMAN.
+
+Deux appels SÉPARÉS, enchaînés par la sentinelle du premier.  Ils étaient
+réunis par un `&&' dans une chaîne de shell : c'est ce passage par
+cmd.exe qui rendait le chemin de pacman introuvable.
+
+`-Syu' plutôt que `-Sy' : synchroniser les dépôts sans mettre à jour les
+paquets installés est la mise à jour partielle que la documentation de
+MSYS2 déconseille — elle laisse des dépendances incohérentes que
+l'installation suivante paie."
+  (message "📦 Installation du serveur epdfinfo (plusieurs minutes)...")
+  (let* ((maj '("-Syu" "--noconfirm"))
+         (pose (list "-S" "--needed" "--noconfirm"
+                     metal-pdf-serveur-paquet-msys2))
+         (tampon (metal-pdf-serveur--console "epdfinfo Install" pacman maj))
+         (nom (buffer-name tampon)))
+    (display-buffer tampon)
+    (metal-pdf-serveur--lancer
+     "epdfinfo-install" tampon pacman maj
+     (lambda (code)
+       (if (/= code 0)
+           (progn
+             (message "❌ Échec de la mise à jour de MSYS2. Voir %s" nom)
+             (metal-pdf-serveur--rafraichir-assistant))
+         (metal-pdf-serveur--lancer
+          "epdfinfo-install" tampon pacman pose
+          (lambda (code)
+            (if (/= code 0)
+                (message "❌ Échec de l'installation. Voir %s" nom)
+              (metal-pdf-serveur-invalider-etat)
+              (metal-pdf-serveur-brancher-programme)
+              (let ((v (metal-pdf-serveur-version-installee)))
+                (if (null v)
+                    (message "❌ Paquet installé mais version illisible")
+                  (metal-pdf-serveur-aligner-straight)
+                  (message "✅ Serveur %s installé, Lisp aligné — redémarrez Emacs"
+                           v))))
+            (metal-pdf-serveur--rafraichir-assistant))))))))
 
 ;;;###autoload
 (defun metal-pdf-serveur-desinstaller ()
@@ -496,14 +669,21 @@ l'accord est donc acquis sans autre intervention."
       (user-error "Le serveur epdfinfo n'est pas installé"))
     (when (yes-or-no-p
            "Retirer le serveur epdfinfo ? Les PDF passeront à doc-view ")
-      (let ((tampon "*epdfinfo Uninstall*"))
-        (set-process-sentinel
-         (start-process-shell-command
-          "epdfinfo-uninstall" tampon
-          (format "%s -R --noconfirm %s" (shell-quote-argument pacman)
-                  metal-pdf-serveur-paquet-msys2))
-         (lambda (_p _e) (metal-pdf-serveur--rafraichir-assistant)))
-        (display-buffer tampon)))))
+      (let* ((args (list "-R" "--noconfirm" metal-pdf-serveur-paquet-msys2))
+             (tampon (metal-pdf-serveur--console "epdfinfo Uninstall"
+                                                 pacman args)))
+        (display-buffer tampon)
+        (metal-pdf-serveur--lancer
+         "epdfinfo-uninstall" tampon pacman args
+         (lambda (_code)
+           (setq pdf-info-epdfinfo-program nil)
+           (metal-pdf-serveur--rafraichir-assistant)))))))
+
+;; Le branchement doit avoir lieu au CHARGEMENT : c'est au démarrage que
+;; pdf-tools résout son serveur, et un binaire installé lors d'une session
+;; précédente resterait autrement ignoré.
+(when (eq system-type 'windows-nt)
+  (metal-pdf-serveur-brancher-programme))
 
 (provide 'metal-pdf-serveur)
 ;;; metal-pdf-serveur.el ends here
