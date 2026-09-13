@@ -675,21 +675,48 @@ Le troisième argument existe pour la seule compatibilité d'appel avec
 ;; la place de l'étudiant : la consigne écrite reste dans le guide, mais
 ;; elle ne doit pas être la seule protection.
 
+(defun metal-deps--home ()
+  "Répertoire personnel de l'utilisateur, jamais nil.
+
+`(getenv \"HOME\")' était utilisé nu à une quinzaine d'endroits.  Quand la
+variable n'est pas définie, `expand-file-name' se rabat silencieusement
+sur `default-directory' : le chemin obtenu suit alors le lecteur courant,
+et pour l'installation de Scoop il finissait inscrit DURABLEMENT dans
+l'environnement de l'utilisateur.  Le repli est désormais explicite.
+
+Ne remplace pas `metal-deps--home-configure-p', qui teste bien, lui, si
+HOME est défini : c'est un prérequis affiché par l'Assistant."
+  (or (getenv "HOME") (getenv "USERPROFILE") (expand-file-name "~")))
+
 (defun metal-deps--msys2-racine ()
   "Répertoire d'installation de MSYS2, ou nil s'il est introuvable.
-Couvre l'installation Scoop (chemin usuel de MetalEmacs) et les
-emplacements de l'installateur officiel."
-  (cl-find-if
-   #'file-directory-p
-   (delq nil
-         (list (and (getenv "USERPROFILE")
-                    (expand-file-name "scoop/apps/msys2/current"
-                                      (getenv "USERPROFILE")))
-               (and (getenv "HOME")
-                    (expand-file-name "scoop/apps/msys2/current"
-                                      (getenv "HOME")))
-               "C:/msys64"
-               "C:/tools/msys64"))))
+
+Délègue à `metal-pdf-serveur-msys2-racine' quand ce module est chargé :
+c'est lui qui installe MSYS2 et s'en sert, et deux résolutions
+divergentes produisaient un désaccord silencieux — l'Assistant pouvait
+afficher MSYS2 présent pendant que l'installation du serveur le déclarait
+introuvable, ou l'inverse.  Une seule autorité, donc.
+
+La liste locale ne sert plus que de repli, et couvre les mêmes
+emplacements : `MSYS2_ROOT', une racine Scoop déplacée par `SCOOP', les
+chemins Scoop usuels, puis ceux de l'installateur officiel."
+  (if (fboundp 'metal-pdf-serveur-msys2-racine)
+      (metal-pdf-serveur-msys2-racine)
+    (cl-find-if
+     #'file-directory-p
+     (delq nil
+           (list (getenv "MSYS2_ROOT")
+                 (and (getenv "SCOOP")
+                      (expand-file-name "apps/msys2/current" (getenv "SCOOP")))
+                 (and (getenv "USERPROFILE")
+                      (expand-file-name "scoop/apps/msys2/current"
+                                        (getenv "USERPROFILE")))
+                 (expand-file-name "scoop/apps/msys2/current"
+                                   (metal-deps--home))
+                 "C:/msys64"
+                 "C:/tools/msys64"
+                 (and (getenv "LOCALAPPDATA")
+                      (expand-file-name "msys64" (getenv "LOCALAPPDATA"))))))))
 
 (defun metal-deps--msys2-initialise-p ()
   "Non-nil si le trousseau pacman de MSYS2 a déjà été créé."
@@ -757,6 +784,175 @@ encore, et enchaînerait sur un `pacman' voué au même échec."
                                     "créé" "TOUJOURS absent"))
                                (when suite (funcall suite))))))))))
             (funcall lancer))))))))
+
+(defun metal-deps--msys2-horloge-suspecte-p ()
+  "Retourne une explication si l'horloge système paraît fausse, sinon nil.
+
+Cas sournois : une date décalée fait échouer TOUTES les signatures, avec
+exactement les messages d'un trousseau périmé.  `pacman-key --init' n'y
+change alors rien — on peut le rejouer indéfiniment sans effet.  Écarter
+cette hypothèse AVANT de réparer évite un diagnostic sans issue.
+
+Le test se fait hors réseau, en comparant l'heure courante aux dates de
+fichiers déjà présents sur le disque : une horloge en retard les rend
+« futurs ».  Une journée de tolérance absorbe fuseaux et heure d'été."
+  (let* ((fichiers (delq nil (list (locate-library "metal-deps")
+                                   (expand-file-name "init.el"
+                                                     user-emacs-directory)
+                                   (let ((r (metal-deps--msys2-racine)))
+                                     (and r (expand-file-name
+                                             "msys2_shell.cmd" r))))))
+         (dates (delq nil
+                      (mapcar (lambda (f)
+                                (and (file-readable-p f)
+                                     (file-attribute-modification-time
+                                      (file-attributes f))))
+                              fichiers)))
+         (recent (car (last (sort dates #'time-less-p))))
+         (maintenant (current-time)))
+    (when (and recent
+               (time-less-p (time-add maintenant (* 24 60 60)) recent))
+      (format "l'horloge indique le %s, alors que des fichiers déjà sur le disque sont datés du %s"
+              (format-time-string "%Y-%m-%d" maintenant)
+              (format-time-string "%Y-%m-%d" recent)))))
+
+(defun metal-deps-msys2-aide-trousseau ()
+  "Affiche les causes possibles d'un refus de signatures par pacman.
+
+Ouverte automatiquement quand la réparation échoue : un bouton qui
+échoue en silence laisse l'utilisateur exactement au même point, en lui
+ayant fait croire que le geste était fait."
+  (interactive)
+  (metal-deps--afficher-aide
+   "Signatures refusées par pacman — autres causes"
+   (concat
+    "La réparation du trousseau couvre le cas le plus fréquent : des clés\n"
+    "expirées ou renouvelées depuis l'installation de MSYS2.  Si elle\n"
+    "n'a pas suffi, voici les autres causes, de la plus fréquente à la\n"
+    "plus rare.\n\n"
+
+    "1. HORLOGE SYSTÈME FAUSSE\n"
+    "   Une date décalée rend les signatures « futures » ou expirées, et\n"
+    "   produit les mêmes messages qu'un trousseau périmé.  Réparer le\n"
+    "   trousseau ne peut alors rien changer, quel que soit le nombre\n"
+    "   d'essais.\n"
+    "   → Réglages Windows > Heure et langue > Date et heure :\n"
+    "     activer « Régler l'heure automatiquement », puis\n"
+    "     « Synchroniser maintenant ».  Vérifier aussi le fuseau.\n\n"
+
+    "2. RÉSEAU FILTRÉ (campus, proxy, pare-feu)\n"
+    "   La réparation télécharge les clés et le paquet msys2-keyring.\n"
+    "   Sur un réseau universitaire filtré, ces requêtes échouent sans\n"
+    "   que les clés soient en cause.  Le tampon montre alors des\n"
+    "   erreurs de connexion ou d'expiration de délai, pas de signature.\n"
+    "   → Réessayer depuis une autre connexion (partage 4G, domicile).\n\n"
+
+    "3. INSTALLATION MSYS2 INCOMPLÈTE\n"
+    "   Une désinstallation interrompue, ou un dossier etc/pacman.d\n"
+    "   partiellement effacé, laisse une arborescence incohérente sur\n"
+    "   laquelle « pacman-key --init » échoue lui aussi.\n"
+    "   → Désinstaller MSYS2 depuis l'Assistant, puis le réinstaller.\n"
+    "     C'est long (~1 Go) mais sûr.\n\n"
+
+    "4. ROTATION DES CLÉS EN AMONT\n"
+    "   Si une clé maîtresse de MSYS2 a été révoquée, la séquence usuelle\n"
+    "   ne suffit plus : le projet publie alors une marche à suivre.\n"
+    "   → https://www.msys2.org/news/  (section la plus récente)\n\n"
+
+    "Dans tous les cas, le tampon « MSYS2 Trousseau » contient la sortie\n"
+    "complète des commandes : les dernières lignes avant l'arrêt disent\n"
+    "laquelle des quatre causes s'applique.")))
+
+(defun metal-deps-msys2-reparer-trousseau ()
+  "Réinitialise le trousseau de signatures de MSYS2, puis le met à jour.
+
+À utiliser quand pacman refuse les paquets alors que le trousseau EXISTE
+— clés expirées, ou renouvelées depuis l'installation.
+`metal-deps-msys2-premier-lancement' ne couvre pas ce cas : elle ne teste
+que la présence de `pubring.gpg', et un trousseau périmé la traverse
+sans rien déclencher.
+
+L'ordre de la séquence compte.  Recréer le trousseau et réimporter les
+clés maîtresses D'ABORD, mettre à jour `msys2-keyring' ENSUITE et seul :
+la mise à jour du trousseau est elle-même un paquet signé, il faut donc
+un trousseau utilisable pour en vérifier la signature.
+
+La commande est confiée au bash de MSYS2, jamais à cmd.exe : le script
+reçoit ses options en arguments séparés et c'est bash qui interprète les
+`&&'.
+
+Trois garanties, parce qu'un bouton qui échoue sans le dire vaut moins
+que pas de bouton : l'horloge est vérifiée avant de lancer quoi que ce
+soit ; le verdict distingue le succès de l'échec ; et en cas d'échec la
+fenêtre des autres causes s'ouvre d'elle-même."
+  (interactive)
+  (let ((racine (metal-deps--msys2-racine))
+        (horloge (metal-deps--msys2-horloge-suspecte-p)))
+    (unless racine
+      (user-error "MSYS2 introuvable — installez-le d'abord depuis l'Assistant"))
+    ;; L'horloge d'abord : réparer sous une date fausse ne peut pas
+    ;; aboutir, et masquerait la vraie cause derrière un second échec.
+    (when horloge
+      (metal-deps--journaliser "MSYS2 : réparation refusée — horloge suspecte (%s)"
+                               horloge)
+      (metal-deps-msys2-aide-trousseau)
+      (user-error "Horloge système suspecte : %s — corrigez la date d'abord"
+                  horloge))
+    (let ((script (expand-file-name "msys2_shell.cmd" racine))
+          (commande (concat "pacman-key --init && "
+                            "pacman-key --populate msys2 && "
+                            "pacman -Sy --noconfirm msys2-keyring"))
+          (tampon (get-buffer-create (metal-console-nom "MSYS2 Trousseau"))))
+      (unless (file-exists-p script)
+        (user-error "msys2_shell.cmd introuvable dans %s" racine))
+      (with-current-buffer tampon
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert "Réinitialisation du trousseau de signatures MSYS2\n"
+                  (make-string 60 ?─) "\n"
+                  commande "\n"
+                  "Quelques minutes ; aucune fenêtre ne s'ouvrira.\n\n")))
+      (display-buffer tampon)
+      (metal-deps--journaliser "MSYS2 : réinitialisation du trousseau")
+      (message "⏳ Réinitialisation du trousseau MSYS2 — patientez…")
+      (let ((proc (start-process "metal-msys2-trousseau" tampon script
+                                 "-defterm" "-no-start" "-here"
+                                 "-c" commande)))
+        (set-process-filter proc #'metal-console--filtre)
+        (set-process-sentinel
+         proc
+         (lambda (p evt)
+           (when (memq (process-status p) '(exit signal))
+             (metal-console--sentinelle p evt)
+             (metal-deps--msys2-verdict-trousseau
+              (process-exit-status p) (buffer-name tampon)))))))))
+
+(defun metal-deps--msys2-verdict-trousseau (code nom)
+  "Conclut la réparation du trousseau : CODE de sortie, NOM du tampon.
+
+En cas de succès, enchaîne sur l'installation du serveur epdfinfo si
+elle reste à faire — réparer sans terminer ce que l'utilisateur voulait
+faire le laisse à mi-chemin, devant un Assistant toujours rouge.  Le
+passage par un timer sort de la sentinelle avant d'ouvrir une fenêtre ou
+de lancer un autre processus."
+  (if (/= code 0)
+      (progn
+        (metal-deps--journaliser "MSYS2 : réparation du trousseau ÉCHOUÉE (code %s)"
+                                 code)
+        (message "❌ Réparation du trousseau échouée — voir %s" nom)
+        (run-with-timer 0 nil #'metal-deps-msys2-aide-trousseau))
+    (metal-deps--journaliser "MSYS2 : trousseau rétabli")
+    (if (and (fboundp 'metal-pdf-serveur-version-installee)
+             (metal-pdf-serveur-version-installee))
+        (message "✅ Trousseau MSYS2 rétabli.")
+      (message "✅ Trousseau rétabli — reprise de l'installation du serveur…")
+      (run-with-timer
+       0 nil
+       (lambda ()
+         (if (fboundp 'metal-pdf-serveur-reparer)
+             (metal-pdf-serveur-reparer)
+           (message "✅ Trousseau rétabli — relancez l'installation du serveur")))))
+    (run-with-timer 1 nil #'metal-deps-afficher-etat t)))
 
 (defun metal-deps--msys2-init-differee (&rest _)
   "Planifie le premier démarrage de MSYS2 dès que l'installation est finie.
@@ -1101,7 +1297,7 @@ se sert par ailleurs reste intacte."
   "Retourne t si Scoop est installé."
   (or (executable-find "scoop")
       ;; Chercher dans HOME d'abord (pour les chemins avec lien symbolique)
-      (file-exists-p (expand-file-name "scoop/shims/scoop.ps1" (getenv "HOME")))
+      (file-exists-p (expand-file-name "scoop/shims/scoop.ps1" (metal-deps--home)))
       ;; Fallback vers USERPROFILE
       (file-exists-p (expand-file-name "scoop/shims/scoop.ps1" (getenv "USERPROFILE")))))
 
@@ -1116,8 +1312,8 @@ se sert par ailleurs reste intacte."
      ;; Variable SCOOP définie
      (scoop-home scoop-home)
      ;; Chercher dans HOME d'abord
-     ((file-exists-p (expand-file-name "scoop" (getenv "HOME")))
-      (expand-file-name "scoop" (getenv "HOME")))
+     ((file-exists-p (expand-file-name "scoop" (metal-deps--home)))
+      (expand-file-name "scoop" (metal-deps--home)))
      ;; Fallback vers USERPROFILE
      (t (expand-file-name "scoop" (getenv "USERPROFILE"))))))
 
@@ -1165,7 +1361,7 @@ se sert par ailleurs reste intacte."
   "Trouve un répertoire bin/cmd Git contenant git.exe. 
 Retourne le répertoire ou nil. Aligné avec early-init.el."
   (when (eq system-type 'windows-nt)
-    (let* ((home (or (getenv "HOME") (getenv "USERPROFILE") "C:/"))
+    (let* ((home (metal-deps--home))
            (candidates
             (list
              ;; Git for Windows (winget / installeur officiel)
@@ -1207,13 +1403,13 @@ même logique que early-init.el).  Ailleurs, vérifie simplement le PATH."
   "Retourne t si Miniconda/Anaconda est installé."
   (or (executable-find "conda")
       ;; Installation standard utilisateur
-      (file-exists-p (expand-file-name "miniconda3" (getenv "HOME")))
-      (file-exists-p (expand-file-name "anaconda3" (getenv "HOME")))
+      (file-exists-p (expand-file-name "miniconda3" (metal-deps--home)))
+      (file-exists-p (expand-file-name "anaconda3" (metal-deps--home)))
       ;; Homebrew (macOS) - dossier Caskroom
       (metal-deps--miniconda-homebrew-path)
       ;; Windows - Scoop (méthode préférée)
       (and (eq system-type 'windows-nt)
-           (or (file-exists-p (expand-file-name "scoop/apps/miniconda3/current" (getenv "HOME")))
+           (or (file-exists-p (expand-file-name "scoop/apps/miniconda3/current" (metal-deps--home)))
                (file-exists-p (expand-file-name "scoop/apps/miniconda3/current" (getenv "USERPROFILE")))))))
 
 (defun metal-deps--quarto-present-p ()
@@ -1278,7 +1474,7 @@ Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
        (or (executable-find "xelatex")
            (let ((miktex-bin (expand-file-name
                               "scoop/apps/miktex/current/texmfs/install/miktex/bin/x64"
-                              (or (getenv "HOME") (getenv "USERPROFILE")))))
+                              (metal-deps--home))))
              (file-exists-p (expand-file-name "xelatex.exe" miktex-bin))))))
 
 (defun metal-deps--drawio-present-p ()
@@ -1291,7 +1487,7 @@ Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
       (and (eq system-type 'windows-nt)
            (file-exists-p (expand-file-name
                            "scoop/apps/draw.io/current/draw.io.exe"
-                           (or (getenv "HOME") (getenv "USERPROFILE")))))
+                           (metal-deps--home))))
       ;; Linux : vérifier le .desktop ou le binaire
       (and (eq system-type 'gnu/linux)
            (or (executable-find "drawio")
@@ -1302,12 +1498,46 @@ Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
   (not (null (executable-find "rg"))))
 
 (defun metal-deps--chemin-epdfinfo ()
-  "Retourne le chemin vers epdfinfo ou nil."
-  (let ((chemins (list
-                  (expand-file-name "straight/build/pdf-tools/epdfinfo" user-emacs-directory)
-                  (expand-file-name "elpa/pdf-tools-*/epdfinfo" user-emacs-directory)
-                  (expand-file-name ".emacs.d/straight/build/pdf-tools/epdfinfo" (getenv "HOME")))))
-    (cl-find-if #'file-executable-p chemins)))
+  "Retourne le chemin d'un serveur epdfinfo utilisable, ou nil.
+
+Trois défauts corrigés ici.
+
+Le SUFFIXE : sous Windows le binaire s'appelle `epdfinfo.exe'.  Aucun
+candidat ne le portait, donc `file-executable-p' échouait sur tous, et
+un serveur fraîchement installé restait invisible pour l'Assistant.
+
+Le MOTIF `elpa/pdf-tools-*/' : il était passé tel quel à
+`file-executable-p', qui ne développe pas les jokers.  Cette entrée n'a
+jamais rien trouvé, sur aucune plateforme.  `file-expand-wildcards' s'en
+charge.
+
+Les EMPLACEMENTS WINDOWS : le serveur ne s'y compile pas.  Il vient du
+paquet MSYS2, dont `metal-pdf-serveur.el' connaît le chemin, ou du
+binaire portable livré avec MetalEmacs que `metal-pdf.el' consulte déjà.
+Aucun des deux n'était cherché ici."
+  (let* ((home (metal-deps--home))
+         (suffixes (if (eq system-type 'windows-nt) '("" ".exe") '("")))
+         (candidats
+          (append
+           ;; Ce que pdf-tools lancera effectivement, s'il est branché.
+           (and (boundp 'pdf-info-epdfinfo-program)
+                (stringp pdf-info-epdfinfo-program)
+                (list pdf-info-epdfinfo-program))
+           ;; Windows : le binaire fourni par le paquet MSYS2.
+           (and (fboundp 'metal-pdf-serveur-programme)
+                (let ((exe (metal-pdf-serveur-programme)))
+                  (and exe (list exe))))
+           (list
+            (expand-file-name "straight/build/pdf-tools/epdfinfo" user-emacs-directory)
+            ;; Repli portable, déjà consulté par `metal-pdf.el'.
+            (expand-file-name "pdf-tools/epdfinfo" user-emacs-directory)
+            (expand-file-name ".emacs.d/straight/build/pdf-tools/epdfinfo" home))
+           (file-expand-wildcards
+            (expand-file-name "elpa/pdf-tools-*/epdfinfo" user-emacs-directory)))))
+    (cl-find-if
+     #'file-executable-p
+     (cl-loop for c in candidats
+              append (mapcar (lambda (suffixe) (concat c suffixe)) suffixes)))))
 
 (defun metal-deps--epdfinfo-present-p ()
   "Retourne t si epdfinfo est compilé et exécutable."
@@ -1355,12 +1585,12 @@ Sans lui, doc-view ne peut pas rasteriser et affiche le source brut."
     (metal-deps--journaliser "Installation de Scoop")
     (message "📦 Installation de Scoop en cours...")
     ;; Configurer SCOOP vers HOME pour éviter les problèmes d'accents
-    (let* ((scoop-dir (expand-file-name "scoop" (getenv "HOME")))
+    (let* ((scoop-dir (expand-file-name "scoop" (metal-deps--home)))
            (cmd (format "powershell -Command \"$env:SCOOP = '%s'; [Environment]::SetEnvironmentVariable('SCOOP', '%s', 'User'); Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force; irm get.scoop.sh | iex\""
                         scoop-dir scoop-dir)))
       (metal-console-lancer cmd "*Scoop Install*"))
     ;; Mettre à jour le PATH pour cette session
-    (let ((scoop-shims (expand-file-name "scoop/shims" (getenv "HOME"))))
+    (let ((scoop-shims (expand-file-name "scoop/shims" (metal-deps--home))))
       (when (file-exists-p scoop-shims)
         (setenv "PATH" (concat scoop-shims ";" (getenv "PATH")))
         (add-to-list 'exec-path scoop-shims)))
@@ -1713,7 +1943,7 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
   "Ajoute le bucket 'extras' à Scoop si nécessaire."
   (when (and (eq system-type 'windows-nt)
              (metal-deps--scoop-present-p))
-    (let* ((scoop-shims (expand-file-name "scoop/shims" (getenv "HOME")))
+    (let* ((scoop-shims (expand-file-name "scoop/shims" (metal-deps--home)))
            (scoop-cmd (expand-file-name "scoop.cmd" scoop-shims))
            (buckets (if (file-exists-p scoop-cmd)
                         (shell-command-to-string (format "\"%s\" bucket list 2>nul" scoop-cmd))
@@ -1936,8 +2166,8 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
         (message "Miniconda a été installé à l'extérieur de Scoop. Désinstallez manuellement.")))
      (t
       (let ((chemins (list
-                      (expand-file-name "miniconda3" (getenv "HOME"))
-                      (expand-file-name "anaconda3" (getenv "HOME")))))
+                      (expand-file-name "miniconda3" (metal-deps--home))
+                      (expand-file-name "anaconda3" (metal-deps--home)))))
         (let ((trouve (cl-find-if #'file-exists-p chemins)))
           (if trouve
               (when (yes-or-no-p (format "Supprimer Miniconda dans %s ? " trouve))
@@ -2734,7 +2964,7 @@ dans les fichiers de projet."
                  ;; Configurer auto-installation des paquets manquants
                  (let ((initexmf (expand-file-name
                                   "scoop/apps/miktex/current/texmfs/install/miktex/bin/x64/initexmf.exe"
-                                  (or (getenv "HOME") (getenv "USERPROFILE")))))
+                                  (metal-deps--home))))
                    (when (file-exists-p initexmf)
                      (call-process initexmf nil nil nil
                                    "--set-config-value=[MPM]AutoInstall=1")
@@ -2749,7 +2979,7 @@ dans les fichiers de projet."
   (when (eq system-type 'windows-nt)
     (let ((miktex-bin (expand-file-name
                        "scoop/apps/miktex/current/texmfs/install/miktex/bin/x64"
-                       (or (getenv "HOME") (getenv "USERPROFILE")))))
+                       (metal-deps--home))))
       (when (file-directory-p miktex-bin)
         (add-to-list 'exec-path miktex-bin)
         (setenv "PATH" (concat miktex-bin ";" (getenv "PATH")))))))
@@ -3713,6 +3943,13 @@ le catalogue d'agents et le CLI attendent tous deux `agy'."
      :categorie pdf
      :description "Requis pour lire les PDF dans Emacs (~1 Go)"
      :windows-seulement t
+     ;; Réparation du trousseau de signatures : offerte en permanence dès
+     ;; que MSYS2 est là.  Un trousseau PÉRIMÉ est indiscernable d'un
+     ;; trousseau sain tant qu'on ne teste que la présence de
+     ;; `pubring.gpg' — le bouton ne peut donc pas dépendre d'un
+     ;; `:verifier', il doit rester joignable même quand tout paraît vert.
+     :action-secondaire metal-deps-msys2-reparer-trousseau
+     :bouton-secondaire "Réparer le trousseau"
      ;; Volontairement exclu des installations groupées : un gigaoctet
      ;; déclenché sans y penser passe pour un plantage.
      :hors-groupe t)
@@ -4184,6 +4421,21 @@ chaud."
                                      :notify (lambda (&rest _)
                                                (metal-deps--executer-et-rafraichir fn))
                                      libelle))))
+                  ;; --- Bouton secondaire ---
+                  ;; Action offerte sur un outil DÉJÀ installé, là où ni
+                  ;; « Installer » ni « Désinstaller » ne conviennent :
+                  ;; réparer, reconfigurer.  Sans lui, la réparation du
+                  ;; trousseau MSYS2 n'aurait été joignable que par un
+                  ;; `M-x' de trente-quatre caractères — c.-à-d. par
+                  ;; personne, au moment précis où elle sert.
+                  (let ((fn2 (plist-get outil :action-secondaire)))
+                    (when (and present fn2)
+                      (widget-insert "  ")
+                      (widget-create 'push-button
+                                     :notify (lambda (&rest _)
+                                               (metal-deps--executer-et-rafraichir fn2))
+                                     (or (plist-get outil :bouton-secondaire)
+                                         "Réparer"))))
                   ;; Padder le bouton principal à largeur fixe (16 chars)
                   ;; pour aligner la colonne suivante.
                   (let* ((largeur-bouton (string-width
@@ -4472,10 +4724,10 @@ conflits entre gestionnaires de paquets."
   ;; Miniconda - dossier utilisateur
   (let ((conda-paths (list
                       (expand-file-name "miniconda3" (getenv "USERPROFILE"))
-                      (expand-file-name "scoop/apps/miniconda3/current" (getenv "HOME"))
+                      (expand-file-name "scoop/apps/miniconda3/current" (metal-deps--home))
                       (expand-file-name "scoop/apps/miniconda3/current" (getenv "USERPROFILE"))
-                      (expand-file-name "miniconda3" (getenv "HOME"))
-                      (expand-file-name "anaconda3" (getenv "HOME")))))
+                      (expand-file-name "miniconda3" (metal-deps--home))
+                      (expand-file-name "anaconda3" (metal-deps--home)))))
     (dolist (p conda-paths)
       (when (and p (file-exists-p p))
         (add-to-list 'exec-path p)

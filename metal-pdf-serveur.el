@@ -492,6 +492,63 @@ son message d'échec parvenait à l'utilisateur."
       (setq default-directory (expand-file-name "~/")))
     tampon))
 
+(defun metal-pdf-serveur--enchainer (nom tampon programme etapes fin)
+  "Lance à la suite chaque liste d'arguments d'ETAPES, et s'arrête au 1er échec.
+FIN reçoit le code de sortie de la dernière étape exécutée — 0 si toutes
+ont abouti.  Chaque commande est écrite dans TAMPON avant d'être lancée :
+sans cet écho, une séquence qui échoue au milieu ne dit pas à quelle
+étape.  ETAPES est une liste de listes d'arguments ; le shell n'intervient
+toujours pas."
+  (if (null etapes)
+      (funcall fin 0)
+    (with-current-buffer tampon
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (insert "\n$ " (mapconcat #'identity (cons programme (car etapes)) " ")
+                "\n")))
+    (metal-pdf-serveur--lancer
+     nom tampon programme (car etapes)
+     (lambda (code)
+       (if (/= code 0)
+           (funcall fin code)
+         (metal-pdf-serveur--enchainer nom tampon programme (cdr etapes) fin))))))
+
+(defconst metal-pdf-serveur--motif-signature
+  (concat "PGP signature\\|signature from\\|unknown trust\\|marginal trust"
+          "\\|keyring\\|pacman-key\\|clé inconnue")
+  "Motifs par lesquels pacman dénonce un problème de trousseau.
+Cherchés seulement après un code de sortie non nul : un paquet dont la
+signature est vérifiée sans incident n'en parle pas.")
+
+(defun metal-pdf-serveur--echec-signature-p (tampon)
+  "Non-nil si la sortie de pacman dans TAMPON met en cause le trousseau."
+  (and (buffer-live-p tampon)
+       (with-current-buffer tampon
+         (save-excursion
+           (goto-char (point-min))
+           (let ((case-fold-search t))
+             (and (re-search-forward metal-pdf-serveur--motif-signature nil t)
+                  t))))))
+
+(defun metal-pdf-serveur--signaler-echec (tampon nom)
+  "Signale l'échec de l'installation, TAMPON portant la sortie et NOM son nom.
+
+Quand pacman a refusé des signatures, le message brut (« ❌ Échec ») ne
+dit rien d'exploitable : c'est le trousseau qu'il faut rétablir, et
+`metal-deps-msys2-reparer-trousseau' le fait.  La question part par un
+timer plutôt que depuis la sentinelle elle-même : un `y-or-n-p' appelé
+dans une sentinelle interrompt l'utilisateur au milieu de ce qu'il tape."
+  (if (not (and (metal-pdf-serveur--echec-signature-p tampon)
+                (fboundp 'metal-deps-msys2-reparer-trousseau)))
+      (message "❌ Échec de l'installation. Voir %s" nom)
+    (message "❌ pacman a refusé les signatures — trousseau MSYS2 en cause")
+    (run-with-timer
+     0 nil
+     (lambda ()
+       (when (y-or-n-p
+              "pacman refuse les signatures.  Rétablir le trousseau MSYS2 ? ")
+         (metal-deps-msys2-reparer-trousseau))))))
+
 (defun metal-pdf-serveur--lancer (nom tampon programme args suite &optional codage)
   "Lance PROGRAMME avec ARGS dans TAMPON ; appelle SUITE avec le code de sortie.
 ARGS est une liste transmise telle quelle : aucun shell n'intervient, donc
@@ -622,42 +679,43 @@ l'accord est donc acquis sans autre intervention."
 (defun metal-pdf-serveur--installer-paquet (pacman)
   "Met MSYS2 à jour puis installe le paquet du serveur, avec PACMAN.
 
-Deux appels SÉPARÉS, enchaînés par la sentinelle du premier.  Ils étaient
-réunis par un `&&' dans une chaîne de shell : c'est ce passage par
-cmd.exe qui rendait le chemin de pacman introuvable.
+TROIS appels séparés, enchaînés par les sentinelles.  Ils étaient réunis
+par un `&&' dans une chaîne de shell : c'est ce passage par cmd.exe qui
+rendait le chemin de pacman introuvable.
 
-`-Syu' plutôt que `-Sy' : synchroniser les dépôts sans mettre à jour les
-paquets installés est la mise à jour partielle que la documentation de
-MSYS2 déconseille — elle laisse des dépendances incohérentes que
+Le TROUSSEAU d'abord, seul.  `msys2-keyring' porte les clés reconnues et
+révoquées, et il est lui-même signé : tant qu'il est périmé, tout le
+reste échoue en cascade sur les signatures, sans que le message n'indique
+jamais la cause.  Le mettre à jour en premier est aussi la seule séquence
+qui fonctionne — un trousseau utilisable est requis pour vérifier la
+signature de sa propre mise à jour.
+
+Puis `-Syu' plutôt que `-Sy' : synchroniser les dépôts sans mettre à jour
+les paquets installés est la mise à jour partielle que la documentation
+de MSYS2 déconseille — elle laisse des dépendances incohérentes que
 l'installation suivante paie."
   (message "📦 Installation du serveur epdfinfo (plusieurs minutes)...")
-  (let* ((maj '("-Syu" "--noconfirm"))
+  (let* ((trousseau '("-Sy" "--needed" "--noconfirm" "msys2-keyring"))
+         (maj '("-Syu" "--noconfirm"))
          (pose (list "-S" "--needed" "--noconfirm"
                      metal-pdf-serveur-paquet-msys2))
-         (tampon (metal-pdf-serveur--console "epdfinfo Install" pacman maj))
+         (tampon (metal-pdf-serveur--console "epdfinfo Install" pacman nil))
          (nom (buffer-name tampon)))
     (display-buffer tampon)
-    (metal-pdf-serveur--lancer
-     "epdfinfo-install" tampon pacman maj
+    (metal-pdf-serveur--enchainer
+     "epdfinfo-install" tampon pacman (list trousseau maj pose)
      (lambda (code)
        (if (/= code 0)
-           (progn
-             (message "❌ Échec de la mise à jour de MSYS2. Voir %s" nom)
-             (metal-pdf-serveur--rafraichir-assistant))
-         (metal-pdf-serveur--lancer
-          "epdfinfo-install" tampon pacman pose
-          (lambda (code)
-            (if (/= code 0)
-                (message "❌ Échec de l'installation. Voir %s" nom)
-              (metal-pdf-serveur-invalider-etat)
-              (metal-pdf-serveur-brancher-programme)
-              (let ((v (metal-pdf-serveur-version-installee)))
-                (if (null v)
-                    (message "❌ Paquet installé mais version illisible")
-                  (metal-pdf-serveur-aligner-straight)
-                  (message "✅ Serveur %s installé, Lisp aligné — redémarrez Emacs"
-                           v))))
-            (metal-pdf-serveur--rafraichir-assistant))))))))
+           (metal-pdf-serveur--signaler-echec tampon nom)
+         (metal-pdf-serveur-invalider-etat)
+         (metal-pdf-serveur-brancher-programme)
+         (let ((v (metal-pdf-serveur-version-installee)))
+           (if (null v)
+               (message "❌ Paquet installé mais version illisible")
+             (metal-pdf-serveur-aligner-straight)
+             (message "✅ Serveur %s installé, Lisp aligné — redémarrez Emacs"
+                      v))))
+       (metal-pdf-serveur--rafraichir-assistant)))))
 
 ;;;###autoload
 (defun metal-pdf-serveur-desinstaller ()
