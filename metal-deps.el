@@ -3941,7 +3941,7 @@ le catalogue d'agents et le CLI attendent tous deux `agy'."
      :installer metal-pdf-serveur-installer-msys2
      :desinstaller metal-pdf-serveur-desinstaller-msys2
      :categorie pdf
-     :description "Requis pour lire les PDF dans Emacs (~1 Go)"
+     :description
      :windows-seulement t
      ;; Réparation du trousseau de signatures : offerte en permanence dès
      ;; que MSYS2 est là.  Un trousseau PÉRIMÉ est indiscernable d'un
