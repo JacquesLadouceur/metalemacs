@@ -816,6 +816,24 @@ fichiers déjà présents sur le disque : une horloge en retard les rend
               (format-time-string "%Y-%m-%d" maintenant)
               (format-time-string "%Y-%m-%d" recent)))))
 
+(defun metal-deps--msys2-description ()
+  "Description de la ligne MSYS2, adaptée au dernier échec constaté.
+
+Fixe, cette ligne ne disait jamais QUAND le bouton « Réparer le
+trousseau » sert : l'Assistant affichait ✓ et le même texte, que
+l'installation ait échoué sur des signatures, sur le réseau ou pas du
+tout.  Le drapeau `metal-pdf-serveur-signatures-refusees' rend le signal
+persistant et le place à l'endroit même où se trouve le bouton.
+
+L'horloge n'est vérifiée que lorsque le drapeau est levé : inutile de
+payer trois accès disque à chaque rendu pour un cas qui ne se pose pas."
+  (if (not (and (boundp 'metal-pdf-serveur-signatures-refusees)
+                metal-pdf-serveur-signatures-refusees))
+      "Requis pour lire les PDF"
+    (if (metal-deps--msys2-horloge-suspecte-p)
+        "signatures refusées — l'horloge système est fausse, corrigez la date"
+      "signatures refusées par pacman — bouton « Réparer le trousseau »")))
+
 (defun metal-deps-msys2-aide-trousseau ()
   "Affiche les causes possibles d'un refus de signatures par pacman.
 
@@ -942,6 +960,9 @@ de lancer un autre processus."
         (message "❌ Réparation du trousseau échouée — voir %s" nom)
         (run-with-timer 0 nil #'metal-deps-msys2-aide-trousseau))
     (metal-deps--journaliser "MSYS2 : trousseau rétabli")
+    ;; Le signal persistant disparaît de l'Assistant : la cause est levée.
+    (when (boundp 'metal-pdf-serveur-signatures-refusees)
+      (setq metal-pdf-serveur-signatures-refusees nil))
     (if (and (fboundp 'metal-pdf-serveur-version-installee)
              (metal-pdf-serveur-version-installee))
         (message "✅ Trousseau MSYS2 rétabli.")
@@ -3941,7 +3962,7 @@ le catalogue d'agents et le CLI attendent tous deux `agy'."
      :installer metal-pdf-serveur-installer-msys2
      :desinstaller metal-pdf-serveur-desinstaller-msys2
      :categorie pdf
-     :description ""
+     :description metal-deps--msys2-description
      :windows-seulement t
      ;; Réparation du trousseau de signatures : offerte en permanence dès
      ;; que MSYS2 est là.  Un trousseau PÉRIMÉ est indiscernable d'un

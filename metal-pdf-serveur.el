@@ -520,6 +520,15 @@ toujours pas."
 Cherchés seulement après un code de sortie non nul : un paquet dont la
 signature est vérifiée sans incident n'en parle pas.")
 
+(defvar metal-pdf-serveur-signatures-refusees nil
+  "Non-nil quand pacman a refusé des signatures lors de la dernière tentative.
+
+Drapeau PERSISTANT, à lire par l'Assistant.  La proposition de réparation
+ne vivait que dans le minibuffer : un `C-g' ou une frappe au mauvais
+moment, et elle disparaissait sans laisser de trace — l'utilisateur se
+retrouvait devant un Assistant qui ne disait rien de plus qu'avant.  Levé
+au premier échec de signature, abaissé à la première réussite.")
+
 (defun metal-pdf-serveur--echec-signature-p (tampon)
   "Non-nil si la sortie de pacman dans TAMPON met en cause le trousseau."
   (and (buffer-live-p tampon)
@@ -538,15 +547,22 @@ dit rien d'exploitable : c'est le trousseau qu'il faut rétablir, et
 `metal-deps-msys2-reparer-trousseau' le fait.  La question part par un
 timer plutôt que depuis la sentinelle elle-même : un `y-or-n-p' appelé
 dans une sentinelle interrompt l'utilisateur au milieu de ce qu'il tape."
-  (if (not (and (metal-pdf-serveur--echec-signature-p tampon)
-                (fboundp 'metal-deps-msys2-reparer-trousseau)))
+  (if (not (metal-pdf-serveur--echec-signature-p tampon))
       (message "❌ Échec de l'installation. Voir %s" nom)
+    ;; Le drapeau vaut indépendamment de la suite : même si l'utilisateur
+    ;; décline la réparation immédiate, l'Assistant doit continuer à
+    ;; afficher la cause et le geste.
+    (setq metal-pdf-serveur-signatures-refusees t)
+    (metal-pdf-serveur--rafraichir-assistant)
     (message "❌ pacman a refusé les signatures — trousseau MSYS2 en cause")
+    (unless (fboundp 'metal-deps-msys2-reparer-trousseau)
+      (message "❌ Signatures refusées par pacman. Voir %s" nom))
     (run-with-timer
      0 nil
      (lambda ()
-       (when (y-or-n-p
-              "pacman refuse les signatures.  Rétablir le trousseau MSYS2 ? ")
+       (when (and (fboundp 'metal-deps-msys2-reparer-trousseau)
+                  (y-or-n-p
+                   "pacman refuse les signatures.  Rétablir le trousseau MSYS2 ? "))
          (metal-deps-msys2-reparer-trousseau))))))
 
 (defun metal-pdf-serveur--lancer (nom tampon programme args suite &optional codage)
@@ -707,6 +723,7 @@ l'installation suivante paie."
      (lambda (code)
        (if (/= code 0)
            (metal-pdf-serveur--signaler-echec tampon nom)
+         (setq metal-pdf-serveur-signatures-refusees nil)
          (metal-pdf-serveur-invalider-etat)
          (metal-pdf-serveur-brancher-programme)
          (let ((v (metal-pdf-serveur-version-installee)))
