@@ -38,11 +38,6 @@ en streaming (générateurs, lecture par chunks,
 ~pandas.read_*(chunksize=...)~, ~pyarrow.dataset~).  Pour les petits
 corpus, le chargement complet est acceptable.
 
-* [Permission] Inclure des tests pytest :: f
-Si la tâche s'y prête, ajoute une fonction de test au format pytest
-(au moins un cas nominal et un cas pathologique : texte vide,
-caractères spéciaux).
-
 * [Permission] Logging structuré :: f
 Si la tâche est un traitement long ou un script de production,
 utilise ~logging~ (avec timestamps) plutôt que ~print~.

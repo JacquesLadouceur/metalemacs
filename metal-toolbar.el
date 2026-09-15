@@ -28,6 +28,10 @@
 ;;   (metal-toolbar-button ICON TOOLTIP COMMAND)
 ;;       Bouton cliquable, infobulle au survol, action au clic-gauche.
 ;;
+;;   (metal-toolbar-snippets-button [CONTEXT])
+;;       Bouton « modèles » (🧩).  Greffé automatiquement par
+;;       `metal-toolbar-build' dans les modes qui ont des modèles YASnippet.
+;;
 ;; Exemple :
 ;;
 ;;   (defun ma-barre ()
@@ -392,6 +396,54 @@ rendu) aussi bien que statiques."
    ((and (symbolp v) v (fboundp v)) (funcall v))
    (t v)))
 
+;;; --- Segment Snippets ----------------------------------------------------
+
+(defcustom metal-toolbar-snippets t
+  "Si non nil, greffer un bouton « modeles » aux barres des modes concernes.
+Le bouton n'apparait que dans les tampons ou au moins un modele YASnippet
+s'applique (voir `metal-toolbar--snippets-p')."
+  :type 'boolean
+  :group 'metal-toolbar)
+
+(defvar-local metal-toolbar--snippets-cache 'inconnu
+  "Cache du predicat de disponibilite des modeles pour ce tampon.
+Valeur `inconnu' tant que le test n'a pas ete fait.  Variable locale non
+permanente : un changement de mode majeur la remet d'office a `inconnu'.")
+
+(defun metal-toolbar--snippets-p ()
+  "Retourner non nil si des modeles YASnippet s'appliquent au tampon courant.
+Tient compte des tables heritees via `.yas-parents'.  Le resultat est mis
+en cache : la barre est reconstruite a chaque redisplay, et interroger les
+tables de YASnippet a ce rythme couterait trop cher.  Le cache est vide par
+`metal-toolbar-snippets-invalider' apres un `yas-reload-all'."
+  (when (eq metal-toolbar--snippets-cache 'inconnu)
+    (setq metal-toolbar--snippets-cache
+          (and (bound-and-true-p yas-minor-mode)
+               (fboundp 'yas--get-snippet-tables)
+               (ignore-errors
+                 (and (yas--all-templates (yas--get-snippet-tables)) t)))))
+  metal-toolbar--snippets-cache)
+
+(defun metal-toolbar-snippets-invalider ()
+  "Oublier le cache des modeles dans tous les tampons et redessiner les barres."
+  (dolist (buf (buffer-list))
+    (with-current-buffer buf
+      (setq metal-toolbar--snippets-cache 'inconnu)))
+  (metal-toolbar-rafraichir))
+
+(with-eval-after-load 'yasnippet
+  (add-hook 'yas-after-reload-hook #'metal-toolbar-snippets-invalider))
+
+(defun metal-toolbar-snippets-button (&optional context)
+  "Bouton « modeles » : ouvre la liste des modeles applicables au tampon.
+CONTEXT est le contexte de clic (defaut `header-line'), comme pour
+`metal-toolbar-button'."
+  (metal-toolbar-button
+   (metal-toolbar-emoji "🧩")
+   "Inserer un snippet (F10)"
+   #'yas-insert-snippet
+   (or context 'header-line)))
+
 (cl-defun metal-toolbar-build (items &key agent secretaire (context 'header-line))
   "Construire une chaîne de header-line à partir d'ITEMS déclaratifs.
 
@@ -411,6 +463,10 @@ Formes reconnues dans ITEMS :
       underline, strike) : « G » en gras, « I » en italique, etc.
   (:sep [CHAR])
       Un séparateur vertical (CHAR optionnel surcharge le \"|\").
+
+Un bouton « modèles » (🧩) est greffé automatiquement, après les boutons
+du mode, dans tout tampon où des modèles YASnippet s'appliquent.  Voir
+`metal-toolbar-snippets' pour le désactiver globalement.
 
 Mots-clés de BUILD :
   :agent      si non nil, greffe l'extension Metal-Agent à la fin (protégée
@@ -470,7 +526,15 @@ automatiquement."
                    (icon    (metal-toolbar-char texte :style style :color color)))
               (push (metal-toolbar-button icon tooltip command context) parts)
               (push " " parts)))
-           (t nil)))))
+           (t nil))))
+      ;; Bouton « modèles » : présent dès qu'un modèle YASnippet s'applique
+      ;; au tampon.  Placé dans le `unless' : il disparaît donc, comme les
+      ;; boutons du mode, quand une barre spécialisée prend la barre.
+      (when (and metal-toolbar-snippets (metal-toolbar--snippets-p))
+        (push (metal-toolbar-separator) parts)
+        (push " " parts)
+        (push (metal-toolbar-snippets-button context) parts)
+        (push " " parts)))
     ;; Segment Secrétaire : compact (🗒️ seul) si inactif, étendu si actif.
     ;; Affiché seulement si l'agent n'a pas pris la barre (priorité simple :
     ;; deux barres spécialisées ne s'affichent jamais en même temps).

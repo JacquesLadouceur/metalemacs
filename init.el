@@ -176,12 +176,19 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
 
 ;; Définir des raccourcis globaux plus intuitifs,
 ;; uniquement en dehors des modes majeurs connus
+
 (defun my-intuitive-copy-cut-paste ()
   (unless (derived-mode-p 'special-mode 'magit-mode 'org-mode 'dired-mode)
-    (local-set-key (kbd "C-c") #'kill-ring-save)
- ;;   (local-set-key (kbd "C-x") #'kill-region)
-    (local-set-key (kbd "C-v") #'yank)
-    (local-set-key (kbd "C-z") #'undo)))
+    (let ((map (make-sparse-keymap)))
+      (set-keymap-parent map (current-local-map))
+      ;; On ne prend C-c que la ou il n'est pas deja un prefixe
+      ;; (Python, Prolog, markdown, snippet... s'en servent).
+      (unless (keymapp (key-binding (kbd "C-c")))
+        (define-key map (kbd "C-c") #'kill-ring-save))
+      ;;  (define-key map (kbd "C-x") #'kill-region)
+      (define-key map (kbd "C-v") #'yank)
+      (define-key map (kbd "C-z") #'undo)
+      (use-local-map map))))
 
 ;; Activer ces raccourcis dans les buffers standards
 (add-hook 'text-mode-hook #'my-intuitive-copy-cut-paste)

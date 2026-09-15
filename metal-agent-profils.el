@@ -372,11 +372,27 @@ profil de fallback pour ne pas bloquer Emacs."
     (message "metal-agent : %d profil(s) chargé(s) (%d personnel(s), %d défaut)"
              n n-perso n-defaut)))
 
-(defun metal-agent-ouvrir-dossier-profils ()
-  "Ouvre `metal-agent-profils-directory' dans Dired."
-  (interactive)
-  (metal-agent--initialiser-dossier-utilisateur)
-  (dired metal-agent-profils-directory))
+(defun metal-agent-ouvrir-dossier-profils (&optional perso)
+  "Ouvre dans Dired le dossier des profils livrés avec MetalEmacs.
+
+C'est là que se consultent les profils fournis avec le cours.  Ce
+dossier est écrasé aux mises à jour : pour partir d'un profil livré,
+mieux vaut le dériver avec `metal-agent-copier-profil' que l'éditer
+sur place.
+
+Avec un argument préfixe PERSO, ouvre plutôt
+`metal-agent-profils-directory', le dossier des profils personnels,
+celui où écrivent `metal-agent-creer-profil' et
+`metal-agent-copier-profil'."
+  (interactive "P")
+  (if perso
+      (progn
+        (metal-agent--initialiser-dossier-utilisateur)
+        (dired metal-agent-profils-directory))
+    (unless (file-directory-p metal-agent-profils-defaut-directory)
+      (user-error "Dossier des profils livrés introuvable : %s"
+                  metal-agent-profils-defaut-directory))
+    (dired metal-agent-profils-defaut-directory)))
 
 ;; ─────────────────────────────────────────────────────────────────
 ;; Création interactive d'un nouveau profil
