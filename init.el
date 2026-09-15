@@ -1094,8 +1094,28 @@ Hors minibuffer, demande le motif via read-string."
   :ensure t
   :demand t
   :config
+  (require 'cl-lib)
+
+  (defvar metal-yas-historique nil
+    "Historique des modeles yasnippet choisis.")
+
+  (defun metal-yas-prompt (prompt choix &optional display-fn)
+    "Choisir un modele yasnippet en alimentant un historique dedie."
+    (let* ((noms (mapcar (or display-fn #'identity) choix))
+           (nom (completing-read prompt noms nil t nil 'metal-yas-historique)))
+      (nth (or (cl-position nom noms :test #'string=) 0) choix)))
+
+  (setq yas-prompt-functions '(metal-yas-prompt))
+  (add-to-list 'savehist-additional-variables 'metal-yas-historique)
+
   (yas-reload-all)
   (yas-global-mode 1))   ;; active YAS dans tous les buffers
+
+;; F10 : derniers modeles utilises en tete, le reste alphabetique
+(require 'vertico-multiform)
+(vertico-multiform-mode 1)
+(add-to-list 'vertico-multiform-commands
+             '(yas-insert-snippet (vertico-sort-function . vertico-sort-history-alpha)))
 
 (global-set-key [f10] 'yas-insert-snippet)
 
