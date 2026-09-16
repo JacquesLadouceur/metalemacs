@@ -834,14 +834,38 @@ L'argument FRAME est ignore (garde pour compatibilite)."
                (expand-file-name "straight/build/pdf-tools/epdfinfo"
                                  user-emacs-directory)))
           :config
-          (if (file-executable-p pdf-info-epdfinfo-program)
-              (progn
-                (pdf-tools-install t nil t)
-                ;; Note l'origine du serveur : c'est ce témoin qui permet à
-                ;; l'Assistant de détecter un désaccord hors Windows.
-                (metal-pdf-serveur-noter-construction))
+          (cond
+           ;; Windows : le serveur vient du paquet MSYS2, il ne doit JAMAIS
+           ;; être compilé.  Or `pdf-tools-install', si le test du serveur
+           ;; échoue, lance une compilation qui passe par
+           ;; `pdf-tools-msys2-directory' : celle-ci ne cherche MSYS2 que dans
+           ;; X:/msys64 (pas sous Scoop), demande « Do you have Msys2
+           ;; installed ? » et bloque le démarrage.  On lui fournit donc la
+           ;; racine trouvée par MetalEmacs, on teste le serveur nous-mêmes et
+           ;; on active sans passer par `pdf-tools-install'.
+           ((eq system-type 'windows-nt)
+            (setq pdf-tools-msys2-directory (metal-pdf-serveur-msys2-racine))
+            (if (and (file-executable-p pdf-info-epdfinfo-program)
+                     (condition-case e
+                         (progn (pdf-info-check-epdfinfo) t)
+                       (error
+                        (metal-pdf-serveur--journal
+                         "epdfinfo inutilisable : %s"
+                         (error-message-string e))
+                        nil)))
+                (progn
+                  (pdf-tools-install-noverify)
+                  (metal-pdf-serveur-noter-construction))
+              (warn "MetalEmacs : serveur epdfinfo %s — les PDF s'ouvriront avec doc-view"
+                    (metal-pdf-serveur-etat-ligne))))
+           ((file-executable-p pdf-info-epdfinfo-program)
+            (pdf-tools-install t nil t)
+            ;; Note l'origine du serveur : c'est ce témoin qui permet à
+            ;; l'Assistant de détecter un désaccord hors Windows.
+            (metal-pdf-serveur-noter-construction))
+           (t
             (warn "MetalEmacs : serveur epdfinfo %s"
-                  (metal-pdf-serveur-etat-ligne)))
+                  (metal-pdf-serveur-etat-ligne))))
           (setq-default pdf-view-display-size 'fit-width)))
     (error
      (message "MetalEmacs : pdf-tools indisponible — %s"
