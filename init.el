@@ -440,6 +440,13 @@ Pour les mises à jour futures :
 
 (straight-use-package 'use-package)
 
+;; Org : on garde celui fourni avec Emacs.  Sans cette déclaration, un paquet
+;; qui dépend d'Org (org-pdfview, par exemple) fait cloner et activer par
+;; straight une version plus récente, chargée APRÈS l'Org intégré déjà en
+;; mémoire (ox-latex, etc.) — d'où l'avertissement « Org version mismatch ».
+;; Déclarer Org `built-in' empêche straight de le télécharger.
+(straight-use-package '(org :type built-in))
+
 (use-package straight
   :custom
   (straight-use-package-by-default t))
@@ -536,7 +543,7 @@ Ne sauvegarde la position/taille que si les valeurs sont numeriques
 (evite les symboles comme + qui causent des erreurs au rechargement)."
   (metal-frame--lire-geom)
   (with-temp-file metal-prefs-file
-    (insert ";; Preferences MetalEmacs - genere automatiquement\n")
+    (insert ";;; metal-prefs.el --- Preferences MetalEmacs, genere automatiquement  -*- lexical-binding: t; -*-\n")
     (insert (format "(setq metal-font-size-offset %d)\n" metal-font-size-offset))
     ;; Taille des icônes des barres (offset emoji, en centièmes)
     (when (boundp 'metal-toolbar-emoji-size-offset)
@@ -845,7 +852,8 @@ L'argument FRAME est ignore (garde pour compatibilite)."
            ;; on active sans passer par `pdf-tools-install'.
            ((eq system-type 'windows-nt)
             (setq pdf-tools-msys2-directory (metal-pdf-serveur-msys2-racine))
-            (if (and (file-executable-p pdf-info-epdfinfo-program)
+            (if (and (stringp pdf-info-epdfinfo-program)
+                     (file-executable-p pdf-info-epdfinfo-program)
                      (condition-case e
                          (progn (pdf-info-check-epdfinfo) t)
                        (error
