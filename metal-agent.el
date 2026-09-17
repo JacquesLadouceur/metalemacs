@@ -1752,12 +1752,21 @@ accepté, informe l'utilisateur sans rien changer."
 On neutralise la question « quitter ? » en forçant les fonctions de
 confirmation à répondre oui le temps de l'appel.  Plus robuste que
 d'appeler une fonction interne d'Ediff dont la signature varie selon les
-versions."
+versions.
+
+Sous Windows, un clic sur un bouton de header-line fait de
+`last-nonmenu-event' un événement souris : toute question posée pendant la
+fermeture passerait alors par une boîte de dialogue native, qui peut
+s'ouvrir derrière le frame et figer Emacs en boucle modale.  On force donc
+le minibuffer (`use-dialog-box' nil, `last-nonmenu-event' t)."
   (when (buffer-live-p control)
     (with-current-buffer control
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
-                ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
-        (ignore-errors (ediff-quit nil))))))
+      (let ((use-dialog-box nil)
+            (last-nonmenu-event t))
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (with-demoted-errors "Metal Agent (ediff-quit) : %S"
+            (ediff-quit nil)))))))
 
 (defun metal-agent-ediff-quitter ()
   "Terminer la session Ediff et appliquer les corrections acceptées.
@@ -1766,18 +1775,34 @@ Ediff native — car `ediff-cleanup-mess' tue les buffers A/B — et enfin on
 applique le résultat capturé via le hook (APPLIQUER non-nil).  C'est le
 seul chemin qui applique."
   (interactive)
-  (let ((control metal-agent--ediff-control-buffer))
+  (let ((control metal-agent--ediff-control-buffer)
+        (use-dialog-box nil)
+        (last-nonmenu-event t))
     (if (not (buffer-live-p control))
-        (message "Aucune session Ediff active.")
+        (progn
+          ;; Session à moitié fermée (erreur antérieure) : on nettoie quand
+          ;; même, pour ne pas laisser le frame et les variables en plan.
+          (when (or metal-agent--ediff-frame metal-agent--ediff-target-buffer)
+            (metal-agent--ediff-quit-hook nil))
+          (message "Aucune session Ediff active."))
       ;; 1. Capturer le résultat AVANT toute fermeture native.
       (let ((resultat (metal-agent--ediff-texte-buffer
-                       metal-agent--ediff-avant-buf)))
-        ;; 2. Détacher notre hook, clore la session Ediff nativement.
-        (with-current-buffer control
-          (remove-hook 'ediff-quit-hook #'metal-agent--ediff-quit-hook t))
-        (metal-agent--ediff-quit-natif-sans-confirmation control)
-        ;; 3. Appliquer le résultat capturé et nettoyer.
-        (metal-agent--ediff-quit-hook t resultat)))))
+                       metal-agent--ediff-avant-buf))
+            (termine nil))
+        (unwind-protect
+            (progn
+              ;; 2. Détacher notre hook, clore la session Ediff nativement.
+              (with-current-buffer control
+                (remove-hook 'ediff-quit-hook #'metal-agent--ediff-quit-hook t))
+              (metal-agent--ediff-quit-natif-sans-confirmation control)
+              ;; 3. Appliquer le résultat capturé et nettoyer.
+              (metal-agent--ediff-quit-hook t resultat)
+              (setq termine t))
+          ;; Erreur ou C-g en cours de route : le hook n'a pas pu finir.
+          ;; On force le nettoyage (sans réappliquer) pour rendre la main.
+          (unless termine
+            (setq metal-agent--ediff-nettoyage-fait-p nil)
+            (metal-agent--ediff-quit-hook nil)))))))
 
 (defun metal-agent-ediff-annuler ()
   "Fermer la révision sans appliquer aucune correction.
@@ -2160,6 +2185,8 @@ Idempotent : un second appel (p. ex. `delete-frame-functions' après
            ;; encore (cas où aucune fermeture native n'a précédé).
            (nouveau (or texte-resultat
                         (metal-agent--ediff-texte-buffer avant))))
+      (unwind-protect
+      (condition-case err
       (if (not appliquer)
           (message "Révision annulée (frame fermé) — aucune modification appliquée.")
         (pcase kind
@@ -2194,32 +2221,47 @@ Idempotent : un second appel (p. ex. `delete-frame-functions' après
              (message "Modifications appliquées dans la région cible."))))
           (_
            (message "Révision terminée, mais la cible est inconnue."))))
+        ;; Échec de l'application (p. ex. hook de modification Org) : on ne
+        ;; perd pas le travail de révision — le résultat est mis de côté.
+        ((debug error)
+         (metal-agent--ediff-sauver-resultat-non-applique nouveau err)))
+      ;; ── Nettoyage : TOUJOURS exécuté, chaque étape isolée ──────────
       ;; Ne pas tuer ici les buffers ORIGINAL/CORRECTION(S) : Ediff peut encore
       ;; tenter de rafraîchir leurs mode-lines au prochain tour de boucle.
       ;; On les enterre simplement ; ils seront réutilisés ou nettoyés au
       ;; lancement suivant sans déclencher l'erreur de buffer vital tué.
-      (dolist (buf (list avant metal-agent--ediff-apres-buf))
-        (when (buffer-live-p buf)
-          (with-current-buffer buf
-            (setq-local header-line-format nil)
-            (bury-buffer))))
-      (metal-agent--ediff-restaurer-variables)
+      (with-demoted-errors "Metal Agent (nettoyage buffers) : %S"
+        (dolist (buf (list avant metal-agent--ediff-apres-buf))
+          (when (buffer-live-p buf)
+            (with-current-buffer buf
+              (setq-local header-line-format nil)
+              (bury-buffer)))))
+      (with-demoted-errors "Metal Agent (variables Ediff) : %S"
+        (metal-agent--ediff-restaurer-variables))
       ;; Retirer le garde global de fermeture de frame : il ne doit pas
       ;; survivre à la session ni se déclencher pour d'autres frames.
       (remove-hook 'delete-frame-functions
                    #'metal-agent--ediff-frame-supprime-garde)
-      (when (and (frame-live-p source-frame) config)
-        (select-frame-set-input-focus source-frame)
-        (ignore-errors (set-window-configuration config)))
+      (with-demoted-errors "Metal Agent (retour au frame source) : %S"
+        (when (and (frame-live-p source-frame) config)
+          (select-frame-set-input-focus source-frame)
+          (set-window-configuration config)))
       ;; Ne supprimer le frame de révision que s'il est encore vivant ET que
       ;; ce n'est pas lui qui est déjà en cours de suppression (cas du bouton
-      ;; X de macOS, où `delete-frame-functions' nous appelle PENDANT la
-      ;; suppression : re-supprimer lèverait une erreur).
+      ;; X, où `delete-frame-functions' nous appelle PENDANT la suppression :
+      ;; re-supprimer lèverait une erreur).  La suppression est DIFFÉRÉE au
+      ;; prochain tour de boucle : quand on vient d'un clic dans la
+      ;; header-line de ce frame, le supprimer pendant le traitement de
+      ;; l'événement souris est instable sous Windows.
       (when (and (frame-live-p ediff-frame)
                  (not (eq ediff-frame source-frame))
                  (not (eq ediff-frame metal-agent--ediff-frame-en-suppression)))
-        (ignore-errors (delete-frame ediff-frame t)))
-      (metal-agent--close-ui-buffers)
+        (run-at-time 0 nil
+                     (lambda ()
+                       (when (frame-live-p ediff-frame)
+                         (ignore-errors (delete-frame ediff-frame t))))))
+      (with-demoted-errors "Metal Agent (buffers d'interface) : %S"
+        (metal-agent--close-ui-buffers))
       (setq metal-agent--ediff-target-buffer nil
             metal-agent--ediff-target-kind nil
             metal-agent--ediff-target-beg nil
@@ -2233,7 +2275,27 @@ Idempotent : un second appel (p. ex. `delete-frame-functions' après
             metal-agent--ediff-control-buffer nil
             metal-agent--ediff-cleanup-en-cours nil
             ;; Réarmer pour la prochaine session.
-            metal-agent--ediff-nettoyage-fait-p nil))))
+            metal-agent--ediff-nettoyage-fait-p nil)))))
+
+(defun metal-agent--ediff-sauver-resultat-non-applique (texte err)
+  "Mettre TEXTE de côté quand son application a échoué avec ERR.
+Le résultat de la révision est copié dans le kill-ring et dans un buffer
+dédié, pour que les corrections acceptées ne soient jamais perdues."
+  (when (and texte (not (string-empty-p texte)))
+    (kill-new texte)
+    (with-current-buffer
+        (get-buffer-create "*Metal Agent: résultat non appliqué*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert texte)
+        (goto-char (point-min)))))
+  (display-warning
+   'metal-agent
+   (format (concat "Échec de l'application des corrections : %s\n"
+                   "Le résultat est dans le kill-ring et dans le buffer "
+                   "*Metal Agent: résultat non appliqué*.")
+           (error-message-string err))
+   :error))
 
 (defun metal-agent--bloc-instructions-libres ()
   "Retourne le bloc d'instructions libres, ou une chaîne vide.
