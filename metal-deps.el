@@ -2197,6 +2197,72 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
             (message "Miniconda détecté mais emplacement non trouvé. Désinstallez manuellement."))))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
+;;; Installateurs - Polices Fira (thème Beamer metropolis)
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; Le thème `metropolis' cherche « Fira Sans Light » et « Fira Mono ».
+;; Faute de les trouver, LuaLaTeX compile quand même, mais avec une
+;; police de repli, et `luaotfload' reconstruit sa base de polices à
+;; chaque compilation.  Deux voies selon la plateforme :
+;;   — macOS avec Homebrew : polices système (casks), utilisables
+;;     aussi hors LaTeX ;
+;;   — ailleurs : paquet LaTeX `fira', dans le TinyTeX de Quarto
+;;     (macOS sans Homebrew, Linux) ou dans MiKTeX (Windows).
+;; Aucune reconstruction manuelle de la base `luaotfload' n'est requise :
+;; il la relance de lui-même quand une police lui manque, et trouvera
+;; alors les nouvelles.
+
+(defconst metal-deps--fira-casks "font-fira-sans font-fira-mono"
+  "Casks Homebrew des polices Fira attendues par le thème metropolis.")
+
+(defun metal-deps--commande-fira-tinytex ()
+  "Commande shell installant le paquet LaTeX `fira' dans TinyTeX.
+Le sous-dossier de tlmgr dépend de la plateforme (universal-darwin,
+x86_64-linux, aarch64-linux…) : on le cherche par motif, dans les deux
+emplacements où Quarto dépose TinyTeX (~/Library/TinyTeX sous macOS,
+~/.TinyTeX sous Linux).  `tlmgr install' sur un paquet déjà présent ne
+fait rien et réussit."
+  (concat
+   "{ t=$(ls \"$HOME\"/Library/TinyTeX/bin/*/tlmgr "
+   "\"$HOME\"/.TinyTeX/bin/*/tlmgr 2>/dev/null | head -n 1); "
+   "if [ -n \"$t\" ]; then \"$t\" install fira; "
+   "else echo '⚠ tlmgr introuvable : polices Fira non installées'; fi; }"))
+
+(defun metal-deps--commande-fira-miktex ()
+  "Commande installant le paquet `fira' dans MiKTeX (Windows).
+Chemin complet vers miktex.exe quand il est connu : juste après
+l'installation par Scoop, le PATH hérité par le shell peut encore
+l'ignorer."
+  (let ((exe (expand-file-name
+              "scoop/apps/miktex/current/texmfs/install/miktex/bin/x64/miktex.exe"
+              (metal-deps--home))))
+    (format "\"%s\" packages install fira"
+            (if (file-exists-p exe)
+                (subst-char-in-string ?/ ?\\ exe)
+              "miktex"))))
+
+(defun metal-deps-installer-polices-fira ()
+  "Installe les polices Fira requises par le thème Beamer metropolis.
+Appelée automatiquement à la suite de Quarto (macOS, Linux) et de
+MiKTeX (Windows) ; la commande reste utile seule pour les postes où
+ces outils étaient déjà installés."
+  (interactive)
+  (metal-deps--journaliser "Installation des polices Fira")
+  (pcase system-type
+    ('darwin
+     (metal-console-lancer
+      (if (metal-deps--brew-present-p)
+          (concat "brew install --cask " metal-deps--fira-casks)
+        (metal-deps--commande-fira-tinytex))
+      "Polices Fira"))
+    ('windows-nt
+     (if (metal-deps--miktex-present-p)
+         (metal-console-lancer (metal-deps--commande-fira-miktex) "Polices Fira")
+       (message "⚠ MiKTeX requis pour les polices Fira. Installez d'abord MiKTeX.")))
+    (_
+     (metal-console-lancer (metal-deps--commande-fira-tinytex) "Polices Fira"))))
+
+;;; ═══════════════════════════════════════════════════════════════════
 ;;; Installateurs - Quarto
 ;;; ═══════════════════════════════════════════════════════════════════
 
@@ -2263,10 +2329,11 @@ TinyTeX sur le `quarto' fraîchement posé dans /usr/local/bin."
     ;; tampon) sans supprimer les messages d'erreur.
     (let* ((cmd (format
                  "curl -fSL -sS -o %s %s && echo TELECHARGE && open -W %s && \
-export PATH=\"/usr/local/bin:$PATH\" && quarto install tinytex --no-prompt"
+export PATH=\"/usr/local/bin:$PATH\" && quarto install tinytex --no-prompt && %s"
                  (shell-quote-argument dest)
                  (shell-quote-argument url)
-                 (shell-quote-argument dest)))
+                 (shell-quote-argument dest)
+                 (metal-deps--commande-fira-tinytex)))
            (proc (start-process-shell-command "metal-quarto-pkg" buf cmd)))
       (set-process-filter proc #'metal-console--filtre)
       (set-process-sentinel
@@ -2280,7 +2347,7 @@ export PATH=\"/usr/local/bin:$PATH\" && quarto install tinytex --no-prompt"
              (goto-char (point-max))
              (if (and (string-match-p "finished" event)
                       (metal-deps--quarto-present-p))
-                 (insert "\n✓ Quarto et TinyTeX installés.\n")
+                 (insert "\n✓ Quarto, TinyTeX et polices Fira installés.\n")
                (insert (format "\n⚠ Installation incomplète : %s\n"
                                (string-trim event))
                        "Si l'installeur a été annulé, relancez ;\n"
@@ -2289,9 +2356,10 @@ export PATH=\"/usr/local/bin:$PATH\" && quarto install tinytex --no-prompt"
 
 (defun metal-deps-installer-quarto ()
   "Installe Quarto.
-Sous macOS et Linux, installe aussi TinyTeX.  Sous Windows, TinyTeX est
-volontairement omis : MetalEmacs y installe MiKTeX (voir
-`metal-deps-installer-miktex'), et deux distributions LaTeX simultanées
+Sous macOS et Linux, installe aussi TinyTeX et les polices Fira du
+thème Beamer metropolis (voir `metal-deps-installer-polices-fira').
+Sous Windows, TinyTeX est volontairement omis : MetalEmacs y installe
+MiKTeX (voir `metal-deps-installer-miktex'), et deux distributions LaTeX simultanées
 mènent Quarto à ignorer MiKTeX au profit de son TinyTeX interne.
 
 Sur macOS, l'installation passe par le cask Homebrew, lancé dans
@@ -2318,7 +2386,10 @@ Homebrew, repli sur le .pkg officiel de la release GitHub."
                  ;; répondre « already installed ».
                  "brew reinstall --cask quarto"
                "brew install --cask quarto")
-             " && quarto install tinytex --no-prompt")
+             " && quarto install tinytex --no-prompt"
+             ;; Polices en dernier : un échec ici ne doit pas priver
+             ;; l'utilisateur de TinyTeX.
+             " && brew install --cask " metal-deps--fira-casks)
             "Installation de Quarto")
          ;; Sans Homebrew : .pkg officiel, l'installeur Apple se charge
          ;; lui-même de l'authentification.
@@ -2341,8 +2412,9 @@ Homebrew, repli sur le .pkg officiel de la release GitHub."
          (message "📦 Téléchargement de Quarto %s…" metal-deps-quarto-version)
          (url-copy-file url deb t)
          (metal-console-lancer
-          (format "sudo dpkg -i %s && quarto install tinytex --no-prompt"
-                  (shell-quote-argument deb))
+          (format "sudo dpkg -i %s && quarto install tinytex --no-prompt && %s"
+                  (shell-quote-argument deb)
+                  (metal-deps--commande-fira-tinytex))
           "*Quarto Install*"))))))
 
 (defun metal-deps-desinstaller-quarto ()
@@ -2992,7 +3064,11 @@ dans les fichiers de projet."
                      (metal-deps--journaliser "MiKTeX configuré : auto-installation activée")))
                  ;; Mettre à jour le PATH
                  (metal-deps--configurer-chemin-miktex)
-                 (message "✅ MiKTeX installé et configuré (auto-installation des paquets activée)"))
+                 (message "✅ MiKTeX installé et configuré (auto-installation des paquets activée)")
+                 ;; L'auto-installation de MiKTeX ne joue pas pour les
+                 ;; polices cherchées par nom (fontspec/luaotfload) :
+                 ;; le paquet `fira' doit être installé explicitement.
+                 (metal-deps-installer-polices-fira))
              (message "❌ Erreur lors de l'installation de MiKTeX. Voir %s" buf-name))))))))
 
 (defun metal-deps--configurer-chemin-miktex ()

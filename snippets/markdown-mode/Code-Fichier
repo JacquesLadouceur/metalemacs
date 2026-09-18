@@ -2,11 +2,9 @@
 # name: Code - Fichier inclus
 # key: code-fich
 # --
-
-[`${1:`(yas-selected-text)`}`](./$1)
+[[\`${1:`(yas-selected-text)`}\`]{.underline}](<./$1>)
 
 \`\`\`{.${2:python}}
-{{< include \"$1\" >}}
+{{< include "$1" >}}
 \`\`\`
-
-
+$0

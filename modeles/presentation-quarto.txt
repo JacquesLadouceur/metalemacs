@@ -21,6 +21,10 @@ format:
     fontsize: 10pt
     incremental: false
     highlight-style: github
+    colorlinks: true
+    urlcolor: blue
+    filecolor: blue
+    linkcolor: mDarkTeal
 
 execute:
   enabled: false
