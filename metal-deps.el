@@ -543,11 +543,15 @@ installation? [y/n] » affichée avant la mise à niveau des dépendances, et
 pour absente.  Les deux dernières épargnent une mise à jour complète du
 dépôt et les rappels d'environnement à chaque installation.  Sans effet sur une commande qui
 n'appelle pas `brew', et jamais appliquée sous Windows, où la syntaxe
-« VAR=1 commande » n'existe pas."
+« VAR=1 commande » n'existe pas.
+
+Les variables sont exportées, et non préfixées à la seule première
+commande : elles valent ainsi pour toute une chaîne comme
+« brew uninstall X && brew autoremove »."
   (if (and (not (eq system-type 'windows-nt))
            (string-match-p "\\_<brew\\_>" commande))
-      (concat "NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 "
-              "HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_ASK= " commande)
+      (concat "export NONINTERACTIVE=1 HOMEBREW_NO_AUTO_UPDATE=1 "
+              "HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_ASK= ; " commande)
     commande))
 
 (defun metal-deps--lancer-dans-terminal (commande &optional titre)
@@ -1908,7 +1912,7 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
               (let ((compilation-buffer-name-function
                      (lambda (_) (metal-console-nom "Désinstallation Node.js"))))
                 (metal-console--selectionner-plus-tard
-                 (compile (metal-deps--brew-non-interactif "brew uninstall node")
+                 (compile (metal-deps--brew-non-interactif "brew uninstall node && brew autoremove")
                           t))))
           (metal-deps--afficher-aide
            "Désinstaller Node.js"
@@ -1940,7 +1944,7 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
      (concat
       "Selon votre gestionnaire de paquets, ouvrez un terminal et exécutez :\n\n"
       "  Debian / Ubuntu / ChromeOS Linux :\n"
-      "    sudo apt remove nodejs npm\n\n"
+      "    sudo apt purge nodejs npm && sudo apt autoremove\n\n"
       "  Fedora / RHEL :\n"
       "    sudo dnf remove nodejs npm\n\n"
       "  Arch Linux :\n"
@@ -1952,10 +1956,10 @@ Avertit que d'autres outils peuvent en dépendre (yarn, Electron, etc.)."
    ((eq system-type 'windows-nt)
     (if (metal-deps--scoop-present-p)
         (when (yes-or-no-p
-               "Désinstaller Node.js (scoop uninstall nodejs) ?  D'autres outils peuvent en dépendre. ")
+               "Désinstaller Node.js (scoop uninstall nodejs -p) ?  Les paquets npm globaux (agents IA) partiront aussi. ")
           (metal-deps--journaliser "Désinstallation Node.js via Scoop")
           (metal-console--selectionner-plus-tard
-           (compile "scoop uninstall nodejs" t)))
+           (compile "scoop uninstall nodejs -p" t)))
       (metal-deps--afficher-aide
        "Désinstaller Node.js sur Windows"
        "Désinstaller via :\n  • Panneau de configuration > Programmes\n  • ou la commande Scoop si vous l'avez utilisée à l'install")))))
@@ -2180,10 +2184,10 @@ Si winget est indisponible, affiche les méthodes d'installation alternatives."
           (message "Désinstallation de Miniconda lancée..."))))
      ((eq system-type 'windows-nt)
       (if (metal-deps--scoop-present-p)
-          (when (yes-or-no-p "Supprimer Miniconda ? ")
+          (when (yes-or-no-p "Supprimer Miniconda, y compris tous les environnements conda ? ")
             (metal-deps--journaliser "Désinstallation de Miniconda via Scoop")
             (message "⏳ Désinstallation de Miniconda en cours...")
-            (metal-console-lancer "scoop uninstall miniconda3" "*Miniconda Uninstall*"))
+            (metal-console-lancer "scoop uninstall miniconda3 -p" "*Miniconda Uninstall*"))
         (message "Miniconda a été installé à l'extérieur de Scoop. Désinstallez manuellement.")))
      (t
       (let ((chemins (list
@@ -2417,8 +2421,25 @@ Homebrew, repli sur le .pkg officiel de la release GitHub."
                   (metal-deps--commande-fira-tinytex))
           "*Quarto Install*"))))))
 
+(defconst metal-deps--quarto-prelude-desinstallation
+  "quarto uninstall tinytex --no-prompt ; "
+  "Retire TinyTeX (et le paquet `fira' qu'il contient) avant Quarto.
+TinyTeX vit hors du dossier de Quarto (~/Library/TinyTeX, ~/.TinyTeX) :
+sans cette étape, il survivrait à la désinstallation.  Séparé par « ; »
+et non « && » : l'absence de TinyTeX ne doit pas bloquer la suite.")
+
+(defun metal-deps--fira-casks-desinstallation ()
+  "Suffixe retirant les casks de polices Fira, si Homebrew les a posés."
+  (if (and (metal-deps--brew-present-p)
+           (cl-some (lambda (racine)
+                      (file-directory-p
+                       (expand-file-name "Caskroom/font-fira-sans" racine)))
+                    '("/opt/homebrew" "/usr/local")))
+      (concat " ; brew uninstall --cask " metal-deps--fira-casks)
+    ""))
+
 (defun metal-deps-desinstaller-quarto ()
-  "Désinstalle Quarto."
+  "Désinstalle Quarto, avec TinyTeX et les polices Fira qu'il a amenés."
   (interactive)
   (if (not (metal-deps--quarto-present-p))
       (message "Quarto n'est pas installé")
@@ -2432,24 +2453,32 @@ Homebrew, repli sur le .pkg officiel de la release GitHub."
           ;; pkgutil (org.rstudio.quarto) : il lui faut un vrai terminal.
           ((metal-deps--quarto-cask-present-p)
            (metal-deps--lancer-dans-terminal
-            "brew uninstall --cask quarto --force"
+            (concat metal-deps--quarto-prelude-desinstallation
+                    "brew uninstall --cask --zap quarto --force"
+                    (metal-deps--fira-casks-desinstallation))
             "Désinstallation du cask Quarto"))
           ;; Installation par .pkg : `quarto uninstall' retire le dossier,
           ;; le lien et le reçu pkgutil.  Il appelle sudo, donc terminal.
           ((file-directory-p "/Applications/quarto")
-           (metal-deps--lancer-dans-terminal "quarto uninstall"
-                                             "Désinstallation de Quarto"))
+           (metal-deps--lancer-dans-terminal
+            (concat metal-deps--quarto-prelude-desinstallation
+                    "quarto uninstall"
+                    (metal-deps--fira-casks-desinstallation))
+            "Désinstallation de Quarto"))
           (t
            (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement."))))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (metal-console-lancer "scoop uninstall quarto" "*Quarto Uninstall*")
+             (metal-console-lancer "scoop uninstall quarto -p" "*Quarto Uninstall*")
            (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "quarto"))
              (progn
                (metal-deps--amorcer-sudo)
-               (metal-console-lancer "sudo apt remove quarto -y" "*Quarto Uninstall*"))
+               (metal-console-lancer
+                (concat metal-deps--quarto-prelude-desinstallation
+                        "sudo apt purge quarto -y && sudo apt autoremove -y")
+                "*Quarto Uninstall*"))
            (message "Quarto installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -2562,16 +2591,16 @@ open -R /Volumes/SWI-Prolog*/SWI-Prolog.app 2>/dev/null"
           ;; Installé via Homebrew
           ((and (metal-deps--brew-present-p)
                 (= 0 (call-process "brew" nil nil nil "list" "swi-prolog")))
-           (metal-console-lancer "brew uninstall swi-prolog" "*SWI-Prolog Uninstall*"))
+           (metal-console-lancer "brew uninstall swi-prolog && brew autoremove" "*SWI-Prolog Uninstall*"))
           (t
            (message "SWI-Prolog installé à l'extérieur de MetalEmacs. Désinstallez manuellement."))))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (metal-console-lancer "scoop uninstall swipl" "*SWI-Prolog Uninstall*")
+             (metal-console-lancer "scoop uninstall swipl -p" "*SWI-Prolog Uninstall*")
            (message "SWI-Prolog installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "swi-prolog"))
-             (metal-console-lancer "sudo apt remove swi-prolog -y" "*SWI-Prolog Uninstall*")
+             (metal-console-lancer "sudo apt purge swi-prolog -y && sudo apt autoremove -y" "*SWI-Prolog Uninstall*")
            (message "SWI-Prolog installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -2701,7 +2730,7 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
           ;; Installé via Homebrew (Mac >= 14)
           ((and (metal-deps--brew-present-p)
                 (= 0 (call-process "brew" nil nil nil "list" "ghostscript")))
-           (metal-console-lancer "brew uninstall ghostscript" "*Ghostscript Uninstall*"))
+           (metal-console-lancer "brew uninstall ghostscript && brew autoremove" "*Ghostscript Uninstall*"))
           ;; Installé via le .pkg autonome : binaires dans /usr/local/bin.
           ;; La suppression nécessite root ; on guide plutôt que de tenter
           ;; un rm -rf silencieux sur /usr/local.
@@ -2719,11 +2748,11 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
            (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement."))))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (metal-console-lancer "scoop uninstall ghostscript" "*Ghostscript Uninstall*")
+             (metal-console-lancer "scoop uninstall ghostscript -p" "*Ghostscript Uninstall*")
            (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "ghostscript"))
-             (metal-console-lancer "sudo apt remove ghostscript -y" "*Ghostscript Uninstall*")
+             (metal-console-lancer "sudo apt purge ghostscript -y && sudo apt autoremove -y" "*Ghostscript Uninstall*")
            (message "Ghostscript installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 (defun metal-deps-installer-pdf-tools ()
@@ -2857,11 +2886,11 @@ images.  Sans Ghostscript, doc-view ne montre que le source brut.
         ('darwin
          (if (and (metal-deps--brew-present-p)
                   (= 0 (call-process "brew" nil nil nil "list" "poppler")))
-             (metal-console-lancer "brew uninstall poppler" "*Poppler Uninstall*")
+             (metal-console-lancer "brew uninstall poppler && brew autoremove" "*Poppler Uninstall*")
            (message "Poppler installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "poppler-utils"))
-             (metal-console-lancer "sudo apt remove poppler-utils -y" "*Poppler Uninstall*")
+             (metal-console-lancer "sudo apt purge poppler-utils -y && sudo apt autoremove -y" "*Poppler Uninstall*")
            (message "Poppler installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -2948,15 +2977,15 @@ Ouvre un sélecteur de fichiers pour choisir le .deb."
              ;; de `sudo' — la console convient.  Si Homebrew se met à
              ;; demander le mot de passe ici, router vers Terminal.app
              ;; comme pour Quarto.
-             (metal-console-lancer "brew uninstall --cask drawio" "*draw.io Uninstall*")
+             (metal-console-lancer "brew uninstall --cask --zap drawio" "*draw.io Uninstall*")
            (message "draw.io installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (metal-console-lancer "scoop uninstall draw.io" "*draw.io Uninstall*")
+             (metal-console-lancer "scoop uninstall draw.io -p" "*draw.io Uninstall*")
            (message "draw.io installé à l'extérieur de Scoop. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "draw.io"))
-             (metal-console-lancer "sudo apt remove draw.io -y" "*draw.io Uninstall*")
+             (metal-console-lancer "sudo apt purge draw.io -y && sudo apt autoremove -y" "*draw.io Uninstall*")
            (message "draw.io installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -3015,15 +3044,15 @@ dans les fichiers de projet."
         ('darwin
          (if (and (metal-deps--brew-present-p)
                   (= 0 (call-process "brew" nil nil nil "list" "ripgrep")))
-             (metal-console-lancer "brew uninstall ripgrep" "*ripgrep Uninstall*")
+             (metal-console-lancer "brew uninstall ripgrep && brew autoremove" "*ripgrep Uninstall*")
            (message "ripgrep installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))
         ('windows-nt
          (if (metal-deps--scoop-present-p)
-             (metal-console-lancer "scoop uninstall ripgrep" "*ripgrep Uninstall*")
+             (metal-console-lancer "scoop uninstall ripgrep -p" "*ripgrep Uninstall*")
            (message "ripgrep installé à l'extérieur de Scoop. Désinstallez manuellement.")))
         ('gnu/linux
          (if (= 0 (call-process "dpkg" nil nil nil "-s" "ripgrep"))
-             (metal-console-lancer "sudo apt remove ripgrep -y" "*ripgrep Uninstall*")
+             (metal-console-lancer "sudo apt purge ripgrep -y && sudo apt autoremove -y" "*ripgrep Uninstall*")
            (message "ripgrep installé à l'extérieur de MetalEmacs. Désinstallez manuellement.")))))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
@@ -3091,7 +3120,7 @@ dans les fichiers de projet."
     (when (yes-or-no-p "Voulez-vous vraiment désinstaller MiKTeX ? ")
       (metal-deps--journaliser "Désinstallation de MiKTeX")
       (if (metal-deps--scoop-present-p)
-          (metal-console-lancer "scoop uninstall miktex" "*MiKTeX Uninstall*")
+          (metal-console-lancer "scoop uninstall miktex -p" "*MiKTeX Uninstall*")
         (message "MiKTeX installé à l'extérieur de Scoop. Désinstallez manuellement.")))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
