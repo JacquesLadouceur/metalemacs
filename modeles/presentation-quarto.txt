@@ -10,6 +10,8 @@ header-includes: |
   \usepackage{metal-tcolorbox}
   \usepackage{booktabs}
   \usepackage{setspace}
+  \setsansfont{Fira Sans}[BoldFont={Fira Sans SemiBold}]
+  \setbeamercolor{normal text}{fg=black!85}
   \newcommand{\suite}[1]{%
     \vfill{\footnotesize\hfill\textcolor{red}{\textit{#1 $\rightarrow$ diapositive suivante}}\par}}
 

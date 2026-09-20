@@ -1057,25 +1057,59 @@ le dernier bloc Markdown non-diff via `metal-agent--extraire-blocs-markdown'
           (setq dernier (string-trim corps)))))
     dernier))
 
+(defun metal-agent--premiere-ligne (texte)
+  "Première ligne de TEXTE, sans espaces de bord ; chaîne vide si nil."
+  (if texte
+      (string-trim (car (split-string (string-trim texte) "\n")))
+    ""))
+
+(defun metal-agent--nombre-clotures (texte)
+  "Nombre de lignes de TEXTE qui commencent par ```."
+  (let ((n 0) (debut 0))
+    (while (string-match "^```" texte debut)
+      (setq n (1+ n)
+            debut (match-end 0)))
+    n))
+
+(defun metal-agent--retirer-enveloppe (corps original)
+  "Retirer de CORPS une enveloppe ``` ajoutée par l'agent, et elle seule.
+ORIGINAL est le texte envoyé à l'agent (nil s'il est inconnu).
+
+Une clôture en tête de CORPS n'est une enveloppe que si elle ne vient
+pas de l'original : une sélection qui est elle-même une cellule
+(```{mermaid}, ```{python}…) produit légitimement une réponse qui
+commence par cette même ligne.  On la retire donc seulement si elle
+diffère de la première ligne de l'original et ne porte pas d'accolade
+(les cellules Quarto en ont toujours, une enveloppe ```markdown jamais).
+
+Une clôture en fin de CORPS n'est une enveloppe que si les clôtures du
+texte sont alors en nombre impair : une cellule complète en compte
+deux (ouverture et fermeture), l'enveloppe en ajoute une orpheline."
+  (setq corps (string-trim corps))
+  (let ((tete (metal-agent--premiere-ligne corps)))
+    (when (and (string-prefix-p "```" tete)
+               (not (string-search "{" tete))
+               (not (string= tete (metal-agent--premiere-ligne original))))
+      (let ((nl (string-search "\n" corps)))
+        (setq corps (if nl (string-trim (substring corps (1+ nl))) "")))))
+  (when (and (string-suffix-p "```" corps)
+             (cl-oddp (metal-agent--nombre-clotures corps)))
+    (setq corps (string-trim (substring corps 0 (- (length corps) 3)))))
+  corps)
+
 (defun metal-agent--extraire-entre-marqueurs (raw)
   "Extraire le texte entre les marqueurs sentinelles dans RAW, ou nil.
-Recherche par chaîne simple (pas de regex récursive). Tolère un éventuel
-bloc ``` résiduel collé juste à l'intérieur des marqueurs."
+Recherche par chaîne simple (pas de regex récursive).  Tolère une
+enveloppe ``` ajoutée par l'agent juste à l'intérieur des marqueurs,
+sans jamais retirer les clôtures qui appartiennent au texte lui-même
+(voir `metal-agent--retirer-enveloppe')."
   (let ((d (string-search metal-agent--marqueur-debut raw)))
     (when d
       (let* ((apres-debut (+ d (length metal-agent--marqueur-debut)))
              (f (string-search metal-agent--marqueur-fin raw apres-debut)))
         (when f
-          (let ((corps (substring raw apres-debut f)))
-            ;; Retirer une clôture ``` résiduelle que l'agent aurait
-            ;; éventuellement ajoutée juste à l'intérieur des marqueurs.
-            (setq corps (string-trim corps))
-            (when (string-prefix-p "```" corps)
-              (let ((nl (string-search "\n" corps)))
-                (when nl (setq corps (substring corps (1+ nl))))))
-            (when (string-suffix-p "```" corps)
-              (setq corps (substring corps 0 (- (length corps) 3))))
-            (string-trim corps)))))))
+          (metal-agent--retirer-enveloppe (substring raw apres-debut f)
+                                          metal-agent--last-original))))))
 
 (defun metal-agent--diagnostiquer-reponse (raw)
   "Classer la réponse RAW quand l'extraction échoue.
