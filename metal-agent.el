@@ -2038,6 +2038,9 @@ Treemacs et les fenêtres dédiées."
     (metal-agent--ediff-preparer-buffer apres proposed mode)
     (with-current-buffer apres
       (setq-local header-line-format '(:eval (metal-agent--ediff-apres-header-line))))
+    ;; Réarmer le drapeau : s'il était resté à t (C-g pendant un nettoyage
+    ;; antérieur), le hook de fermeture de cette session ne ferait rien.
+    (setq metal-agent--ediff-nettoyage-fait-p nil)
     (setq metal-agent--ediff-target-buffer target
           metal-agent--ediff-target-kind   kind
           metal-agent--ediff-target-beg    metal-agent--last-target-beg
@@ -2188,6 +2191,37 @@ pas affiche ; les commandes utiles sont dans la header-line du buffer APRES."
     (with-current-buffer buffer
       (buffer-substring-no-properties (point-min) (point-max)))))
 
+;; Sous Windows, la suppression différée du frame de révision pouvait
+;; échouer en silence (ancien `ignore-errors') après « Annuler » : le frame
+;; survivait et masquait le frame principal, avec le buffer ORIGINAL affiché.
+(defun metal-agent--ediff-supprimer-frame (frame buffers &optional essai)
+  "Supprimer FRAME de révision, puis tuer les BUFFERS temporaires.
+Réessaie deux fois (à 0,2 s d'intervalle) si la suppression échoue — sous
+Windows, un clic de header-line peut encore être en traitement.  En dernier
+recours, rend FRAME invisible pour qu'il ne masque jamais le frame
+principal.  Les erreurs sont journalisées dans *Messages*, pas avalées."
+  (let ((essai (or essai 0)))
+    (when (frame-live-p frame)
+      (condition-case err
+          (delete-frame frame t)
+        (error (message "Metal Agent (suppression du frame, essai %d) : %S"
+                        essai err))))
+    (cond
+     ((and (frame-live-p frame) (< essai 2))
+      (run-at-time 0.2 nil #'metal-agent--ediff-supprimer-frame
+                   frame buffers (1+ essai)))
+     ((frame-live-p frame)
+      (message "Metal Agent : frame de révision non supprimé, masqué.")
+      (ignore-errors (make-frame-invisible frame t)))
+     (t
+      ;; Frame disparu et session Ediff close : les buffers temporaires
+      ;; peuvent être tués sans risque.
+      (dolist (b buffers)
+        (when (buffer-live-p b)
+          (with-current-buffer b (set-buffer-modified-p nil))
+          (let ((kill-buffer-query-functions nil))
+            (kill-buffer b))))))))
+
 (defun metal-agent--ediff-quit-hook (&optional appliquer texte-resultat)
   "Nettoyer après Ediff et, si APPLIQUER est non-nil, appliquer le résultat.
 Le buffer AVANT temporaire contient le résultat final de la révision.
@@ -2269,7 +2303,9 @@ Idempotent : un second appel (p. ex. `delete-frame-functions' après
           (when (buffer-live-p buf)
             (with-current-buffer buf
               (setq-local header-line-format nil)
-              (bury-buffer)))))
+              ;; Avec argument : ne touche pas aux fenêtres (sans argument,
+              ;; `bury-buffer' remplace le buffer dans la fenêtre sélectionnée).
+              (bury-buffer buf)))))
       (with-demoted-errors "Metal Agent (variables Ediff) : %S"
         (metal-agent--ediff-restaurer-variables))
       ;; Retirer le garde global de fermeture de frame : il ne doit pas
@@ -2290,10 +2326,9 @@ Idempotent : un second appel (p. ex. `delete-frame-functions' après
       (when (and (frame-live-p ediff-frame)
                  (not (eq ediff-frame source-frame))
                  (not (eq ediff-frame metal-agent--ediff-frame-en-suppression)))
-        (run-at-time 0 nil
-                     (lambda ()
-                       (when (frame-live-p ediff-frame)
-                         (ignore-errors (delete-frame ediff-frame t))))))
+        (run-at-time 0 nil #'metal-agent--ediff-supprimer-frame
+                     ediff-frame
+                     (list avant metal-agent--ediff-apres-buf)))
       (with-demoted-errors "Metal Agent (buffers d'interface) : %S"
         (metal-agent--close-ui-buffers))
       (setq metal-agent--ediff-target-buffer nil
