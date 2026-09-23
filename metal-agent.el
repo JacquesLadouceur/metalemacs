@@ -1333,8 +1333,16 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
         ;; correction du source.  On l'affiche en lecture seule au lieu
         ;; d'ouvrir Ediff (qui comparerait la sortie au contenu source,
         ;; sans rapport).  Bascule symétrique de celle de prompt-final-code.
-        (if (let ((tc (metal-agent--profil-prop :tache)))
-              (and (stringp tc) (not (string-empty-p (string-trim tc)))))
+        (if (let ((ediff (metal-agent--profil-prop :ediff)))
+              (cond
+               ;; #+EDIFF: t  — révision Ediff imposée par le profil.
+               ((eq ediff 'oui) nil)
+               ;; #+EDIFF: f  — affichage en lecture seule imposé.
+               ((eq ediff 'non) t)
+               ;; Clé absente : comportement historique, via [Tâche].
+               (t (let ((tc (metal-agent--profil-prop :tache)))
+                    (and (stringp tc)
+                         (not (string-empty-p (string-trim tc))))))))
             (progn
               (setq metal-agent--last-proposed proposed)
               (metal-agent--afficher-resultat-analyse proposed))
@@ -2763,7 +2771,11 @@ la position du curseur, et la révision Ediff ne montre que ce bloc ajouté
   (interactive)
   (setq metal-agent--source-buffer (current-buffer))
   (let* ((label (if (metal-agent--prolog-p) "prédicat" "fonction"))
-         (demande (read-string (format "Ajouter quel %s ? " label)))
+         (demande (read-string
+                   (format "%s : "
+                           (metal-agent--bouton-aide
+                            :fonction
+                            (format "Ajouter quel %s" label)))))
          (code (metal-agent--file-text)))
     ;; Mémoriser la cible (fichier complet) ET le point d'insertion.
     (metal-agent--store-target 'buffer code)
@@ -2786,9 +2798,12 @@ est demandée à l'utilisateur."
   (let* ((sur-selection (and metal-agent--saved-region-beg
                              metal-agent--saved-region-end))
          (orientation (read-string
-                       (if sur-selection
-                           "Reformuler la sélection — orientation (ton, concision, public…) : "
-                         "Reformuler le document — orientation (ton, concision, public…) : ")))
+                       (format "%s%s — orientation (ton, concision, public…) : "
+                               (metal-agent--bouton-aide
+                                :reformuler "Reformuler")
+                               (if sur-selection
+                                   " (sur la sélection)"
+                                 ""))))
          (code (if sur-selection
                    (metal-agent--selection-text)
                  (metal-agent--file-text)))
@@ -2827,15 +2842,12 @@ exécution."
                              metal-agent--saved-region-end))
          (texte-p (metal-agent--texte-p))
          (demande (read-string
-                   (cond
-                    ((and sur-selection texte-p)
-                     "Demande libre (sur la sélection, prose) : ")
-                    (sur-selection
-                     "Demande libre (sur la sélection) : ")
-                    (texte-p
-                     "Demande libre (sur le document) : ")
-                    (t
-                     "Demande libre (sur le fichier) : "))))
+                   (format "%s%s : "
+                           (metal-agent--bouton-aide
+                            :demande "Demande libre")
+                           (if sur-selection
+                               " (sur la sélection)"
+                             ""))))
          (code (if sur-selection
                    (metal-agent--selection-text)
                  (metal-agent--file-text)))
@@ -2870,9 +2882,12 @@ d'écriture, sans objet pour une action qui ne modifie rien."
   (let* ((sur-selection (and metal-agent--saved-region-beg
                              metal-agent--saved-region-end))
          (demande (read-string
-                   (if sur-selection
-                       "Analyse libre (sur la sélection) : "
-                     "Analyse libre (sur le fichier) : ")))
+                   (format "%s%s : "
+                           (metal-agent--bouton-aide
+                            :analyse "Analyse libre")
+                           (if sur-selection
+                               " (sur la sélection)"
+                             ""))))
          (code (if sur-selection
                    (metal-agent--selection-text)
                  (metal-agent--file-text)))
@@ -3867,6 +3882,7 @@ d'état et non d'un bouton."
     (define-key map (kbd "s") #'metal-agent-sauvegarder-etat)
     (define-key map (kbd "n") #'metal-agent-creer-profil)
     (define-key map (kbd "c") #'metal-agent-copier-profil)
+    (define-key map (kbd "p") #'metal-agent-editer-profil)
     (define-key map (kbd "M") #'metal-deps-afficher-etat)
     (define-key map (kbd "e") #'metal-agent-editer-instructions-libres)
     (define-key map (kbd "E") #'metal-agent--effacer-instructions-libres)
@@ -3980,6 +3996,8 @@ Doit être appelé dans le buffer du panneau, en mode lecture-écriture."
      "n" "Créer un nouveau profil…" #'metal-agent-creer-profil)
     (metal-agent-panneau--inserer-bouton
      "c" "Créer un profil à partir du profil actuel…" #'metal-agent-copier-profil)
+    (metal-agent-panneau--inserer-bouton
+     "p" "Éditer le profil actif…" #'metal-agent-editer-profil)
     (insert "\n")
 
     ;; ASSISTANT METALEMACS
@@ -4008,6 +4026,46 @@ Doit être appelé dans le buffer du panneau, en mode lecture-écriture."
      "q" "Fermer ce panneau" #'metal-agent-panneau-fermer)
 
     (goto-char (point-min))))
+
+(defun metal-agent-editer-profil ()
+  "Ouvrir le fichier .org du profil actif pour l'éditer.
+À la sauvegarde, les profils sont rechargés et le profil actif est
+réappliqué, de sorte que les modifications prennent effet sans
+redémarrage.  Les options cochées pendant la session reviennent alors
+aux valeurs par défaut du fichier."
+  (interactive)
+  (let* ((profil (metal-agent--profil))
+         (chemin (plist-get profil :chemin)))
+    (cond
+     ((null profil)
+      (user-error "Aucun profil actif"))
+     ((not (stringp chemin))
+      (user-error "Le profil « %s » n'a pas de fichier source"
+                  (or (plist-get profil :nom) "?")))
+     ((not (file-exists-p chemin))
+      (if (yes-or-no-p
+           (format "Fichier introuvable : %s.  Recharger les profils ? "
+                   chemin))
+          (progn (metal-agent-recharger-profils)
+                 (call-interactively #'metal-agent-editer-profil))
+        (user-error "Édition annulée")))
+     ((not (file-readable-p chemin))
+      (user-error "Fichier du profil illisible : %s" chemin))
+     (t
+      (find-file chemin)
+      (add-hook 'after-save-hook
+                #'metal-agent--recharger-apres-edition-profil
+                nil t)
+      (message "Profil %s — rechargé automatiquement à la sauvegarde"
+               (or (plist-get profil :nom) "?"))))))
+
+(defun metal-agent--recharger-apres-edition-profil ()
+  "Recharger les profils après la sauvegarde d'un fichier de profil.
+Réapplique le profil actif pour que son préambule, ses options et ses
+métadonnées soient relus, et rafraîchit la ligne de mode."
+  (metal-agent-recharger-profils)
+  (metal-agent--reinitialiser-options)
+  (force-mode-line-update t))
 
 (defun metal-agent-panneau-rafraichir ()
   "Rafraîchir le contenu du panneau de configuration s'il est ouvert."

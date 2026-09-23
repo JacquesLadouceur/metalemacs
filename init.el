@@ -1147,6 +1147,13 @@ Hors minibuffer, demande le motif via read-string."
   (setq yas-prompt-functions '(metal-yas-prompt))
   (add-to-list 'savehist-additional-variables 'metal-yas-historique)
 
+  (defun metal-yas-recharger ()
+    "Recompiler puis recharger tous les modeles yasnippet."
+    (interactive)
+    (yas-recompile-all)
+    (yas-reload-all)
+    (message "Modeles yasnippet recompiles et recharges."))
+
   (yas-reload-all)
   (yas-global-mode 1))   ;; active YAS dans tous les buffers
 
@@ -1157,6 +1164,7 @@ Hors minibuffer, demande le motif via read-string."
              '(yas-insert-snippet (vertico-sort-function . vertico-sort-history-alpha)))
 
 (global-set-key [f10] 'yas-insert-snippet)
+(global-set-key (kbd "C-<f10>") 'metal-yas-recharger)
 
 
 ;; Début Onglets

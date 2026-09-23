@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Document - Lien fichier
+# key: ofich
+# --
+[`(file-name-base yas-selected-text)`](./`yas-selected-text`)

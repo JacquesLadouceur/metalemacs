@@ -135,6 +135,22 @@ sans le #+ ni les deux-points."
   "Suffixes de métadonnées #+BTN_<ID>: reconnus pour piloter la toolbar.
 Chaque suffixe correspond à un bouton d'action de la toolbar agent.")
 
+(defun metal-agent--parser-ediff (meta)
+  "Lit la clé #+EDIFF: de l'alist META et retourne un symbole.
+`oui'  : le résultat est toujours révisé dans Ediff.
+`non'  : le résultat est affiché en lecture seule, sans Ediff.
+nil    : clé absente — le comportement historique s'applique, à
+         savoir Ediff sauf si le profil définit une section [Tâche].
+Valeurs reconnues comme `non' : off, nil, non, f, false, no, 0 et
+la valeur vide ; toute autre valeur vaut `oui'."
+  (let ((v (cdr (assoc "EDIFF" meta))))
+    (cond
+     ((null v) nil)
+     ((member (downcase (string-trim v))
+              '("off" "nil" "non" "f" "false" "no" "0" ""))
+      'non)
+     (t 'oui))))
+
 (defun metal-agent--parser-boutons (meta)
   "Construit le plist :boutons à partir de l'alist META (#+CLE: valeur).
 Chaque clé BTN_<ID> devient l'entrée (:id-minuscule SPEC) où SPEC est
@@ -262,6 +278,7 @@ Retourne nil si le fichier ne peut pas être parsé."
                 :nom nom
                 :modes modes
                 :auto-defaut auto-defaut
+                :ediff (metal-agent--parser-ediff meta)
                 :systeme preambule
                 :options-defaut options-defaut
                 :options-disponibles (nreverse options-disponibles)
@@ -438,8 +455,8 @@ pour tous les modes."
       (insert "#   EXPLIQUER   💡  explique la sélection\n")
       (insert "#   REFORMULER  ✍️  reformule la prose\n")
       (insert "#   FONCTION    ƒ   ajoute une fonction (fichiers de code)\n")
-      (insert "#   DEMANDE     💬  demande libre, avec révision du résultat\n")
-      (insert "#   ANALYSE     🔬  analyse, sans modifier le fichier\n")
+      (insert "#   DEMANDE     💬  demande en fonction des options\n")
+      (insert "#   ANALYSE     🔬  demande libre, hors options\n")
       (insert "# « off » masque le bouton ; tout autre texte l'affiche\n")
       (insert "# avec ce texte comme infobulle.\n")
       (insert "#+BTN_CORRIGER: off\n")
@@ -447,7 +464,10 @@ pour tous les modes."
       (insert "#+BTN_REFORMULER: off\n")
       (insert "#+BTN_FONCTION: off\n")
       (insert "#+BTN_DEMANDE: off\n")
-      (insert "#+BTN_ANALYSE: Analyser sans modifier le fichier\n\n")
+      (insert "#+BTN_ANALYSE: Demande libre, hors options\n\n")
+      (insert "# Affichage du résultat : « f » l'affiche en lecture seule\n")
+      (insert "# dans le buffer de sortie, « t » le fait réviser dans Ediff.\n")
+      (insert "#+EDIFF: f\n\n")
       (insert "Décris ici le rôle de l'agent pour ce profil.\n")
       (insert "Ce préambule est envoyé à l'agent à chaque appel quand\n")
       (insert "ce profil est actif.\n\n")

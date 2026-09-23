@@ -1040,11 +1040,16 @@ premier. Une option permet de créer un nouveau fichier de signets."
 ;; ============================================================
 ;;
 ;; Principe :
-;;   1. Le fichier .org est DÉPLACÉ vers le dossier MetalEmacs dans iCloud Drive
+;;   1. Le fichier .org est DÉPLACÉ vers un dossier iCloud choisi par
+;;      l'utilisateur : iCloud Drive, ou le dossier iCloud d'une application
+;;      (ex. beorg, qui exige que ses fichiers soient dans son propre dossier)
 ;;   2. Un lien symbolique est créé à l'emplacement original
 ;;   3. Emacs suit le symlink → édition transparente
 ;;   4. iCloud synchronise le vrai fichier → accessible sur iOS
-;;      (Plain Org ou toute autre application lisant iCloud Drive)
+;;
+;; Choix du dossier (au minibuffer) :
+;;   a. Emplacement : « iCloud Drive » ou une application (beorg, …)
+;;   b. Dossier dans cet emplacement ; un nom inexistant est créé
 ;;
 ;; Usage :
 ;;   - Dans Treemacs : C-c b sur un fichier .org → lier vers iCloud
@@ -1074,6 +1079,18 @@ Mettre nil ou \"\" pour utiliser la racine du dossier MetalEmacs."
                  string)
   :group 'metal-icloud)
 
+(defcustom metal-icloud-racine
+  (expand-file-name "~/Library/Mobile Documents")
+  "Racine de tous les conteneurs iCloud (iCloud Drive et applications).
+iCloud Drive est le sous-dossier com~apple~CloudDocs ; chaque application
+synchronisée (ex. iCloud~com~appsonthemove~beorg) y a son conteneur, dont
+le sous-dossier Documents est visible sur iOS."
+  :type 'directory
+  :group 'metal-icloud)
+
+(defvar metal-icloud--dernier-dossier nil
+  "Dernier dossier iCloud choisi pour une liaison (proposé par défaut).")
+
 (defcustom metal-icloud-confirm t
   "Si non-nil, demander confirmation avant chaque opération."
   :type 'boolean
@@ -1101,25 +1118,90 @@ Retourne le chemin du dossier de destination."
     (error nil)))
 
 (defun metal-icloud--deja-lie-p (file)
-  "Vérifie si FILE est déjà un symlink vers le dossier iCloud."
+  "Vérifie si FILE est déjà un symlink vers un dossier iCloud quelconque."
   (and (file-symlink-p file)
-       (string-prefix-p (expand-file-name (metal-icloud--dossier-destination))
+       (string-prefix-p (file-name-as-directory
+                         (file-truename metal-icloud-racine))
                         (file-truename file))))
+
+(defun metal-icloud--emplacements ()
+  "Alist (ÉTIQUETTE . DOSSIER) des emplacements iCloud disponibles.
+En tête « iCloud Drive », puis chaque application dont le conteneur a un
+sous-dossier Documents (étiquette = dernier segment du nom, ex. beorg)."
+  (let ((drive (expand-file-name "com~apple~CloudDocs" metal-icloud-racine))
+        (apps nil))
+    (when (file-directory-p metal-icloud-racine)
+      (dolist (c (directory-files metal-icloud-racine t "\\`[^.]"))
+        (let ((docs (expand-file-name "Documents" c))
+              (nom  (file-name-nondirectory c)))
+          (when (and (not (string= nom "com~apple~CloudDocs"))
+                     (file-directory-p docs))
+            (push (cons (car (last (split-string nom "~"))) docs) apps)))))
+    (append (and (file-directory-p drive) (list (cons "iCloud Drive" drive)))
+            (sort apps (lambda (a b) (string< (downcase (car a))
+                                              (downcase (car b))))))))
+
+(defun metal-icloud--choisir-dossier ()
+  "Demander au minibuffer le dossier iCloud de destination.
+1. l'emplacement (iCloud Drive ou une application, ex. beorg) ;
+2. le dossier dans cet emplacement — un nom inexistant est créé après
+   confirmation.  Retourne le chemin absolu du dossier."
+  (let* ((emplacements (or (metal-icloud--emplacements)
+                           (user-error "Aucun dossier iCloud trouvé sous %s"
+                                       metal-icloud-racine)))
+         (defaut-etiq
+          (or (and metal-icloud--dernier-dossier
+                   (car (seq-find (lambda (e)
+                                    (string-prefix-p
+                                     (file-name-as-directory (cdr e))
+                                     (file-name-as-directory
+                                      metal-icloud--dernier-dossier)))
+                                  emplacements)))
+              (caar emplacements)))
+         (etiq (completing-read
+                (format-prompt "Emplacement iCloud" defaut-etiq)
+                emplacements nil t nil nil defaut-etiq))
+         (racine (file-name-as-directory (cdr (assoc etiq emplacements))))
+         ;; Point de départ : dernier dossier s'il est dans cet emplacement,
+         ;; sinon le dossier MetalEmacs pour iCloud Drive, sinon la racine.
+         (depart (cond
+                  ((and metal-icloud--dernier-dossier
+                        (string-prefix-p racine (file-name-as-directory
+                                                 metal-icloud--dernier-dossier)))
+                   metal-icloud--dernier-dossier)
+                  ((and (string= etiq "iCloud Drive")
+                        (string-prefix-p racine (file-name-as-directory
+                                                 (metal-icloud--dossier-destination))))
+                   (metal-icloud--dossier-destination))
+                  (t racine)))
+         (dossier (directory-file-name
+                   (expand-file-name
+                    (read-directory-name "Dossier : "
+                                         (file-name-as-directory depart)
+                                         nil nil)))))
+    (unless (string-prefix-p racine (file-name-as-directory dossier))
+      (user-error "Le dossier doit se trouver dans %s"
+                  (abbreviate-file-name racine)))
+    (unless (file-directory-p dossier)
+      (if (y-or-n-p (format "Créer le dossier %s ? "
+                            (abbreviate-file-name dossier)))
+          (make-directory dossier t)
+        (user-error "Opération annulée")))
+    (setq metal-icloud--dernier-dossier dossier)))
 
 (defun metal-icloud--lier-fichier (src-file)
   "Déplace SRC-FILE vers iCloud Drive et crée un symlink à sa place.
 
 Opération :
-  1. src-file → déplacé vers iCloud Drive/MetalEmacs/
+  1. src-file → déplacé vers le dossier iCloud choisi au minibuffer
   2. symlink créé : src-file → fichier dans iCloud
   3. Recharge le buffer si le fichier était ouvert"
   (unless (and src-file (file-exists-p src-file))
     (user-error "Fichier introuvable : %s" src-file))
   (unless (string-suffix-p ".org" src-file t)
     (user-error "Seuls les fichiers .org peuvent être liés à iCloud"))
-  (unless (metal-icloud--disponible-p)
-    (user-error "Dossier iCloud introuvable ou non créable : %s"
-                metal-icloud-path))
+  (unless (file-directory-p metal-icloud-racine)
+    (user-error "iCloud introuvable : %s" metal-icloud-racine))
 
   (let ((real-src (file-truename src-file)))
 
@@ -1128,7 +1210,7 @@ Opération :
                   (abbreviate-file-name src-file)
                   (abbreviate-file-name real-src)))
 
-    (let* ((dest-root (metal-icloud--assurer-dossier))
+    (let* ((dest-root (metal-icloud--choisir-dossier))
            (src-name  (file-name-nondirectory src-file))
            (dest-file (expand-file-name src-name dest-root))
            (buf       (find-buffer-visiting src-file)))
@@ -1143,7 +1225,8 @@ Opération :
       ;; Confirmation
       (when metal-icloud-confirm
         (unless (y-or-n-p
-                 (format "Lier %s vers iCloud Drive ?" src-name))
+                 (format "Lier %s vers %s ?" src-name
+                         (abbreviate-file-name dest-root)))
           (user-error "Opération annulée")))
 
       ;; 1. Copier le fichier vers iCloud
@@ -1162,7 +1245,8 @@ Opération :
         (with-current-buffer buf
           (revert-buffer t t t)))
 
-      (message "✓ %s lié à iCloud Drive" src-name))))
+      (message "✓ %s lié à iCloud : %s" src-name
+               (abbreviate-file-name dest-root)))))
 
 (defun metal-icloud--delier-fichier (src-file)
   "Rapatrie le fichier depuis iCloud et supprime le symlink."
@@ -1217,20 +1301,6 @@ Opération :
   (metal-icloud--delier-fichier (or file (metal-icloud--fichier-sous-curseur))))
 
 ;;;###autoload
-(defun metal-icloud-lier-depuis-treemacs ()
-  "Lie/délie le fichier .org sélectionné dans Treemacs."
-  (interactive)
-  (let* ((path (treemacs--prop-at-point :path)))
-    (cond
-     ((not (and path (string-suffix-p ".org" path t)))
-      (user-error "Sélectionnez un fichier .org dans Treemacs"))
-     ((metal-icloud--deja-lie-p path)
-      (when (y-or-n-p (format "%s est déjà lié à iCloud. Délier ?"
-                              (file-name-nondirectory path)))
-        (metal-icloud--delier-fichier path)))
-     (t (metal-icloud--lier-fichier path)))))
-
-;;;###autoload
 (defun metal-icloud-afficher-etat ()
   "Affiche l'état de la synchronisation iCloud."
   (interactive)
@@ -1261,13 +1331,15 @@ Opération :
 
 ;; Intégration Treemacs
 (with-eval-after-load 'treemacs
-  (define-key treemacs-mode-map (kbd "C-c b") #'metal-icloud-lier-depuis-treemacs)
+  (define-key treemacs-mode-map (kbd "C-c b") #'metal-icloud-lier-fichier)
 
   (easy-menu-define metal-icloud-treemacs-menu treemacs-mode-map
     "Menu iCloud dans Treemacs."
     '("iCloud"
-      ["Lier / Délier" metal-icloud-lier-depuis-treemacs
-       :help "Lie ou délie le fichier .org avec iCloud Drive"]
+      ["Lier à iCloud…" metal-icloud-lier-fichier
+       :help "Déplace le fichier .org vers un dossier iCloud à choisir"]
+      ["Délier d'iCloud" metal-icloud-delier-fichier
+       :help "Rapatrie le fichier et supprime le lien symbolique"]
       ["État iCloud" metal-icloud-afficher-etat
        :help "Affiche les fichiers synchronisés avec iCloud"])))
 
