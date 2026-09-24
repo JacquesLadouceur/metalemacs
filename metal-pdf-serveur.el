@@ -584,6 +584,26 @@ dans une sentinelle interrompt l'utilisateur au milieu de ce qu'il tape."
                    "pacman refuse les signatures.  Rétablir le trousseau MSYS2 ? "))
          (metal-deps-msys2-reparer-trousseau))))))
 
+;; Le verdict n'était écrit nulle part : `metal-pdf-serveur--lancer' ne
+;; pose qu'une sentinelle muette, et une désinstallation réussie laissait
+;; la console figée sur « removing … » sans rien dire de plus.  On ne peut
+;; pas l'écrire dans `--lancer' lui-même : `--enchainer' l'appelle à
+;; chaque étape, et un « Terminé » au milieu d'une séquence tromperait.
+(defun metal-pdf-serveur--conclure (tampon code reussite echec)
+  "Écrit le verdict de CODE à la fin de TAMPON et l'annonce.
+REUSSITE et ECHEC sont les messages du minibuffer ; ECHEC reçoit le nom
+du tampon en argument de `format'."
+  (when (buffer-live-p tampon)
+    (with-current-buffer tampon
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (insert (if (= code 0)
+                    "\n✓ Terminé.\n"
+                  (format "\n⚠ Échec (code %d).\n" code))))))
+  (if (= code 0)
+      (message "%s" reussite)
+    (message echec (if (buffer-live-p tampon) (buffer-name tampon) "la console"))))
+
 (defun metal-pdf-serveur--lancer (nom tampon programme args suite &optional codage)
   "Lance PROGRAMME avec ARGS dans TAMPON ; appelle SUITE avec le code de sortie.
 ARGS est une liste transmise telle quelle : aucun shell n'intervient, donc
@@ -667,9 +687,10 @@ MSYS2 fournit le serveur epdfinfo et ses DLL sous Windows."
       (metal-pdf-serveur--lancer
        "msys2-install" tampon scoop args
        (lambda (code)
-         (if (/= code 0)
-             (message "❌ Échec. Voir %s" (buffer-name tampon))
-           (message "✅ MSYS2 installé — installez le serveur epdfinfo"))
+         (metal-pdf-serveur--conclure
+          tampon code
+          "✅ MSYS2 installé — installez le serveur epdfinfo"
+          "❌ Échec de l'installation de MSYS2. Voir %s")
          (metal-pdf-serveur--rafraichir-assistant))
        metal-pdf-serveur-codage-windows))))
 
@@ -694,7 +715,11 @@ MSYS2 fournit le serveur epdfinfo et ses DLL sous Windows."
         (display-buffer tampon)
         (metal-pdf-serveur--lancer
          "msys2-uninstall" tampon scoop args
-         (lambda (_code)
+         (lambda (code)
+           (metal-pdf-serveur--conclure
+            tampon code
+            "✅ MSYS2 retiré"
+            "❌ Échec de la désinstallation de MSYS2. Voir %s")
            (setq pdf-info-epdfinfo-program nil)
            (metal-pdf-serveur--rafraichir-assistant))
          metal-pdf-serveur-codage-windows)))))
@@ -769,6 +794,7 @@ l'installation suivante paie."
                 tampon
                 (lambda () (metal-pdf-serveur--installer-paquet pacman)))
              (metal-pdf-serveur--signaler-echec tampon nom))
+         (metal-pdf-serveur--conclure tampon 0 "" "")
          (setq metal-pdf-serveur-signatures-refusees nil)
          (when (boundp 'metal-deps-msys2-dernier-echec)
            (setq metal-deps-msys2-dernier-echec nil))
@@ -798,7 +824,11 @@ l'installation suivante paie."
         (display-buffer tampon)
         (metal-pdf-serveur--lancer
          "epdfinfo-uninstall" tampon pacman args
-         (lambda (_code)
+         (lambda (code)
+           (metal-pdf-serveur--conclure
+            tampon code
+            "✅ Serveur epdfinfo retiré — les PDF s'ouvriront dans doc-view"
+            "❌ Échec du retrait du serveur epdfinfo. Voir %s")
            (setq pdf-info-epdfinfo-program nil)
            (metal-pdf-serveur--rafraichir-assistant)))))))
 
