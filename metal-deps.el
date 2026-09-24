@@ -4956,7 +4956,38 @@ chaud."
                  ;; Cas non-agent : "— description" (si description)
                  (desc
                   (widget-insert (propertize (concat "— " desc) 'face 'shadow))))
-                (widget-insert "\n")))
+                (widget-insert "\n")
+                ;; --- Accès aux fichiers (metal-agent-permissions.el) ---
+                ;; Deuxième ligne, sous le nom, pour les seuls agents
+                ;; installés qui bloquent la lecture par défaut.  L'état
+                ;; est écrit en toutes lettres ; le bouton porte le verbe.
+                (when (and agent-id present
+                           (require 'metal-agent-permissions nil t)
+                           (metal-agent-permissions-spec agent-id))
+                  (let ((id agent-id)
+                        (ouvert (ignore-errors
+                                  (metal-agent-permissions-active-p agent-id)))
+                        (aide (concat "L'agent peut-il lire les fichiers que "
+                                      "MetalEmacs lui transmet ?  Le changement "
+                                      "vaut dès la prochaine requête.")))
+                    (widget-insert (make-string 6 ?\s))
+                    (widget-insert (propertize "Accès aux fichiers : "
+                                               'help-echo aide))
+                    (widget-insert
+                     (if ouvert
+                         (propertize "autorisé" 'help-echo aide
+                                     'face '(:foreground "#10A37F" :weight bold))
+                       (propertize "bloqué" 'help-echo aide
+                                   'face '(:foreground "#D97706" :weight bold))))
+                    (widget-insert "  ")
+                    (widget-create 'push-button
+                                   :help-echo aide
+                                   :notify (lambda (&rest _)
+                                             (metal-deps--executer-et-rafraichir
+                                              (lambda ()
+                                                (metal-agent-permissions-basculer id))))
+                                   (if ouvert "Bloquer" "Autoriser"))
+                    (widget-insert "\n")))))
             ;; --- Bouton spécial pour agents-ia : ajouter un agent perso ---
             (when (eq cat-id 'agents-ia)
               (widget-insert "\n   ")
