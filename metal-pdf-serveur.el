@@ -62,9 +62,22 @@
   :group 'metal-pdf
   :prefix "metal-pdf-serveur-")
 
+(defconst metal-pdf-serveur-variantes-msys2
+  '(("mingw-w64-ucrt-x86_64-emacs-pdf-tools-server" . "ucrt64")
+    ("mingw-w64-x86_64-emacs-pdf-tools-server"      . "mingw64"))
+  "Paquets MSYS2 fournissant epdfinfo, avec leur environnement.
+Le PREMIER est celui qu'on installe ; les suivants ne sont que reconnus.
+
+MSYS2 a déprécié l'environnement MINGW64 (annonce du 2026-03-15) et en
+retire les paquets feuilles depuis septembre 2026 : le paquet mingw64 du
+serveur n'est plus publié, et son installation échoue sur « target not
+found ».  On installe donc la variante UCRT64.  L'ancienne reste
+reconnue : les postes qui l'ont déjà continuent de fonctionner, et la
+désinstallation la retire elle aussi.")
+
 (defconst metal-pdf-serveur-paquet-msys2
-  "mingw-w64-x86_64-emacs-pdf-tools-server"
-  "Paquet MSYS2 fournissant epdfinfo.exe et ses DLL MinGW.")
+  (car (car metal-pdf-serveur-variantes-msys2))
+  "Paquet MSYS2 installé pour fournir epdfinfo.exe et ses DLL.")
 
 (defconst metal-pdf-serveur-depot "https://github.com/vedang/pdf-tools"
   "Dépôt amont, interrogé pour résoudre une version en commit.")
@@ -127,26 +140,52 @@ vit à un endroit inhabituel."
              (string-match "\\`\\([0-9]+\\(?:\\.[0-9]+\\)*\\)" brut))
     (match-string 1 brut)))
 
+(defun metal-pdf-serveur--variantes-installees ()
+  "Variantes du serveur installées, sous forme ((PAQUET VERSION ENV) ...).
+Dans l'ordre de `metal-pdf-serveur-variantes-msys2' : la préférée d'abord.
+
+Un seul appel à pacman pour toutes les variantes.  Il sort en erreur dès
+qu'une manque : on lit donc sa sortie quel que soit le code de retour.
+Le nom du paquet contient des chiffres : la version est le DERNIER champ
+de la ligne, jamais le premier nombre rencontré."
+  (let ((pacman (metal-pdf-serveur--pacman)))
+    (when pacman
+      (let ((lignes
+             (with-temp-buffer
+               (apply #'call-process pacman nil '(t nil) nil "-Q"
+                      (mapcar #'car metal-pdf-serveur-variantes-msys2))
+               (split-string (buffer-string) "\n" t))))
+        (delq nil
+              (mapcar
+               (lambda (variante)
+                 (cl-some
+                  (lambda (ligne)
+                    (let ((champs (split-string ligne "[ \t]+" t)))
+                      (and (equal (car champs) (car variante))
+                           (list (car variante)
+                                 (metal-pdf-serveur--version-nue
+                                  (car (last champs)))
+                                 (cdr variante)))))
+                  lignes))
+               metal-pdf-serveur-variantes-msys2))))))
+
 (defun metal-pdf-serveur-version-installee ()
-  "Version du serveur MSYS2 installé, ou nil.
-Le nom du paquet contient des chiffres : on prend le dernier champ de la
-première ligne, jamais le premier nombre rencontré."
-  (let ((sortie (metal-pdf-serveur--pacman-sortie
-                 "-Q" metal-pdf-serveur-paquet-msys2)))
-    (when sortie
-      (let ((ligne (car (split-string sortie "\n" t))))
-        (when ligne
-          (metal-pdf-serveur--version-nue
-           (car (last (split-string ligne "[ \t]+" t)))))))))
+  "Version du serveur MSYS2 installé (variante préférée), ou nil."
+  (nth 1 (car (metal-pdf-serveur--variantes-installees))))
 
 (defun metal-pdf-serveur-programme ()
   "Chemin d'epdfinfo.exe fourni par MSYS2, ou nil.
-Le binaire y côtoie ses DLL MinGW, ce qui évite le conflit classique
-avec les bibliothèques de Git for Windows."
+Cherché dans chaque environnement connu, le préféré d'abord.  Le binaire
+y côtoie ses DLL, ce qui évite le conflit classique avec les
+bibliothèques de Git for Windows."
   (let ((racine (metal-pdf-serveur-msys2-racine)))
     (when racine
-      (let ((exe (expand-file-name "mingw64/bin/epdfinfo.exe" racine)))
-        (and (file-executable-p exe) exe)))))
+      (cl-some (lambda (variante)
+                 (let ((exe (expand-file-name
+                             (concat (cdr variante) "/bin/epdfinfo.exe")
+                             racine)))
+                   (and (file-executable-p exe) exe)))
+               metal-pdf-serveur-variantes-msys2))))
 
 (defvar pdf-info-epdfinfo-program)      ; défini par `pdf-info.el'
 
@@ -833,6 +872,14 @@ l'installation suivante paie."
          (maj '("-Syu" "--noconfirm" "--disable-download-timeout"))
          (pose (list "-S" "--needed" "--noconfirm" "--disable-download-timeout"
                      metal-pdf-serveur-paquet-msys2))
+         ;; Une variante ancienne (mingw64) déjà présente est retirée une
+         ;; fois la nouvelle posée : deux epdfinfo côte à côte, c'est deux
+         ;; versions possibles et un diagnostic de plus à faire.
+         (anciennes (cl-remove metal-pdf-serveur-paquet-msys2
+                               (mapcar #'car
+                                       (metal-pdf-serveur--variantes-installees))
+                               :test #'equal))
+         (retrait (and anciennes (append '("-R" "--noconfirm") anciennes)))
          (tampon (metal-pdf-serveur--console "epdfinfo Install" pacman nil))
          (nom (buffer-name tampon)))
     (display-buffer tampon)
@@ -840,7 +887,8 @@ l'installation suivante paie."
      ;; `-Syu' DEUX fois : sur un MSYS2 ancien, le premier passage ne met
      ;; à jour que le cœur (runtime, pacman) et s'arrête là ; le second
      ;; fait le reste.  Sur un MSYS2 à jour, le second ne fait rien.
-     "epdfinfo-install" tampon pacman (list trousseau maj maj pose)
+     "epdfinfo-install" tampon pacman
+     (delq nil (list trousseau maj maj pose retrait))
      (lambda (code)
        (if (/= code 0)
            ;; Autoréparation : diagnostic, remède, nouvel essai — sans
@@ -875,7 +923,9 @@ l'installation suivante paie."
       (user-error "Le serveur epdfinfo n'est pas installé"))
     (when (yes-or-no-p
            "Retirer le serveur epdfinfo ? Les PDF passeront à doc-view ")
-      (let* ((args (list "-R" "--noconfirm" metal-pdf-serveur-paquet-msys2))
+      (let* ((args (append '("-R" "--noconfirm")
+                           (mapcar #'car
+                                   (metal-pdf-serveur--variantes-installees))))
              (tampon (metal-pdf-serveur--console "epdfinfo Uninstall"
                                                  pacman args)))
         (display-buffer tampon)

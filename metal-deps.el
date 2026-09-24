@@ -850,6 +850,7 @@ fichiers déjà présents sur le disque : une horloge en retard les rend
 (defconst metal-deps--msys2-motifs
   '((verrou    . "unable to lock database\\|db\\.lck")
     (espace    . "not enough free disk space\\|No space left on device")
+    (paquet    . "target not found")
     (reseau    . "Could not resolve host\\|Failed to connect\\|Connection timed out\\|Operation timed out\\|Operation too slow\\|Connection reset\\|SSL certificate problem\\|SSL connect error\\|failed retrieving file\\|could not be looked up remotely\\|download library error")
     (signature . "PGP signature\\|signature from\\|unknown trust\\|marginal trust\\|invalid or corrupted\\|Public keyring not found\\|keyring is not writable\\|key \"?[0-9A-F]+\"? is unknown\\|missing required signature\\|could not be imported")
     (acces     . "Permission denied\\|Access is denied\\|Device or resource busy"))
@@ -977,6 +978,7 @@ un premier échec à l'utilisateur."
     ('horloge   "horloge système fausse")
     ('signature "signatures refusées malgré la réparation")
     ('espace    "disque plein")
+    ('paquet    "paquet absent des dépôts de MSYS2")
     ('acces     "accès aux fichiers refusé")
     ('occupe    "une autre opération MSYS2 est en cours")
     (_          "cause non identifiée")))
@@ -1034,6 +1036,15 @@ un premier échec à l'utilisateur."
       "    « Installer ».  C'est long (environ 1 Go), mais sans risque.\n"
       "  → Si l'échec persiste après la réinstallation, les clés de MSYS2\n"
       "    ont peut-être changé en amont : https://www.msys2.org/news/"))
+    ('paquet
+     (concat
+      "Le paquet demandé n'existe plus dans les dépôts de MSYS2.  MSYS2\n"
+      "retire régulièrement des paquets (l'environnement MINGW64 est en\n"
+      "cours d'abandon) : cette version de MetalEmacs vise un paquet qui\n"
+      "a disparu.\n\n"
+      "Que faire :\n"
+      "  → Mettez MetalEmacs à jour, redémarrez-le, puis relancez\n"
+      "    l'installation depuis l'Assistant."))
     ('espace
      (concat
       "Le disque est plein : pacman n'a pas la place de télécharger et\n"
