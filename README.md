@@ -101,7 +101,7 @@ Quelle que soit la plateforme, MetalEmacs nécessite :
 1. Ouvrir PowerShell et exécuter ces commandes une à la fois :
 
    ```powershell
-   winget install -e --id GNU.Emacs
+   winget install -e --id GNU.Emacs --source winget --force
    winget install -e --id Git.Git
    [Environment]::SetEnvironmentVariable('HOME', $env:USERPROFILE, 'User')
    ```

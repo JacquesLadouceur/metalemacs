@@ -282,6 +282,30 @@ Sans RESOUDRE, s'en tient aux sources locales : aucun accès réseau."
   (let ((message-log-max t))
     (message "MetalEmacs : %s" (apply #'format fmt args))))
 
+(defvar metal-pdf-serveur--issue-alignement nil
+  "Issue du dernier `metal-pdf-serveur-aligner-straight'.
+  bascule         — le clone a changé de commit
+  deja            — le clone portait déjà le commit visé
+  sans-clone      — straight n'a pas encore cloné pdf-tools
+  indeterminable  — le commit de la version visée n'a pu être résolu
+  impossible      — le `git checkout' a échoué
+La valeur de retour de la fonction (t ou nil) confondait les quatre
+dernières : `metal-pdf-serveur-reparer' annonçait « Déjà accordé »
+alors que l'alignement avait échoué.")
+
+(defun metal-pdf-serveur--bilan-alignement (version)
+  "Message décrivant l'issue du dernier alignement sur VERSION."
+  (pcase metal-pdf-serveur--issue-alignement
+    ('bascule (format "✅ Lisp aligné sur le serveur %s — redémarrez Emacs" version))
+    ('deja (format "✓ Déjà accordé (%s)" version))
+    ('sans-clone "⚠ pdf-tools n'est pas encore cloné — redémarrez Emacs")
+    ('indeterminable
+     (format "⚠ Commit de pdf-tools %s introuvable (réseau ou git ?) — voir *Messages*"
+             version))
+    ('impossible
+     (format "⚠ Bascule du Lisp vers %s impossible — voir *Messages*" version))
+    (_ "⚠ Alignement non effectué")))
+
 ;;;###autoload
 (defun metal-pdf-serveur-aligner-straight ()
   "Bascule le clone straight de pdf-tools sur le commit visé.
@@ -298,6 +322,11 @@ Ne purge jamais les dossiers : les supprimer provoquerait un nouveau
 clone sur la branche par défaut, donc une boucle."
   (let ((clone (metal-pdf-serveur--commit-clone))
         (vise (metal-pdf-serveur-commit-vise t)))
+    (setq metal-pdf-serveur--issue-alignement
+          (cond ((null clone) 'sans-clone)
+                ((null vise) 'indeterminable)
+                ((string= clone vise) 'deja)
+                (t 'impossible)))   ; corrigé en `bascule' si le checkout réussit
     (cond
      ((null clone) nil)                 ; straight n'a pas encore cloné
      ((null vise)
@@ -314,6 +343,7 @@ clone sur la branche par défaut, donc une boucle."
             (metal-pdf-serveur--git "fetch" "--tags" "origin")))
       (if (metal-pdf-serveur--git "checkout" "--detach" "--force" vise)
           (progn
+            (setq metal-pdf-serveur--issue-alignement 'bascule)
             (metal-pdf-serveur--journal
              "pdf-tools : Lisp aligné sur le serveur — %s vers %s (%s)"
              (substring clone 0 12) (substring vise 0 12)
@@ -408,12 +438,24 @@ visée est celle de référence ou celle du cache."
                    "serveur non installé — les PDF passent par doc-view"
                  "serveur non compilé — bouton Réparer"))
       ('sans-clone "paquet Lisp pas encore installé")
+      ;; Le bouton de cette ligne s'intitule « Installer » tant qu'elle
+      ;; n'est pas validée : l'ancien texte renvoyait à un bouton
+      ;; « Réparer » qui n'existe pas sur la ligne.
       ('a-resoudre
-       (format "serveur %s — accord à établir, bouton Réparer" v))
+       (if (and (metal-pdf-serveur-pilote-par-le-serveur-p)
+                (version< v metal-pdf-version-attendue))
+           (format "serveur %s périmé (référence %s) — bouton Installer"
+                   v metal-pdf-version-attendue)
+         (format "serveur %s — accord à établir, bouton Installer" v)))
       ('ok (if (string= v metal-pdf-version-attendue)
                (format "accordé (%s)" v)
              (format "accordé (%s ; référence %s)" v metal-pdf-version-attendue)))
-      ('a-aligner (format "serveur %s, Lisp désaccordé — bouton Réparer" v))
+      ('a-aligner
+       (if (and (metal-pdf-serveur-pilote-par-le-serveur-p)
+                (version< v metal-pdf-version-attendue))
+           (format "serveur %s périmé (référence %s) — bouton Installer"
+                   v metal-pdf-version-attendue)
+         (format "serveur %s, Lisp désaccordé — bouton Installer" v)))
       (_ "état indéterminé"))))
 
 ;;; --- Réparation : point d'entrée unique ----------------------------------
@@ -445,11 +487,23 @@ serveur fourni, ou recompiler le serveur depuis les sources du Lisp."
         (user-error "MSYS2 requis — installez-le depuis l'Assistant"))
        ((not (metal-pdf-serveur-version-installee))
         (metal-pdf-serveur-installer))
-       ((metal-pdf-serveur-aligner-straight)
+       ;; Serveur PLUS ANCIEN que la référence : on le met à jour plutôt
+       ;; que de rétrograder le Lisp.  Un MSYS2 installé hors de MetalEmacs
+       ;; et jamais mis à jour imposait sinon un pdf-tools aussi vieux que
+       ;; lui.  L'installation fait `-Syu', puis aligne le Lisp sur la
+       ;; version obtenue : si MSYS2 n'offre toujours pas la référence,
+       ;; on retombe sur l'alignement vers le bas, qui au moins fonctionne.
+       ((version< (metal-pdf-serveur-version-installee)
+                  metal-pdf-version-attendue)
+        (message "⬆ Serveur %s antérieur à la référence %s — mise à jour par MSYS2…"
+                 (metal-pdf-serveur-version-installee)
+                 metal-pdf-version-attendue)
+        (metal-pdf-serveur-installer))
+       (t
+        (metal-pdf-serveur-aligner-straight)
         (metal-pdf-serveur--rafraichir-assistant)
-        (message "✅ Lisp aligné sur le serveur %s — redémarrez Emacs"
-                 (metal-pdf-serveur-version-visee)))
-       (t (message "✓ Déjà accordé (%s)" (metal-pdf-serveur-version-visee))))
+        (message "%s" (metal-pdf-serveur--bilan-alignement
+                       (metal-pdf-serveur-version-visee)))))
     ;; macOS, Linux : recompiler le serveur depuis les sources du Lisp.
     (if (fboundp 'pdf-tools-install)
         (progn
@@ -783,7 +837,10 @@ l'installation suivante paie."
          (nom (buffer-name tampon)))
     (display-buffer tampon)
     (metal-pdf-serveur--enchainer
-     "epdfinfo-install" tampon pacman (list trousseau maj pose)
+     ;; `-Syu' DEUX fois : sur un MSYS2 ancien, le premier passage ne met
+     ;; à jour que le cœur (runtime, pacman) et s'arrête là ; le second
+     ;; fait le reste.  Sur un MSYS2 à jour, le second ne fait rien.
+     "epdfinfo-install" tampon pacman (list trousseau maj maj pose)
      (lambda (code)
        (if (/= code 0)
            ;; Autoréparation : diagnostic, remède, nouvel essai — sans
@@ -804,8 +861,8 @@ l'installation suivante paie."
            (if (null v)
                (message "❌ Paquet installé mais version illisible")
              (metal-pdf-serveur-aligner-straight)
-             (message "✅ Serveur %s installé, Lisp aligné — redémarrez Emacs"
-                      v))))
+             (message "✅ Serveur %s installé. %s" v
+                      (metal-pdf-serveur--bilan-alignement v)))))
        (metal-pdf-serveur--rafraichir-assistant)))))
 
 ;;;###autoload
