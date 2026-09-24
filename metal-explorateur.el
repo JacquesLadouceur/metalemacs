@@ -439,7 +439,9 @@ préservation de la taille de la side-window dans Emacs."
 ;; `file-exists-p' sur la lettre d'un partage déconnecté bloque Emacs le
 ;; temps du délai SMB — plusieurs dizaines de secondes quand le tunnel
 ;; n'est pas monté.  On interroge à la place la table locale des
-;; connexions (`Win32_NetworkConnection'), qui ne touche pas au réseau, et
+;; connexions (`Win32_NetworkConnection'), qui ne touche pas au réseau,
+;; complétée par une requête restreinte sur `Win32_LogicalDisk' pour les
+;; lecteurs des dossiers partagés Parallels, absents de cette table ; et
 ;; l'on retient le chemin UNC plutôt que la lettre : la lettre dépend de
 ;; la session d'ouverture (elle disparaît notamment sous élévation UAC),
 ;; l'UNC non.
@@ -482,12 +484,23 @@ injoignable.  La normalisation se limite alors aux séparateurs."
           "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=2' | "
           "ForEach-Object { 'AMO|' + $_.DeviceID }; "
           "Get-CimInstance Win32_NetworkConnection | "
-          "ForEach-Object { 'RES|' + $_.RemoteName }")
-  "Script PowerShell listant volumes amovibles et connexions réseau.
+          "ForEach-Object { 'RES|' + $_.RemoteName }; "
+          "Get-CimInstance -Query 'SELECT DeviceID,ProviderName FROM "
+          "Win32_LogicalDisk WHERE DriveType=4' | "
+          "Where-Object { $_.ProviderName } | "
+          "ForEach-Object { 'RES|' + $_.ProviderName }")
+  "Script PowerShell listant volumes amovibles et partages réseau.
 Aucune guillemet double n'y figure : leur échappement vers PowerShell
-n'est pas fiable depuis Emacs sous Windows.  `Win32_NetworkConnection'
-est préféré à un filtre DriveType=4 sur `Win32_LogicalDisk' : ce dernier
-interroge la taille et l'espace libre, donc le partage lui-même.")
+n'est pas fiable depuis Emacs sous Windows.
+
+Deux sources couvrent les partages.  `Win32_NetworkConnection' recense
+les connexions SMB ordinaires, mais ignore les lecteurs montés par un
+redirecteur d'hyperviseur (dossiers partagés de Parallels, hôte « Mac »).
+Ceux-ci ne figurent que dans `Win32_LogicalDisk' (DriveType=4).  Cette
+seconde requête est une requête WQL restreinte à DeviceID et
+ProviderName : sans liste de propriétés, WMI calculerait la taille et
+l'espace libre, donc accéderait au partage lui-même.  Les doublons entre
+les deux sources sont éliminés par `metal--usb-roots'.")
 
 (defun metal--volumes-w32 ()
   "Liste des volumes amovibles et réseau sous Windows.
