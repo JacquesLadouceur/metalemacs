@@ -50,6 +50,13 @@
 (require 'subr-x)
 (require 'metal-pdf-version)
 
+;; Autoréparation de pacman : elle vit dans `metal-deps.el', qui charge ce
+;; module.  Chaque appel est gardé par `fboundp' pour que ce fichier reste
+;; utilisable seul.
+(declare-function metal-deps-msys2-traiter-echec "metal-deps" (tampon relancer))
+(declare-function metal-deps-msys2-degager "metal-deps" ())
+(declare-function metal-deps-msys2-nouvelle-operation "metal-deps" ())
+
 (defgroup metal-pdf-serveur nil
   "Accord entre le Lisp de pdf-tools et son serveur natif."
   :group 'metal-pdf
@@ -483,9 +490,15 @@ son message d'échec parvenait à l'utilisateur."
     (with-current-buffer tampon
       (let ((inhibit-read-only t))
         (erase-buffer)
-        (insert (format-time-string "[%H:%M:%S] ")
-                (mapconcat #'identity (cons programme args) " ") "\n"
-                (make-string 60 ?─) "\n"))
+        ;; Marqué comme écho : le diagnostic des échecs ne doit lire que
+        ;; ce que les processus ont écrit.  Le nom de paquet
+        ;; « msys2-keyring » de la commande suffisait à faire prendre
+        ;; n'importe quel échec pour un refus de signatures.
+        (insert (propertize
+                 (concat (format-time-string "[%H:%M:%S] ")
+                         (mapconcat #'identity (cons programme args) " ") "\n"
+                         (make-string 60 ?─) "\n")
+                 'metal-console-echo t)))
       ;; Le tampon héritait du répertoire courant de l'Assistant.  Un
       ;; répertoire inexistant fait échouer le démarrage du processus
       ;; lui-même, avec un message qui n'a rien à voir avec la commande.
@@ -504,8 +517,11 @@ toujours pas."
     (with-current-buffer tampon
       (let ((inhibit-read-only t))
         (goto-char (point-max))
-        (insert "\n$ " (mapconcat #'identity (cons programme (car etapes)) " ")
-                "\n")))
+        (insert (propertize
+                 (concat "\n$ "
+                         (mapconcat #'identity (cons programme (car etapes)) " ")
+                         "\n")
+                 'metal-console-echo t))))
     (metal-pdf-serveur--lancer
      nom tampon programme (car etapes)
      (lambda (code)
@@ -515,8 +531,11 @@ toujours pas."
 
 (defconst metal-pdf-serveur--motif-signature
   (concat "PGP signature\\|signature from\\|unknown trust\\|marginal trust"
-          "\\|keyring\\|pacman-key\\|clé inconnue")
+          "\\|Public keyring not found\\|keyring is not writable\\|clé inconnue")
   "Motifs par lesquels pacman dénonce un problème de trousseau.
+Plus de « keyring » ni de « pacman-key » nus : ils trouvaient l'écho de
+la commande (« … msys2-keyring ») et faisaient de tout échec un refus de
+signatures.  Ne sert plus que de repli quand `metal-deps.el' est absent.
 Cherchés seulement après un code de sortie non nul : un paquet dont la
 signature est vérifiée sans incident n'en parle pas.")
 
@@ -664,6 +683,13 @@ MSYS2 fournit le serveur epdfinfo et ses DLL sous Windows."
     (let ((scoop (executable-find "scoop"))
           (args '("uninstall" "msys2")))
       (unless scoop (user-error "Scoop introuvable"))
+      ;; Un gpg-agent ou un pacman orphelin garde des fichiers de MSYS2
+      ;; ouverts : Scoop ne pourrait pas les supprimer, et la
+      ;; désinstallation laisserait un dossier à moitié vidé — celui sur
+      ;; lequel toute réinstallation échoue ensuite.
+      (when (and (fboundp 'metal-deps-msys2-degager)
+                 (eq (metal-deps-msys2-degager) 'occupe))
+        (user-error "Une opération MSYS2 est en cours — attendez qu'elle se termine"))
       (let ((tampon (metal-pdf-serveur--console "MSYS2 Uninstall" scoop args)))
         (display-buffer tampon)
         (metal-pdf-serveur--lancer
@@ -686,6 +712,15 @@ l'accord est donc acquis sans autre intervention."
   (let ((pacman (metal-pdf-serveur--pacman)))
     (unless pacman
       (user-error "MSYS2 introuvable — installez-le d'abord depuis l'Assistant"))
+    ;; Nouvelle opération : chaque remède automatique redevient
+    ;; disponible.  Puis déblocage préventif — un verrou ou un gpg-agent
+    ;; laissés par une tentative interrompue ne doivent pas coûter un
+    ;; premier échec.
+    (when (fboundp 'metal-deps-msys2-nouvelle-operation)
+      (metal-deps-msys2-nouvelle-operation))
+    (when (and (fboundp 'metal-deps-msys2-degager)
+               (eq (metal-deps-msys2-degager) 'occupe))
+      (user-error "Une opération MSYS2 est déjà en cours — attendez qu'elle se termine"))
     ;; Le trousseau d'abord : sans lui, les deux appels qui suivent
     ;; échouent sur les signatures, avec un message que personne ne
     ;; rattache à MSYS2.
@@ -711,9 +746,13 @@ les paquets installés est la mise à jour partielle que la documentation
 de MSYS2 déconseille — elle laisse des dépendances incohérentes que
 l'installation suivante paie."
   (message "📦 Installation du serveur epdfinfo (plusieurs minutes)...")
-  (let* ((trousseau '("-Sy" "--needed" "--noconfirm" "msys2-keyring"))
-         (maj '("-Syu" "--noconfirm"))
-         (pose (list "-S" "--needed" "--noconfirm"
+  ;; `--disable-download-timeout' : pacman abandonne par défaut un
+  ;; téléchargement lent au bout de dix secondes, ce qui suffit à faire
+  ;; échouer l'installation sur un réseau de campus chargé.
+  (let* ((trousseau '("-Sy" "--needed" "--noconfirm"
+                      "--disable-download-timeout" "msys2-keyring"))
+         (maj '("-Syu" "--noconfirm" "--disable-download-timeout"))
+         (pose (list "-S" "--needed" "--noconfirm" "--disable-download-timeout"
                      metal-pdf-serveur-paquet-msys2))
          (tampon (metal-pdf-serveur--console "epdfinfo Install" pacman nil))
          (nom (buffer-name tampon)))
@@ -722,8 +761,17 @@ l'installation suivante paie."
      "epdfinfo-install" tampon pacman (list trousseau maj pose)
      (lambda (code)
        (if (/= code 0)
-           (metal-pdf-serveur--signaler-echec tampon nom)
+           ;; Autoréparation : diagnostic, remède, nouvel essai — sans
+           ;; question.  Le repli sur l'ancien signalement ne sert que si
+           ;; `metal-deps.el' n'est pas chargé.
+           (if (fboundp 'metal-deps-msys2-traiter-echec)
+               (metal-deps-msys2-traiter-echec
+                tampon
+                (lambda () (metal-pdf-serveur--installer-paquet pacman)))
+             (metal-pdf-serveur--signaler-echec tampon nom))
          (setq metal-pdf-serveur-signatures-refusees nil)
+         (when (boundp 'metal-deps-msys2-dernier-echec)
+           (setq metal-deps-msys2-dernier-echec nil))
          (metal-pdf-serveur-invalider-etat)
          (metal-pdf-serveur-brancher-programme)
          (let ((v (metal-pdf-serveur-version-installee)))

@@ -820,123 +820,432 @@ fichiers déjà présents sur le disque : une horloge en retard les rend
               (format-time-string "%Y-%m-%d" maintenant)
               (format-time-string "%Y-%m-%d" recent)))))
 
+;;; ═══════════════════════════════════════════════════════════════════
+;;; MSYS2 : autoréparation de pacman (Windows)
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; Principe : l'utilisateur n'intervient pas.  Quand une opération pacman
+;; échoue, sa sortie est DIAGNOSTIQUÉE — une cause, pas une liste de
+;; causes possibles —, le remède correspondant est appliqué d'office et
+;; l'opération est relancée.  Chaque remède ne sert qu'UNE fois par
+;; opération : au second échec, on s'arrête sur des consignes propres à
+;; la cause trouvée, et un rapport est copié dans le presse-papiers.
+;;
+;; Deux défauts de la version précédente motivent ce découpage :
+;; - le motif « keyring » trouvait la LIGNE DE COMMANDE écrite en tête de
+;;   console (« pacman -Sy … msys2-keyring ») : tout échec, même un simple
+;;   verrou, passait pour un refus de signatures, et l'utilisateur
+;;   aboutissait à quatre causes qui n'étaient pas la sienne ;
+;; - le verrou `db.lck' laissé par un pacman interrompu n'était pas
+;;   traité : ni l'installation ni la réparation ne pouvaient aboutir.
+;;
+;; Les échos de commande sont désormais marqués par la propriété de texte
+;; `metal-console-echo', et le diagnostic ne lit que ce que les processus
+;; ont réellement écrit.
+
+(defun metal-console-echo (texte)
+  "TEXTE marqué comme écho de commande, ignoré par les diagnostics."
+  (propertize texte 'metal-console-echo t))
+
+(defconst metal-deps--msys2-motifs
+  '((verrou    . "unable to lock database\\|db\\.lck")
+    (espace    . "not enough free disk space\\|No space left on device")
+    (reseau    . "Could not resolve host\\|Failed to connect\\|Connection timed out\\|Operation timed out\\|Operation too slow\\|Connection reset\\|SSL certificate problem\\|SSL connect error\\|failed retrieving file\\|could not be looked up remotely\\|download library error")
+    (signature . "PGP signature\\|signature from\\|unknown trust\\|marginal trust\\|invalid or corrupted\\|Public keyring not found\\|keyring is not writable\\|key \"?[0-9A-F]+\"? is unknown\\|missing required signature\\|could not be imported")
+    (acces     . "Permission denied\\|Access is denied\\|Device or resource busy"))
+  "Causes d'échec de pacman, avec les messages qui les trahissent.
+L'ORDRE est une priorité : un verrou ou une panne de réseau entraînent
+en cascade des messages de signature, jamais l'inverse.")
+
+(defconst metal-deps--msys2-processus-bloquants
+  "\\`\\(?:pacman\\|gpg\\|gpg-agent\\|dirmngr\\|keyboxd\\)\\(?:\\.exe\\)?\\'"
+  "Processus qui retiennent la base de pacman ou le trousseau.
+Un `gpg-agent' lancé par `pacman-key' survit à la commande sous Windows :
+il garde ouverts les fichiers de etc/pacman.d/gnupg, ce qui fait échouer
+leur suppression et la désinstallation de MSYS2.")
+
+(defvar metal-deps--msys2-remedes-tentes nil
+  "Remèdes déjà appliqués pendant l'opération MSYS2 en cours.")
+
+(defvar metal-deps-msys2-dernier-echec nil
+  "Cause (symbole) du dernier échec MSYS2 non résolu, ou nil.
+Lu par l'Assistant, qui affiche la cause sur la ligne MSYS2.")
+
+(defun metal-deps-msys2-nouvelle-operation ()
+  "Ouvre une nouvelle opération MSYS2 : chaque remède redevient disponible."
+  (setq metal-deps--msys2-remedes-tentes nil))
+
+;;; --- Diagnostic ------------------------------------------------------
+
+(defun metal-deps--msys2-sortie (tampon)
+  "Texte écrit par les processus dans TAMPON, échos de commande exclus."
+  (if (not (buffer-live-p tampon))
+      ""
+    (with-current-buffer tampon
+      (let ((pos (point-min))
+            (morceaux nil))
+        (while (< pos (point-max))
+          (let ((fin (next-single-property-change
+                      pos 'metal-console-echo nil (point-max))))
+            (unless (get-text-property pos 'metal-console-echo)
+              (push (buffer-substring-no-properties pos fin) morceaux))
+            (setq pos fin)))
+        (apply #'concat (nreverse morceaux))))))
+
+(defun metal-deps-msys2-diagnostiquer (tampon)
+  "Cause de l'échec consigné dans TAMPON, sous forme de symbole.
+L'horloge passe en premier : une date fausse produit des messages de
+signature que rien d'autre ne corrige."
+  (or (and (metal-deps--msys2-horloge-suspecte-p) 'horloge)
+      (let ((texte (metal-deps--msys2-sortie tampon))
+            (case-fold-search t))
+        (car (cl-find-if (lambda (m) (string-match-p (cdr m) texte))
+                         metal-deps--msys2-motifs)))
+      'inconnu))
+
+;;; --- Remèdes ---------------------------------------------------------
+
+(defun metal-deps--msys2-operation-en-cours-p ()
+  "Non-nil si MetalEmacs pilote déjà un processus MSYS2 vivant."
+  (cl-some (lambda (p)
+             (and (process-live-p p)
+                  (string-match-p "\\`\\(?:metal-msys2\\|msys2-\\|epdfinfo-\\)"
+                                  (process-name p))))
+           (process-list)))
+
+(defun metal-deps--msys2-arreter-processus ()
+  "Arrête les processus qui retiennent MSYS2.  Retourne leur nombre.
+Aucun n'appartient à MetalEmacs : l'appelant a vérifié qu'aucune
+opération n'est en cours.  Ce sont des orphelins d'une opération
+interrompue (Emacs fermé, ordinateur mis en veille)."
+  (let ((arretes 0)
+        (case-fold-search t))
+    (when (eq system-type 'windows-nt)
+      (dolist (pid (list-system-processes))
+        (let ((nom (cdr (assq 'comm (ignore-errors (process-attributes pid))))))
+          (when (and (stringp nom)
+                     (string-match-p metal-deps--msys2-processus-bloquants nom)
+                     (or (eq 0 (ignore-errors (signal-process pid 'SIGKILL)))
+                         (eq 0 (ignore-errors
+                                 (call-process "taskkill" nil nil nil
+                                               "/F" "/PID"
+                                               (number-to-string pid))))))
+            (setq arretes (1+ arretes))
+            (metal-deps--journaliser "MSYS2 : processus %s (%d) arrêté" nom pid))))
+      ;; Windows libère les fichiers d'un processus tué avec un léger délai.
+      (when (> arretes 0) (sleep-for 1)))
+    arretes))
+
+(defun metal-deps--msys2-retirer-verrou ()
+  "Supprime le verrou de pacman s'il existe.  Nil si c'est impossible."
+  (let* ((racine (metal-deps--msys2-racine))
+         (verrou (and racine
+                      (expand-file-name "var/lib/pacman/db.lck" racine))))
+    (if (not (and verrou (file-exists-p verrou)))
+        t
+      (condition-case err
+          (progn (delete-file verrou)
+                 (metal-deps--journaliser "MSYS2 : verrou db.lck retiré")
+                 t)
+        (error
+         (metal-deps--journaliser "MSYS2 : verrou db.lck NON retiré (%s)"
+                                  (error-message-string err))
+         nil)))))
+
+(defun metal-deps-msys2-degager ()
+  "Libère MSYS2 avant une opération : orphelins arrêtés, verrou retiré.
+Retourne `occupe' si MetalEmacs pilote déjà une opération MSYS2 — on ne
+touche alors à rien —, nil si le verrou n'a pas pu être retiré, t sinon.
+
+Appelée d'office au début de toute opération : un verrou ou un
+`gpg-agent' laissés par une tentative interrompue ne doivent pas coûter
+un premier échec à l'utilisateur."
+  (interactive)
+  (cond
+   ((not (eq system-type 'windows-nt)) t)
+   ((metal-deps--msys2-operation-en-cours-p) 'occupe)
+   (t (metal-deps--msys2-arreter-processus)
+      (metal-deps--msys2-retirer-verrou))))
+
+;;; --- Échec définitif : consignes et rapport --------------------------
+
+(defun metal-deps--msys2-resume (cause)
+  "Résumé d'une ligne de CAUSE, pour le minibuffer et l'Assistant."
+  (pcase cause
+    ('verrou    "base de paquets verrouillée")
+    ('reseau    "serveurs de MSYS2 injoignables")
+    ('horloge   "horloge système fausse")
+    ('signature "signatures refusées malgré la réparation")
+    ('espace    "disque plein")
+    ('acces     "accès aux fichiers refusé")
+    ('occupe    "une autre opération MSYS2 est en cours")
+    (_          "cause non identifiée")))
+
+(defun metal-deps--msys2-consigne (cause)
+  "Explication et marche à suivre pour CAUSE, en texte d'aide."
+  (pcase cause
+    ('verrou
+     (concat
+      "La base de paquets de MSYS2 est verrouillée, et MetalEmacs n'a pas\n"
+      "réussi à la libérer, même après avoir arrêté les programmes qui la\n"
+      "retenaient.\n\n"
+      "Que faire :\n"
+      "  → Fermez toute fenêtre MSYS2 ou tout terminal ouvert.\n"
+      "  → Redémarrez l'ordinateur.\n"
+      "  → Dans l'Assistant, ligne MSYS2, cliquez sur « Réparer le\n"
+      "    trousseau »."))
+    ('occupe
+     (concat
+      "Une autre opération MSYS2 est déjà en cours dans MetalEmacs\n"
+      "(installation, réparation ou désinstallation).\n\n"
+      "Que faire :\n"
+      "  → Attendez qu'elle se termine (sa console affiche « Terminé »),\n"
+      "    puis relancez l'opération depuis l'Assistant."))
+    ('reseau
+     (concat
+      "MetalEmacs n'a pas pu télécharger les fichiers de MSYS2 : la\n"
+      "connexion aux serveurs (repo.msys2.org) a échoué deux fois.  Votre\n"
+      "ordinateur et votre installation ne sont pas en cause.\n\n"
+      "Que faire :\n"
+      "  → Changez de réseau : domicile, ou partage de connexion du\n"
+      "    téléphone.  Les réseaux de campus et d'entreprise bloquent\n"
+      "    souvent ces téléchargements.\n"
+      "  → Désactivez le VPN ou le proxy s'il y en a un.\n"
+      "  → Relancez ensuite l'opération depuis l'Assistant."))
+    ('horloge
+     (concat
+      "L'horloge de l'ordinateur est fausse : "
+      (or (metal-deps--msys2-horloge-suspecte-p) "date incohérente") ".\n"
+      "Avec une date erronée, toutes les signatures paraissent invalides,\n"
+      "et aucune réparation ne peut aboutir tant que l'heure n'est pas\n"
+      "corrigée.\n\n"
+      "Que faire :\n"
+      "  → Paramètres Windows > Heure et langue > Date et heure :\n"
+      "    activez « Régler l'heure automatiquement », puis cliquez sur\n"
+      "    « Synchroniser maintenant ».  Vérifiez aussi le fuseau horaire.\n"
+      "  → Relancez ensuite l'opération depuis l'Assistant."))
+    ('signature
+     (concat
+      "pacman refuse toujours les signatures, alors que MetalEmacs a\n"
+      "entièrement recréé le trousseau de clés.  L'installation de MSYS2\n"
+      "est probablement endommagée.\n\n"
+      "Que faire :\n"
+      "  → Dans l'Assistant, ligne MSYS2 : « Désinstaller », puis\n"
+      "    « Installer ».  C'est long (environ 1 Go), mais sans risque.\n"
+      "  → Si l'échec persiste après la réinstallation, les clés de MSYS2\n"
+      "    ont peut-être changé en amont : https://www.msys2.org/news/"))
+    ('espace
+     (concat
+      "Le disque est plein : pacman n'a pas la place de télécharger et\n"
+      "d'installer les paquets.\n\n"
+      "Que faire :\n"
+      "  → Libérez au moins 2 Go sur le disque C: (Corbeille, dossier\n"
+      "    Téléchargements, Paramètres > Système > Stockage).\n"
+      "  → Relancez ensuite l'opération depuis l'Assistant."))
+    ('acces
+     (concat
+      "Windows a refusé l'accès à des fichiers de MSYS2.  C'est presque\n"
+      "toujours un antivirus qui analyse ou retient les fichiers\n"
+      "téléchargés.\n\n"
+      "Que faire :\n"
+      "  → Redémarrez l'ordinateur, puis relancez l'opération.\n"
+      "  → Si l'échec se répète, excluez de l'antivirus le dossier\n"
+      "    " (or (metal-deps--msys2-racine) "de MSYS2") "\n"
+      "    puis relancez."))
+    (_
+     (concat
+      "La réparation automatique n'a pas abouti, et la cause n'a pas pu\n"
+      "être identifiée.\n\n"
+      "Que faire :\n"
+      "  → Redémarrez l'ordinateur, puis relancez l'opération depuis\n"
+      "    l'Assistant."))))
+
+(defun metal-deps--msys2-dernieres-lignes (tampon n)
+  "Les N dernières lignes non vides de TAMPON (nom ou objet), ou \"\"."
+  (let ((b (and tampon (get-buffer tampon))))
+    (if (not (buffer-live-p b))
+        ""
+      (with-current-buffer b
+        (mapconcat #'identity
+                   (last (split-string (buffer-substring-no-properties
+                                        (point-min) (point-max))
+                                       "\n" t)
+                         n)
+                   "\n")))))
+
+(defun metal-deps--msys2-rapport (cause tampon)
+  "Rapport de diagnostic pour CAUSE, avec la fin de la sortie de TAMPON.
+Conçu pour être collé tel quel dans un courriel : c'est le seul moyen
+fiable de transmettre une sortie depuis un poste qu'on ne voit pas."
+  (concat
+   "Rapport MetalEmacs — échec MSYS2\n"
+   (format "Date : %s\n" (format-time-string "%Y-%m-%d %H:%M"))
+   (format "Cause diagnostiquée : %s (%s)\n"
+           cause (metal-deps--msys2-resume cause))
+   (format "Remèdes appliqués : %s\n"
+           (if metal-deps--msys2-remedes-tentes
+               (mapconcat #'symbol-name
+                          (reverse metal-deps--msys2-remedes-tentes) ", ")
+             "aucun"))
+   (format "MSYS2 : %s\n" (or (metal-deps--msys2-racine) "introuvable"))
+   (format "Emacs %s — %s\n" emacs-version system-configuration)
+   "\n--- Sortie (fin) ---\n"
+   (metal-deps--msys2-dernieres-lignes tampon 40)
+   "\n\n--- Journal de l'Assistant (fin) ---\n"
+   (metal-deps--msys2-dernieres-lignes metal-deps-tampon-journal 20)
+   "\n"))
+
+(defun metal-deps--msys2-echec-final (cause tampon)
+  "Termine sur un échec de CAUSE : consignes affichées, rapport copié.
+TAMPON porte la sortie de la dernière commande, ou nil."
+  (setq metal-deps-msys2-dernier-echec cause)
+  (when (and (eq cause 'signature)
+             (boundp 'metal-pdf-serveur-signatures-refusees))
+    (setq metal-pdf-serveur-signatures-refusees t))
+  (metal-deps--journaliser "MSYS2 : échec définitif — %s" cause)
+  (kill-new (metal-deps--msys2-rapport cause tampon))
+  (let ((nom (and tampon (get-buffer tampon) (buffer-name (get-buffer tampon)))))
+    (run-with-timer
+     0 nil
+     (lambda ()
+       (metal-deps--afficher-aide
+        (format "MSYS2 — %s" (metal-deps--msys2-resume cause))
+        (concat
+         (metal-deps--msys2-consigne cause)
+         "\n\n"
+         "Si rien de cela ne fonctionne : un rapport de diagnostic vient\n"
+         "d'être copié dans le presse-papiers.  Collez-le (Ctrl+V) dans un\n"
+         "courriel à votre enseignant ou au soutien technique."
+         (if nom (format "\n\nDétail complet des commandes : tampon « %s »." nom)
+           "")))
+       (message "❌ MSYS2 : %s — consignes affichées"
+                (metal-deps--msys2-resume cause)))))
+  (run-with-timer 1 nil #'metal-deps-afficher-etat t))
+
+;;; --- Aiguillage ------------------------------------------------------
+
+(defun metal-deps-msys2-traiter-echec (tampon relancer)
+  "Diagnostique l'échec consigné dans TAMPON et y remédie sans intervention.
+RELANCER est appelée sans argument pour reprendre l'opération une fois
+le remède appliqué.  Chaque remède ne sert qu'une fois par opération :
+au second échec, l'utilisateur reçoit des consignes propres à la cause.
+
+Appelée depuis une sentinelle ; tout ce qui ouvre une fenêtre ou lance
+un processus passe donc par un timer."
+  (let* ((cause (metal-deps-msys2-diagnostiquer tampon))
+         (remede (pcase cause
+                   ((or 'verrou 'acces 'inconnu) 'degager)
+                   ('reseau 'patienter)
+                   ('signature 'trousseau))))
+    (metal-deps--journaliser "MSYS2 : échec diagnostiqué — %s" cause)
+    (if (or (null remede) (memq remede metal-deps--msys2-remedes-tentes))
+        (metal-deps--msys2-echec-final cause tampon)
+      (push remede metal-deps--msys2-remedes-tentes)
+      (pcase remede
+        ('degager
+         (message "🔧 MSYS2 : %s — déblocage, puis nouvel essai…"
+                  (metal-deps--msys2-resume cause))
+         (run-with-timer
+          0.5 nil
+          (lambda ()
+            (pcase (metal-deps-msys2-degager)
+              ('occupe (metal-deps--msys2-echec-final 'occupe tampon))
+              ('nil    (metal-deps--msys2-echec-final 'verrou tampon))
+              (_       (funcall relancer))))))
+        ('patienter
+         (message "🌐 MSYS2 : réseau capricieux — nouvel essai dans 15 s…")
+         (run-with-timer 15 nil relancer))
+        ('trousseau
+         (message "🔑 MSYS2 : signatures refusées — reconstruction du trousseau…")
+         (run-with-timer 0 nil #'metal-deps--msys2-trousseau relancer))))))
+
+;;; --- Trousseau --------------------------------------------------------
+
 (defun metal-deps--msys2-description ()
-  "Description de la ligne MSYS2, adaptée au dernier échec constaté.
-
-Fixe, cette ligne ne disait jamais QUAND le bouton « Réparer le
-trousseau » sert : l'Assistant affichait ✓ et le même texte, que
-l'installation ait échoué sur des signatures, sur le réseau ou pas du
-tout.  Le drapeau `metal-pdf-serveur-signatures-refusees' rend le signal
-persistant et le place à l'endroit même où se trouve le bouton.
-
-L'horloge n'est vérifiée que lorsque le drapeau est levé : inutile de
-payer trois accès disque à chaque rendu pour un cas qui ne se pose pas."
-  (if (not (and (boundp 'metal-pdf-serveur-signatures-refusees)
-                metal-pdf-serveur-signatures-refusees))
-      "Requis pour lire les PDF"
-    (if (metal-deps--msys2-horloge-suspecte-p)
-        "signatures refusées — l'horloge système est fausse, corrigez la date"
-      "signatures refusées par pacman — bouton « Réparer le trousseau »")))
+  "Description de la ligne MSYS2, adaptée au dernier échec constaté."
+  (cond
+   (metal-deps-msys2-dernier-echec
+    (format "⚠ %s — suivez les consignes, puis « Réparer »"
+            (metal-deps--msys2-resume metal-deps-msys2-dernier-echec)))
+   ((and (boundp 'metal-pdf-serveur-signatures-refusees)
+         metal-pdf-serveur-signatures-refusees)
+    "signatures refusées par pacman — bouton « Réparer le trousseau »")
+   (t "Requis pour lire les PDF")))
 
 (defun metal-deps-msys2-aide-trousseau ()
-  "Affiche les causes possibles d'un refus de signatures par pacman.
-
-Ouverte automatiquement quand la réparation échoue : un bouton qui
-échoue en silence laisse l'utilisateur exactement au même point, en lui
-ayant fait croire que le geste était fait."
+  "Affiche les consignes du dernier échec MSYS2, ou l'état si aucun."
   (interactive)
-  (metal-deps--afficher-aide
-   "Signatures refusées par pacman — autres causes"
-   (concat
-    "La réparation du trousseau couvre le cas le plus fréquent : des clés\n"
-    "expirées ou renouvelées depuis l'installation de MSYS2.  Si elle\n"
-    "n'a pas suffi, voici les autres causes, de la plus fréquente à la\n"
-    "plus rare.\n\n"
-
-    "1. HORLOGE SYSTÈME FAUSSE\n"
-    "   Une date décalée rend les signatures « futures » ou expirées, et\n"
-    "   produit les mêmes messages qu'un trousseau périmé.  Réparer le\n"
-    "   trousseau ne peut alors rien changer, quel que soit le nombre\n"
-    "   d'essais.\n"
-    "   → Réglages Windows > Heure et langue > Date et heure :\n"
-    "     activer « Régler l'heure automatiquement », puis\n"
-    "     « Synchroniser maintenant ».  Vérifier aussi le fuseau.\n\n"
-
-    "2. RÉSEAU FILTRÉ (campus, proxy, pare-feu)\n"
-    "   La réparation télécharge les clés et le paquet msys2-keyring.\n"
-    "   Sur un réseau universitaire filtré, ces requêtes échouent sans\n"
-    "   que les clés soient en cause.  Le tampon montre alors des\n"
-    "   erreurs de connexion ou d'expiration de délai, pas de signature.\n"
-    "   → Réessayer depuis une autre connexion (partage 4G, domicile).\n\n"
-
-    "3. INSTALLATION MSYS2 INCOMPLÈTE\n"
-    "   Une désinstallation interrompue, ou un dossier etc/pacman.d\n"
-    "   partiellement effacé, laisse une arborescence incohérente sur\n"
-    "   laquelle « pacman-key --init » échoue lui aussi.\n"
-    "   → Désinstaller MSYS2 depuis l'Assistant, puis le réinstaller.\n"
-    "     C'est long (~1 Go) mais sûr.\n\n"
-
-    "4. ROTATION DES CLÉS EN AMONT\n"
-    "   Si une clé maîtresse de MSYS2 a été révoquée, la séquence usuelle\n"
-    "   ne suffit plus : le projet publie alors une marche à suivre.\n"
-    "   → https://www.msys2.org/news/  (section la plus récente)\n\n"
-
-    "Dans tous les cas, le tampon « MSYS2 Trousseau » contient la sortie\n"
-    "complète des commandes : les dernières lignes avant l'arrêt disent\n"
-    "laquelle des quatre causes s'applique.")))
+  (if metal-deps-msys2-dernier-echec
+      (metal-deps--afficher-aide
+       (format "MSYS2 — %s"
+               (metal-deps--msys2-resume metal-deps-msys2-dernier-echec))
+       (metal-deps--msys2-consigne metal-deps-msys2-dernier-echec))
+    (message "✓ Aucun échec MSYS2 en attente")))
 
 (defun metal-deps-msys2-reparer-trousseau ()
-  "Réinitialise le trousseau de signatures de MSYS2, puis le met à jour.
+  "Remet MSYS2 en état : déblocage, trousseau recréé, installation reprise.
 
-À utiliser quand pacman refuse les paquets alors que le trousseau EXISTE
-— clés expirées, ou renouvelées depuis l'installation.
-`metal-deps-msys2-premier-lancement' ne couvre pas ce cas : elle ne teste
-que la présence de `pubring.gpg', et un trousseau périmé la traverse
-sans rien déclencher.
-
-L'ordre de la séquence compte.  Recréer le trousseau et réimporter les
-clés maîtresses D'ABORD, mettre à jour `msys2-keyring' ENSUITE et seul :
-la mise à jour du trousseau est elle-même un paquet signé, il faut donc
-un trousseau utilisable pour en vérifier la signature.
-
-La commande est confiée au bash de MSYS2, jamais à cmd.exe : le script
-reçoit ses options en arguments séparés et c'est bash qui interprète les
-`&&'.
-
-Trois garanties, parce qu'un bouton qui échoue sans le dire vaut moins
-que pas de bouton : l'horloge est vérifiée avant de lancer quoi que ce
-soit ; le verdict distingue le succès de l'échec ; et en cas d'échec la
-fenêtre des autres causes s'ouvre d'elle-même."
+C'est le bouton « Réparer le trousseau » de l'Assistant.  Il ouvre une
+nouvelle opération — chaque remède automatique redevient disponible —,
+de sorte qu'un utilisateur qui a suivi les consignes d'un échec
+(changé de réseau, redémarré) repart d'une ardoise propre."
   (interactive)
-  (let ((racine (metal-deps--msys2-racine))
-        (horloge (metal-deps--msys2-horloge-suspecte-p)))
-    (unless racine
-      (user-error "MSYS2 introuvable — installez-le d'abord depuis l'Assistant"))
-    ;; L'horloge d'abord : réparer sous une date fausse ne peut pas
-    ;; aboutir, et masquerait la vraie cause derrière un second échec.
-    (when horloge
-      (metal-deps--journaliser "MSYS2 : réparation refusée — horloge suspecte (%s)"
-                               horloge)
-      (metal-deps-msys2-aide-trousseau)
-      (user-error "Horloge système suspecte : %s — corrigez la date d'abord"
-                  horloge))
-    (let ((script (expand-file-name "msys2_shell.cmd" racine))
-          (commande (concat "pacman-key --init && "
-                            "pacman-key --populate msys2 && "
-                            "pacman -Sy --noconfirm msys2-keyring"))
-          (tampon (get-buffer-create (metal-console-nom "MSYS2 Trousseau"))))
-      (unless (file-exists-p script)
-        (user-error "msys2_shell.cmd introuvable dans %s" racine))
+  (metal-deps-msys2-nouvelle-operation)
+  (setq metal-deps-msys2-dernier-echec nil)
+  (metal-deps--msys2-trousseau nil))
+
+(defun metal-deps--msys2-trousseau (suite)
+  "Recrée le trousseau de pacman, puis appelle SUITE sans argument.
+Sans SUITE, reprend l'installation du serveur epdfinfo si elle reste à
+faire.
+
+La séquence part d'un trousseau VIDE (`rm -rf /etc/pacman.d/gnupg') :
+`pacman-key --init' échoue sur un dossier gnupg endommagé, et c'est le
+cas qu'une réparation doit couvrir.  Le trousseau ne contient rien de
+propre à l'utilisateur — il se reconstruit entièrement.  Les clés
+maîtresses d'ABORD, `msys2-keyring' ENSUITE : sa mise à jour est
+elle-même un paquet signé.
+
+La commande est confiée au bash de MSYS2, jamais à cmd.exe."
+  (let ((racine (metal-deps--msys2-racine)))
+    (cond
+     ((null racine)
+      (message "MSYS2 introuvable — installez-le d'abord depuis l'Assistant"))
+     ((metal-deps--msys2-horloge-suspecte-p)
+      (metal-deps--msys2-echec-final 'horloge nil))
+     (t
+      (let ((etat (metal-deps-msys2-degager)))
+        (cond
+         ((eq etat 'occupe)
+          (metal-deps--msys2-echec-final 'occupe nil))
+         ((null etat)
+          (metal-deps--msys2-echec-final 'verrou nil))
+         (t
+          (cl-pushnew 'trousseau metal-deps--msys2-remedes-tentes)
+          (metal-deps--msys2-lancer-trousseau racine suite))))))))
+
+(defun metal-deps--msys2-lancer-trousseau (racine suite)
+  "Lance la reconstruction du trousseau de RACINE ; SUITE au succès."
+  (let ((script (expand-file-name "msys2_shell.cmd" racine))
+        (commande (concat "rm -rf /etc/pacman.d/gnupg"
+                          " && pacman-key --init"
+                          " && pacman-key --populate msys2"
+                          " && pacman -Sy --noconfirm --disable-download-timeout"
+                          " msys2-keyring"))
+        (tampon (get-buffer-create (metal-console-nom "MSYS2 Trousseau"))))
+    (if (not (file-exists-p script))
+        (metal-deps--msys2-echec-final 'inconnu nil)
       (with-current-buffer tampon
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (insert "Réinitialisation du trousseau de signatures MSYS2\n"
-                  (make-string 60 ?─) "\n"
-                  commande "\n"
-                  "Quelques minutes ; aucune fenêtre ne s'ouvrira.\n\n")))
+          (insert (metal-console-echo
+                   (concat "Reconstruction du trousseau de signatures MSYS2\n"
+                           (make-string 60 ?─) "\n"
+                           "$ " commande "\n"
+                           "Quelques minutes ; aucune fenêtre ne s'ouvrira.\n\n")))))
       (display-buffer tampon)
-      (metal-deps--journaliser "MSYS2 : réinitialisation du trousseau")
-      (message "⏳ Réinitialisation du trousseau MSYS2 — patientez…")
+      (metal-deps--journaliser "MSYS2 : reconstruction du trousseau")
+      (message "⏳ Reconstruction du trousseau MSYS2 — patientez…")
       (let ((proc (start-process "metal-msys2-trousseau" tampon script
                                  "-defterm" "-no-start" "-here"
                                  "-c" commande)))
@@ -946,38 +1255,36 @@ fenêtre des autres causes s'ouvre d'elle-même."
          (lambda (p evt)
            (when (memq (process-status p) '(exit signal))
              (metal-console--sentinelle p evt)
-             (metal-deps--msys2-verdict-trousseau
-              (process-exit-status p) (buffer-name tampon)))))))))
+             ;; `pacman-key' laisse un gpg-agent derrière lui : il
+             ;; retiendrait le trousseau et bloquerait une désinstallation.
+             (metal-deps--msys2-arreter-processus)
+             (if (= (process-exit-status p) 0)
+                 (metal-deps--msys2-trousseau-retabli suite)
+               (metal-deps-msys2-traiter-echec
+                tampon
+                (lambda () (metal-deps--msys2-trousseau suite)))))))))))
 
-(defun metal-deps--msys2-verdict-trousseau (code nom)
-  "Conclut la réparation du trousseau : CODE de sortie, NOM du tampon.
-
-En cas de succès, enchaîne sur l'installation du serveur epdfinfo si
-elle reste à faire — réparer sans terminer ce que l'utilisateur voulait
-faire le laisse à mi-chemin, devant un Assistant toujours rouge.  Le
-passage par un timer sort de la sentinelle avant d'ouvrir une fenêtre ou
-de lancer un autre processus."
-  (if (/= code 0)
-      (progn
-        (metal-deps--journaliser "MSYS2 : réparation du trousseau ÉCHOUÉE (code %s)"
-                                 code)
-        (message "❌ Réparation du trousseau échouée — voir %s" nom)
-        (run-with-timer 0 nil #'metal-deps-msys2-aide-trousseau))
-    (metal-deps--journaliser "MSYS2 : trousseau rétabli")
-    ;; Le signal persistant disparaît de l'Assistant : la cause est levée.
-    (when (boundp 'metal-pdf-serveur-signatures-refusees)
-      (setq metal-pdf-serveur-signatures-refusees nil))
-    (if (and (fboundp 'metal-pdf-serveur-version-installee)
-             (metal-pdf-serveur-version-installee))
-        (message "✅ Trousseau MSYS2 rétabli.")
-      (message "✅ Trousseau rétabli — reprise de l'installation du serveur…")
-      (run-with-timer
-       0 nil
-       (lambda ()
-         (if (fboundp 'metal-pdf-serveur-reparer)
-             (metal-pdf-serveur-reparer)
-           (message "✅ Trousseau rétabli — relancez l'installation du serveur")))))
-    (run-with-timer 1 nil #'metal-deps-afficher-etat t)))
+(defun metal-deps--msys2-trousseau-retabli (suite)
+  "Conclut une reconstruction réussie, puis appelle SUITE.
+Sans SUITE, enchaîne sur l'installation du serveur epdfinfo si elle
+reste à faire : réparer sans terminer ce que l'utilisateur voulait faire
+le laisse devant un Assistant toujours rouge."
+  (metal-deps--journaliser "MSYS2 : trousseau rétabli")
+  (setq metal-deps-msys2-dernier-echec nil)
+  (when (boundp 'metal-pdf-serveur-signatures-refusees)
+    (setq metal-pdf-serveur-signatures-refusees nil))
+  (cond
+   (suite
+    (message "✅ Trousseau rétabli — reprise de l'opération…")
+    (run-with-timer 0 nil suite))
+   ((and (fboundp 'metal-pdf-serveur-version-installee)
+         (metal-pdf-serveur-version-installee))
+    (message "✅ Trousseau MSYS2 rétabli."))
+   ((fboundp 'metal-pdf-serveur-reparer)
+    (message "✅ Trousseau rétabli — reprise de l'installation du serveur…")
+    (run-with-timer 0 nil #'metal-pdf-serveur-reparer))
+   (t (message "✅ Trousseau rétabli — relancez l'installation du serveur")))
+  (run-with-timer 1 nil #'metal-deps-afficher-etat t))
 
 (defun metal-deps--msys2-init-differee (&rest _)
   "Planifie le premier démarrage de MSYS2 dès que l'installation est finie.
