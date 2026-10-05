@@ -2,6 +2,7 @@
 # name: Centrer
 # key: center
 # --
-::: {.center}
-`(yas-selected-text)`
-:::
+
+\begin{center}
+\texttt{`(yas-selected-text)`}
+\end{center}

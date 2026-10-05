@@ -131,7 +131,8 @@ sans le #+ ni les deux-points."
     (not (member v '("f" "nil" "false" "non" "" "no")))))
 
 (defconst metal-agent--boutons-configurables
-  '("CORRIGER" "REFORMULER" "FONCTION" "EXPLIQUER" "DEMANDE" "ANALYSE")
+  '("CORRIGER" "REFORMULER" "FONCTION" "EXPLIQUER" "DEMANDE" "ANALYSE"
+    "ALGORITHME")
   "Suffixes de métadonnées #+BTN_<ID>: reconnus pour piloter la toolbar.
 Chaque suffixe correspond à un bouton d'action de la toolbar agent.")
 

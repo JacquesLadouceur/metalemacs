@@ -550,7 +550,7 @@ Retourne le buffer du shell."
     (python-shell-send-string
      (format "import os; os.chdir(r'%s')" script-dir))
     ;; Envoyer le buffer
-    (python-shell-send-buffer)))
+    (python-shell-send-buffer t)))
 
 (defun metal-python-sauvegarde-execute ()
   "Sauvegarder et exécuter le buffer Python."

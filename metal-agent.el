@@ -218,6 +218,8 @@ auto-installée : ce sont des consoles de lecture, pas des documents
 ;;; --- Profils (programmeur virtuel TAL) -----------------------------
 
 (require 'metal-agent-profils nil t)
+(autoload 'metal-algo-ouvrir "metal-algo"
+  "Ouvrir le tampon d'algorithme du script Python courant." t)
 
 (defcustom metal-agent-profil-actif 'tronc-commun
   "Profil actuellement actif (symbole `:id' d'un profil de `metal-agent-profils').
@@ -4284,6 +4286,18 @@ sélecteur de profil) restent toujours présents."
               (if prolog-p "Ajouter un prédicat" "Ajouter une fonction")))
             "   ")
          ""))
+     ;; Programmation algorithmique — scripts Python, configurable :algorithme
+     (if (and (derived-mode-p 'python-mode 'python-ts-mode 'python-base-mode)
+              (metal-agent--bouton-visible-p :algorithme))
+         (concat
+          (metal-agent--toolbar-button
+           (metal-toolbar-emoji "🧭")
+           #'metal-algo-ouvrir
+           (metal-agent--bouton-aide
+            :algorithme
+            "Programmation algorithmique : rédiger l'algorithme, puis produire le programme"))
+          "   ")
+       "")
      ;; Demande libre — configurable :demande
      (if (metal-agent--bouton-visible-p :demande)
          (concat
