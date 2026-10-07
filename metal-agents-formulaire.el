@@ -278,7 +278,11 @@ partir de `metal-deps--form-valeurs'."
 
 (defun metal-deps--form-construire-spec ()
   "Construit (ID . PLIST) depuis les champs, ou signale une erreur.
-Les clés absentes/décochées ne sont pas incluses.  Les valeurs des
+Les champs texte vides ne sont pas inclus.  Les cases booléennes, elles,
+sont TOUJOURS écrites, avec t ou nil : une case décochée doit produire
+`:isoler-fichier nil' dans le catalogue, et non une clé absente, que la
+complétion des agents de base (`metal-deps--assurer-agents-base')
+remplirait aussitôt avec la valeur de la graine.  Les valeurs des
 sections repliées sont lues depuis `metal-deps--form-valeurs' : une
 section n'a donc pas besoin d'être dépliée pour que sa saisie compte."
   ;; Synchroniser les widgets vivants (sections ouvertes) vers le stockage
@@ -330,14 +334,11 @@ section n'a donc pas besoin d'être dépliée pour que sa saisie compte."
       (when v (setq spec (plist-put spec :auth-verifier (intern v)))))
     (when (metal-deps--form-val :auth-mode-externe)
       (setq spec (plist-put spec :auth-mode 'externe)))
-    (when (metal-deps--form-val :via-process)
-      (setq spec (plist-put spec :via-process t)))
-    (when (metal-deps--form-val :isoler-fichier)
-      (setq spec (plist-put spec :isoler-fichier t)))
-    (when (metal-deps--form-val :dernier-message)
-      (setq spec (plist-put spec :dernier-message t)))
-    (when (metal-deps--form-val :prompt-via-stdin)
-      (setq spec (plist-put spec :prompt-via-stdin t)))
+    ;; Cases booléennes : valeur explicite, t OU nil (voir la docstring).
+    (dolist (k '(:via-process :isoler-fichier :dernier-message
+                              :prompt-via-stdin))
+      (setq spec (plist-put spec k
+                            (and (metal-deps--form-val k) t))))
     (let ((v (metal-deps--form-val-str :stdin-sentinelle)))
       (when v
         (setq spec (plist-put spec :stdin-sentinelle v))))

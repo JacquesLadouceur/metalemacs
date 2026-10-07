@@ -134,7 +134,10 @@ et pour les clés purement runtime (`:extract-fn', etc.)."
              (spec-cat (and (boundp 'metal-deps-agents-catalogue)
                             (cdr (assq p metal-deps-agents-catalogue))))
              (val-cat (and spec-cat (plist-get spec-cat cle-cat))))
-        (if (and spec-cat (not (null val-cat)))
+        ;; Une clé PRÉSENTE au catalogue l'emporte, même si elle vaut nil :
+        ;; « :isoler-fichier nil » doit désactiver l'isolation, et non
+        ;; laisser reparaître une valeur runtime ou par défaut.
+        (if (and spec-cat (plist-member spec-cat cle-cat))
             val-cat
           ;; Agent hors catalogue, ou clé absente du catalogue : runtime.
           (plist-get entry key))))))
