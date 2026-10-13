@@ -46,6 +46,7 @@
 (setq epg-gpg-program "")
 ;; (setq org-gcal-token-file "~/.emacs.d/org-gcal-token.el")
 
+(setq line-number-display-limit-width 2000000)
 
 ;; Forcer UTF-8 partout
 (set-language-environment "UTF-8")
@@ -1948,6 +1949,13 @@ défaut."
 (let ((file (expand-file-name "metal-agent.el" user-emacs-directory)))
   (when (file-exists-p file)
     (load file)))
+
+;; Comparer deux documents dans le frame de révision de l'agent
+;; (mêmes boutons ⬅️ ➡️ ✅ ↩️ Terminer / Annuler).
+(autoload 'metal-comparer-documents "metal-revision"
+  "Comparer deux fichiers dans le frame de révision MetalEmacs." t)
+(autoload 'metal-comparer-tampons "metal-revision"
+  "Comparer deux tampons dans le frame de révision MetalEmacs." t)
 
 ;; Recharger les préférences APRÈS le chargement des modules.  Les valeurs
 ;; sauvegardées qui concernent des `defcustom' définis dans les modules

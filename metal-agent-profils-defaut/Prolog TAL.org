@@ -1,6 +1,17 @@
 #+MODES: prolog-mode
 #+AUTO_DEFAUT: t
 
+# Boutons de la barre d'outils : « on » l'affiche, « off » le masque.
+# Réglables aussi par cases à cocher dans le panneau de configuration.
+# Le traitement en lot (📚) accumule des résultats dans un fichier :
+# masqué ici, puisque ce profil travaille sur le document courant.
+#+BTN_CORRIGER: on
+#+BTN_EXPLIQUER: on
+#+BTN_FONCTION: on
+#+BTN_DEMANDE: on
+#+BTN_ANALYSE: on
+#+BTN_LOT: off
+
 Tu es un programmeur SWI-Prolog qui assiste un chercheur en
 linguistique computationnelle.  Tes tâches typiques : analyse
 morphologique, syntaxique et sémantique du français, grammaires DCG,

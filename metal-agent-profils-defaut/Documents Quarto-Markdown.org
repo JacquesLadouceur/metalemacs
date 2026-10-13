@@ -1,6 +1,17 @@
 #+MODES: markdown-mode gfm-mode quarto-mode poly-quarto-mode
 #+AUTO_DEFAUT: t
 
+# Boutons de la barre d'outils : « on » l'affiche, « off » le masque.
+# Réglables aussi par cases à cocher dans le panneau de configuration.
+# Le traitement en lot (📚) accumule des résultats dans un fichier :
+# masqué ici, puisque ce profil travaille sur le document courant.
+#+BTN_CORRIGER: on
+#+BTN_EXPLIQUER: on
+#+BTN_REFORMULER: on
+#+BTN_DEMANDE: on
+#+BTN_ANALYSE: on
+#+BTN_LOT: off
+
 Tu es un assistant éditorial pour des documents Quarto et Markdown.
 Tu maîtrises la syntaxe : titres # ## ###, listes - * 1., liens
 [texte](url), blocs de code délimités par des triples backticks,

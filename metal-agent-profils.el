@@ -132,7 +132,7 @@ sans le #+ ni les deux-points."
 
 (defconst metal-agent--boutons-configurables
   '("CORRIGER" "REFORMULER" "FONCTION" "EXPLIQUER" "DEMANDE" "ANALYSE"
-    "ALGORITHME")
+    "ALGORITHME" "LOT")
   "Suffixes de métadonnées #+BTN_<ID>: reconnus pour piloter la toolbar.
 Chaque suffixe correspond à un bouton d'action de la toolbar agent.")
 
@@ -160,6 +160,7 @@ soit (:visible nil) si la valeur désactive le bouton, soit
 
 Convention de valeur :
   « off »/« nil »/« non »/« f »/« false »/« no »/« 0 »/vide → masqué ;
+  « on »/« t »/« oui »/« yes »/« true »/« 1 » → visible, infobulle native ;
   toute autre valeur → visible, l'infobulle devient cette valeur.
 
 Retourne nil si aucune clé BTN_* n'est présente (→ comportement natif)."
@@ -170,13 +171,17 @@ Retourne nil si aucune clé BTN_* n'est présente (→ comportement natif)."
         (when val
           (let* ((v (string-trim val))
                  (masque (member (downcase v)
-                                 '("off" "nil" "non" "f" "false" "no" "" "0"))))
+                                 '("off" "nil" "non" "f" "false" "no" "" "0")))
+                 ;; « on » (et ses variantes) affiche le bouton avec son
+                 ;; infobulle native : c'est la valeur qu'écrit le panneau.
+                 (simple (member (downcase v)
+                                 '("on" "t" "oui" "yes" "true" "1"))))
             (setq boutons
                   (plist-put boutons
                              (intern (concat ":" (downcase id)))
-                             (if masque
-                                 (list :visible nil)
-                               (list :visible t :aide v))))))))
+                             (cond (masque (list :visible nil))
+                                   (simple (list :visible t))
+                                   (t (list :visible t :aide v)))))))))
     boutons))
 
 (defun metal-agent--parser-titre-option (titre)
@@ -458,14 +463,17 @@ pour tous les modes."
       (insert "#   FONCTION    ƒ   ajoute une fonction (fichiers de code)\n")
       (insert "#   DEMANDE     💬  demande en fonction des options\n")
       (insert "#   ANALYSE     🔬  demande libre, hors options\n")
-      (insert "# « off » masque le bouton ; tout autre texte l'affiche\n")
-      (insert "# avec ce texte comme infobulle.\n")
+      (insert "#   LOT         📚  applique une demande à chaque fichier d'un dossier\n")
+      (insert "# « off » masque le bouton, « on » l'affiche ; tout autre\n")
+      (insert "# texte l'affiche avec ce texte comme infobulle.  Réglable\n")
+      (insert "# aussi par cases à cocher dans le panneau de configuration.\n")
       (insert "#+BTN_CORRIGER: off\n")
       (insert "#+BTN_EXPLIQUER: off\n")
       (insert "#+BTN_REFORMULER: off\n")
       (insert "#+BTN_FONCTION: off\n")
       (insert "#+BTN_DEMANDE: off\n")
-      (insert "#+BTN_ANALYSE: Demande libre, hors options\n\n")
+      (insert "#+BTN_ANALYSE: Demande libre, hors options\n")
+      (insert "#+BTN_LOT: off\n\n")
       (insert "# Affichage du résultat : « f » l'affiche en lecture seule\n")
       (insert "# dans le buffer de sortie, « t » le fait réviser dans Ediff.\n")
       (insert "#+EDIFF: f\n\n")

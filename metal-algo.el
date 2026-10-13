@@ -110,7 +110,7 @@ est lancé dans un tampon comint."
 (defvar-local metal-algo--exec-algo nil)
 
 (defvar metal-algo--avis-revision nil
-  "Advice ponctuel posé sur la fin d'Ediff pour le double run.")
+  "Fonction ponctuelle de `metal-revision-fin-functions' pour le double run.")
 
 ;;;; Lecture de la procédure (tampon courant)
 
@@ -431,10 +431,10 @@ Contraintes obligatoires :
 (defun metal-algo--armer-execution-apres-revision (script original exemples)
   "Exécuter SCRIPT à la fin d'Ediff, si des changements ont été appliqués."
   (when metal-algo--avis-revision
-    (advice-remove 'metal-agent--ediff-quit-hook metal-algo--avis-revision))
+    (remove-hook 'metal-revision-fin-functions metal-algo--avis-revision))
   (setq metal-algo--avis-revision
         (lambda (&optional appliquer _texte)
-          (advice-remove 'metal-agent--ediff-quit-hook metal-algo--avis-revision)
+          (remove-hook 'metal-revision-fin-functions metal-algo--avis-revision)
           (setq metal-algo--avis-revision nil)
           (when (and appliquer (buffer-live-p script)
                      (not (string= (with-current-buffer script
@@ -442,7 +442,7 @@ Contraintes obligatoires :
                                       (point-min) (point-max)))
                                    original)))
             (run-at-time 0.5 nil #'metal-algo--executer-script script exemples))))
-  (advice-add 'metal-agent--ediff-quit-hook :after metal-algo--avis-revision))
+  (add-hook 'metal-revision-fin-functions metal-algo--avis-revision))
 
 (defun metal-algo--recevoir (algo executer code raw)
   "Traiter la réponse de l'agent pour l'algorithme ALGO."

@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'diff)
 (require 'metal-toolbar)
+(require 'metal-revision)
 
 ;; Déclarations pour satisfaire le byte-compiler (chargement paresseux).
 (declare-function ansi-color-apply-on-region "ansi-color" (begin end))
@@ -255,6 +256,25 @@ jusqu'au redémarrage de MetalEmacs.")
 Forme : (:id-option t/nil ...).  Les valeurs absentes utilisent le
 défaut du profil.  Réinitialisé quand on change de profil.")
 
+(defvar metal-agent--boutons-actifs nil
+  "Plist des boutons affichés ou masqués (override) sur le profil courant.
+Forme : (:corriger t/nil ...).  Les valeurs absentes suivent les clés
+#+BTN_<ID>: du profil.  Réinitialisé, comme les options, quand on
+change de profil.")
+
+(defconst metal-agent--boutons-du-panneau
+  '((:corriger   "🪄" "Corriger / réviser")
+    (:expliquer  "💡" "Expliquer la sélection")
+    (:reformuler "✍️" "Reformuler (documents texte)")
+    (:fonction   "ƒ"  "Ajouter une fonction ou un prédicat (code)")
+    (:algorithme "🧭" "Programmation algorithmique (Python)")
+    (:demande    "💬" "Demande libre")
+    (:analyse    "🔬" "Analyse libre")
+    (:lot        "📚" "Traitement en lot"))
+  "Boutons d'action de la barre d'outils réglables par profil.
+Chaque entrée : (ID PICTOGRAMME LIBELLÉ).  L'ID correspond à la clé
+#+BTN_<ID>: du fichier .org du profil.")
+
 (defvar metal-agent--instructions-libres ""
   "Instructions supplémentaires libres ajoutées au prompt.
 Saisies via le panneau transient, conservées entre les appels.")
@@ -293,9 +313,18 @@ puis le défaut du profil."
 (defun metal-agent--reinitialiser-options ()
   "Réinitialise les options aux valeurs par défaut du profil actif."
   (interactive)
-  (setq metal-agent--options-actives nil)
+  (setq metal-agent--options-actives nil
+        metal-agent--boutons-actifs nil)
+  (force-mode-line-update t)
   (when (called-interactively-p 'any)
-    (message "Options réinitialisées aux valeurs par défaut du profil.")))
+    (message "Options et boutons réinitialisés aux valeurs par défaut du profil.")))
+
+(defun metal-agent--basculer-bouton (bouton-id)
+  "Afficher ou masquer BOUTON-ID dans la barre d'outils (session courante)."
+  (setq metal-agent--boutons-actifs
+        (plist-put metal-agent--boutons-actifs bouton-id
+                   (not (metal-agent--bouton-visible-p bouton-id))))
+  (force-mode-line-update t))
 
 ;; ─────────────────────────────────────────────────────────────────
 ;; Sauvegarde de l'état des options dans le fichier .org du profil
@@ -321,7 +350,40 @@ Pour chaque option de OPTIONS-DISPONIBLES, remplace le `:: t' ou
         (goto-char (point-min))
         (when (re-search-forward pattern nil t)
           (replace-match (concat "\\1" valeur "\\2") t nil))))
+    (metal-agent--sauvegarder-boutons-dans-tampon)
     (write-region (point-min) (point-max) chemin nil 'silent)))
+
+(defun metal-agent--sauvegarder-boutons-dans-tampon ()
+  "Écrire dans le tampon courant (un fichier .org de profil) l'état des boutons.
+Pour chaque bouton du panneau :
+- une ligne #+BTN_<ID>: existante est conservée si elle dit déjà la
+  bonne chose (son infobulle personnalisée est donc préservée), sinon
+  sa valeur devient « on » ou « off » ;
+- sans ligne, on n'en ajoute une (« off ») que pour masquer le bouton,
+  puisqu'un bouton sans clé est visible par défaut."
+  (let ((masques '("off" "nil" "non" "f" "false" "no" "" "0")))
+    (dolist (entree metal-agent--boutons-du-panneau)
+      (let* ((id (car entree))
+             (cle (upcase (substring (symbol-name id) 1)))
+             (visible (metal-agent--bouton-visible-p id))
+             (re (format "^#\\+BTN_%s:[ \t]*\\(.*\\)$" cle)))
+        (goto-char (point-min))
+        (if (re-search-forward re nil t)
+            (let ((masque (member (downcase (string-trim (match-string 1)))
+                                  masques)))
+              (cond
+               ((and visible masque) (replace-match "on" t t nil 1))
+               ((and (not visible) (not masque))
+                (replace-match "off" t t nil 1))))
+          (unless visible
+            ;; Insérer après la dernière ligne de métadonnées #+CLE:.
+            (goto-char (point-min))
+            (let ((apres (point-min)))
+              (while (re-search-forward "^#\\+[A-Z_]+:.*$" nil t)
+                (setq apres (1+ (match-end 0))))
+              (goto-char (min apres (point-max)))
+              (unless (bolp) (insert "\n"))
+              (insert (format "#+BTN_%s: off\n" cle)))))))))
 
 (defun metal-agent--profil-est-defaut-p (profil)
   "Retourne t si PROFIL provient du dossier des profils par défaut."
@@ -339,7 +401,9 @@ Retourne le nouveau chemin du fichier personnel."
     chemin-perso))
 
 (defun metal-agent-sauvegarder-etat ()
-  "Définir l'état actuel des options comme valeurs par défaut du profil.
+  "Définir l'état actuel des options et des boutons comme défauts du profil.
+Les boutons affichés ou masqués dans le panneau sont écrits dans les
+clés #+BTN_<ID>: du fichier.
 Écrit dans le fichier .org du profil : modifie les `:: t' / `:: f' pour
 que les options actuellement cochées deviennent les valeurs par défaut du
 profil (celles auxquelles « Réinitialiser » revient).  Si le profil est
@@ -370,7 +434,7 @@ intacts."
             ;; éclipse le profil par défaut
             (when (fboundp 'metal-agent-recharger-profils)
               (metal-agent-recharger-profils))
-            (message "Options définies par défaut dans la copie personnelle : %s"
+            (message "Options et boutons définis par défaut dans la copie personnelle : %s"
                      (abbreviate-file-name nouveau-chemin)))
         (message "Opération annulée — le profil livré reste intact.")))
      (t
@@ -381,7 +445,7 @@ intacts."
       ;; défauts encore en mémoire.
       (when (fboundp 'metal-agent-recharger-profils)
         (metal-agent-recharger-profils))
-      (message "Options définies par défaut dans %s"
+      (message "Options et boutons définis par défaut dans %s"
                (abbreviate-file-name chemin))))))
 
 (defun metal-agent--fragments-actifs ()
@@ -586,9 +650,14 @@ BOUTON-ID est un mot-clé, ex. :corriger.  La spec provient de la clé
 
 (defun metal-agent--bouton-visible-p (bouton-id)
   "Retourne t si BOUTON-ID doit être affiché pour le profil actif.
-Sans spec dans le profil → visible (comportement natif)."
-  (let ((spec (metal-agent--bouton-spec bouton-id)))
-    (if spec (plist-get spec :visible) t)))
+Consulte d'abord le choix fait dans le panneau pendant la session
+(`metal-agent--boutons-actifs'), puis le profil.  Sans spec dans le
+profil → visible (comportement natif)."
+  (let ((override (plist-member metal-agent--boutons-actifs bouton-id)))
+    (if override
+        (cadr override)
+      (let ((spec (metal-agent--bouton-spec bouton-id)))
+        (if spec (plist-get spec :visible) t)))))
 
 (defun metal-agent--bouton-aide (bouton-id aide-defaut)
   "Retourne l'infobulle de BOUTON-ID.
@@ -845,6 +914,8 @@ Robustesse :
                            (make-temp-file "metal-agent-reponse-" nil ".txt")))
          (proc nil)
          (timer nil)
+         ;; Délai figé à l'appel : le traitement en lot le lie localement.
+         (delai metal-agent-timeout)
          ;; Nettoyage commun (fichier de réponse + dossier isolé), appelé
          ;; à la fin normale comme au timeout.
          (nettoyer
@@ -948,7 +1019,7 @@ Robustesse :
     ;; après `metal-agent-timeout' secondes, on le tue proprement.
     (setq timer
           (run-at-time
-           metal-agent-timeout nil
+           delai nil
            (lambda ()
              (when (process-live-p proc)
                (metal-agent--progress-stop)
@@ -961,11 +1032,11 @@ Robustesse :
                    (let ((inhibit-read-only t))
                      (goto-char (point-max))
                      (insert (format "\n[délai dépassé : tué après %d s]\n"
-                                     metal-agent-timeout)))))
+                                     delai)))))
                (ignore-errors (kill-process proc))
                (funcall nettoyer)
                (message "⏱ Requête %s interrompue après %d s (délai dépassé). Réessayez ou réduisez la taille du contenu."
-                        label metal-agent-timeout)))))
+                        label delai)))))
     ;; STDIN : pour les providers `:prompt-via-stdin' (Claude, Codex), le
     ;; prompt n'a pas été mis en argument ; on l'envoie sur stdin ici,
     ;; puis on ferme.  Pour les autres (agy…), on ferme simplement stdin
@@ -1382,157 +1453,23 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
               (metal-agent--reviser-via-ediff metal-agent--last-original proposed))))))))))
 
 ;;; --- Révision interactive via ediff (hunk par hunk) -------------------
+;; Le moteur (frame, boutons, application du résultat) est dans
+;; metal-revision.el ; l'agent en est un client.
 
-(defcustom metal-agent-ediff-frame-name "Metal Agent — Révision Ediff"
-  "Nom du frame séparé utilisé pour la révision Ediff."
-  :type 'string
-  :group 'metal-agent)
+(defun metal-agent--reviser-via-ediff (original proposed)
+  "Réviser ORIGINAL contre PROPOSED dans le frame de révision MetalEmacs.
+La cible (tampon entier ou région) est celle mémorisée par la dernière
+requête : `metal-agent--last-target', `-buffer', `-beg', `-end'."
+  (metal-revision-lancer
+   original proposed
+   :cible  metal-agent--last-target-buffer
+   :type   metal-agent--last-target
+   :debut  metal-agent--last-target-beg
+   :fin    metal-agent--last-target-end
+   ;; `metal-agent--texte-p' se fonde sur `metal-agent--source-buffer'.
+   :prose  (metal-agent--texte-p)
+   :apres  (lambda (&rest _) (metal-agent--close-ui-buffers))))
 
-(defcustom metal-agent-ediff-frame-width 180
-  "Largeur du frame séparé utilisé pour la révision Ediff."
-  :type 'integer
-  :group 'metal-agent)
-
-(defcustom metal-agent-ediff-frame-height 48
-  "Hauteur du frame séparé utilisé pour la révision Ediff."
-  :type 'integer
-  :group 'metal-agent)
-
-(defvar metal-agent--ediff-target-buffer nil)
-(defvar metal-agent--ediff-target-kind   nil)
-(defvar metal-agent--ediff-target-beg    nil)
-(defvar metal-agent--ediff-target-end    nil)
-(defvar metal-agent--ediff-avant-buf     nil)
-(defvar metal-agent--ediff-apres-buf     nil)
-(defvar metal-agent--ediff-original-text nil)
-(defvar metal-agent--ediff-window-config nil)
-(defvar metal-agent--ediff-source-frame nil)
-(defvar metal-agent--ediff-frame nil)
-(defvar metal-agent--ediff-control-buffer nil
-  "Buffer de controle Ediff de la session Metal Agent courante.")
-(defvar metal-agent--ediff-originaux-blocs nil
-  "Alist (NUMÉRO-DIFF . TEXTE-ORIGINAL) des blocs A acceptés.
-Permet à `metal-agent-ediff-annuler-bloc' de restaurer la version d'origine
-d'un bloc, indépendamment du mécanisme interne d'Ediff `ediff-restore-diff'
-qui, dans notre configuration, n'enregistre pas de façon fiable la version
-tuée du bloc.")
-(defvar metal-agent--ediff-nettoyage-fait-p nil
-  "Non-nil quand le nettoyage d'une session a déjà eu lieu.
-Évite un double nettoyage quand la fermeture passe à la fois par le bouton
-Terminer/Annuler et par `delete-frame-functions' (bouton X de macOS).")
-(defvar metal-agent--ediff-frame-en-suppression nil
-  "Frame de révision en cours de suppression, le temps du garde.
-Renseigné par `metal-agent--ediff-frame-supprime-garde' pour éviter que
-`metal-agent--ediff-quit-hook' ne tente de re-supprimer ce frame.")
-
-;; ─────────────────────────────────────────────────────────────────
-;; Contraste et raffinage fin des différences (lisibilité de la révision)
-;; ─────────────────────────────────────────────────────────────────
-;; Ediff distingue la RÉGION (tout le hunk, fond doux) du RAFFINAGE FIN
-;; (les mots réellement modifiés, fond saturé).  Par défaut le raffinage
-;; ne s'applique pas aux grandes régions, d'où des paragraphes entiers
-;; colorés en bloc dans lesquels la vraie correction est invisible.  On
-;; force le raffinage et on sature les faces `*-fine-diff-*'.
-
-(defcustom metal-agent-ediff-auto-refine-limit 40000
-  "Taille maximale (en octets) d'une région encore raffinée mot-à-mot.
-Au-delà, Ediff ne surligne plus que la région entière.  Relevée par
-rapport au défaut d'Ediff (~14000) pour couvrir de gros paragraphes."
-  :type 'integer
-  :group 'metal-agent)
-
-(defface metal-agent-ediff-region-A
-  '((((class color) (background dark))  (:background "#3a1f1f" :extend t))
-    (((class color) (background light)) (:background "#ffe2e2" :extend t)))
-  "Région différente dans le buffer AVANT (fond doux)."
-  :group 'metal-agent)
-
-(defface metal-agent-ediff-region-B
-  '((((class color) (background dark))  (:background "#1c361f" :extend t))
-    (((class color) (background light)) (:background "#dcf5dc" :extend t)))
-  "Région différente dans le buffer APRÈS (fond doux)."
-  :group 'metal-agent)
-
-(defface metal-agent-ediff-fine-A
-  '((((class color) (background dark))  (:background "#a31515" :foreground "white" :weight bold))
-    (((class color) (background light)) (:background "#ff9b9b" :foreground "#5a0000" :weight bold)))
-  "Mots réellement modifiés dans le buffer AVANT (fond saturé)."
-  :group 'metal-agent)
-
-(defface metal-agent-ediff-fine-B
-  '((((class color) (background dark))  (:background "#1f8b3a" :foreground "white" :weight bold))
-    (((class color) (background light)) (:background "#86e09a" :foreground "#003d11" :weight bold)))
-  "Mots réellement modifiés dans le buffer APRÈS (fond saturé)."
-  :group 'metal-agent)
-
-(defvar metal-agent--ediff-faces-saved nil
-  "Sauvegarde des faces Ediff originales, restaurées en fin de session.")
-(defvar metal-agent--ediff-refine-saved nil
-  "Sauvegarde de `ediff-auto-refine' / `-limit' originaux.")
-(defcustom metal-agent-ediff-afficher-espaces t
-  "Si non-nil, affiche les espaces insécables et fins de ligne dans la
-révision, pour rendre visibles les changements purement typographiques.
-Les espaces insécables (U+00A0, U+202F) que l'agent ajoute pour la
-typographie française (devant « : ; ? ! ») sont ainsi distinguables d'une
-espace normale, ce qui évite de confondre un changement de fond avec un
-simple changement typographique.  Le texte n'est jamais modifié : les
-insécables proposées par l'agent sont conservées dans le résultat."
-  :type 'boolean
-  :group 'metal-agent)
-
-(defun metal-agent--ediff-appliquer-contraste ()
-  "Rediriger les faces Ediff vers les faces contrastées Metal Agent.
-Sauvegarde les `:inherit' (ou attributs) d'origine pour restauration.
-À appeler une fois la session établie."
-  (unless metal-agent--ediff-faces-saved
-    (setq metal-agent--ediff-faces-saved
-          (mapcar (lambda (f) (cons f (face-attribute f :inherit nil 'default)))
-                  '(ediff-current-diff-A ediff-current-diff-B
-                    ediff-fine-diff-A ediff-fine-diff-B))))
-  (set-face-attribute 'ediff-current-diff-A nil :inherit 'metal-agent-ediff-region-A)
-  (set-face-attribute 'ediff-current-diff-B nil :inherit 'metal-agent-ediff-region-B)
-  (set-face-attribute 'ediff-fine-diff-A nil :inherit 'metal-agent-ediff-fine-A)
-  (set-face-attribute 'ediff-fine-diff-B nil :inherit 'metal-agent-ediff-fine-B)
-  ;; Forcer le raffinage fin systématique, en sauvegardant l'état.
-  (unless metal-agent--ediff-refine-saved
-    (setq metal-agent--ediff-refine-saved
-          (list (and (boundp 'ediff-auto-refine) ediff-auto-refine)
-                (and (boundp 'ediff-auto-refine-limit) ediff-auto-refine-limit))))
-  (setq ediff-auto-refine 'on
-        ediff-auto-refine-limit metal-agent-ediff-auto-refine-limit))
-
-(defun metal-agent--ediff-restaurer-contraste ()
-  "Restaurer les faces et le raffinage Ediff modifiés par Metal Agent."
-  (when metal-agent--ediff-faces-saved
-    (dolist (pair metal-agent--ediff-faces-saved)
-      (set-face-attribute (car pair) nil :inherit (or (cdr pair) 'unspecified)))
-    (setq metal-agent--ediff-faces-saved nil))
-  (when metal-agent--ediff-refine-saved
-    (when (boundp 'ediff-auto-refine)
-      (setq ediff-auto-refine (or (nth 0 metal-agent--ediff-refine-saved) 'on)))
-    (when (boundp 'ediff-auto-refine-limit)
-      (setq ediff-auto-refine-limit (or (nth 1 metal-agent--ediff-refine-saved) 14000)))
-    (setq metal-agent--ediff-refine-saved nil)))
-(defvar metal-agent--ediff-cleanup-en-cours nil
-  "Non-nil pendant le nettoyage manuel de la session Ediff Metal Agent.")
-(defvar-local metal-agent--ediff-temp-buffer-p nil
-  "Non-nil si le buffer est un buffer temporaire Ediff Metal Agent.")
-(defvar metal-agent--ediff-saved-setup-fn nil
-  "Valeur précédente de `ediff-window-setup-function' à restaurer en sortie.")
-(defvar metal-agent--ediff-saved-split-fn nil
-  "Valeur précédente de `ediff-split-window-function' à restaurer en sortie.")
-(defvar metal-agent--ediff-saved-control-frame-parameters nil
-  "Valeur précédente de `ediff-control-frame-parameters' à restaurer en sortie.")
-(defvar metal-agent--ediff-saved-use-long-help-message nil
-  "Valeur précédente de `ediff-use-long-help-message' à restaurer en sortie.")
-(defvar metal-agent--ediff-saved-verbose-help-p nil
-  "Valeur précédente de `ediff-verbose-help-p' à restaurer en sortie.")
-(defvar metal-agent--ediff-saved-diff-options nil
-  "Valeur précédente de `ediff-diff-options' à restaurer en sortie.")
-(defvar metal-agent--ediff-saved-tab-line-mode nil
-  "Valeur précédente de `global-tab-line-mode', si disponible.")
-(defvar metal-agent--ediff-variables-saved-p nil
-  "Non-nil si les variables Ediff globales ont été sauvegardées.")
 
 (defvar metal-agent--progress-timer nil
   "Timer de l'indicateur de progression, ou nil si aucun en cours.")
@@ -1619,765 +1556,6 @@ Retourne la durée écoulée en secondes (entier) depuis le démarrage, ou nil."
       (when metal-agent--progress-debut
         (round (- (float-time) metal-agent--progress-debut)))
     (setq metal-agent--progress-debut nil)))
-
-(defun metal-agent--ediff-make-wide-control-buffer-id-autour (orig-fn &rest args)
-  "Protéger Ediff contre un bug interne de `format' dans son panneau wide.
-
-`ediff-make-wide-control-buffer-id' construit l'identifiant « A: … B: … »
-du panneau de contrôle.  Dans certaines versions d'Ediff, son `format'
-interne lève « Format specifier doesn't match argument type » lorsque le
-panneau est rafraîchi en continu (ce qui est le cas chez nous depuis que
-le panneau natif est AFFICHÉ).  Le bug est interne à Ediff et indépendant
-de l'interface Metal Agent.  On renvoie alors un identifiant neutre plutôt
-que de laisser l'erreur remonter dans le process sentinel du diff."
-  (condition-case nil
-      (apply orig-fn args)
-    (error "   *Ediff Control Panel*")))
-
-(defun metal-agent--ediff-installer-protection-wide ()
-  "Installer la protection contre le bug du panneau de contrôle wide d'Ediff."
-  (when (fboundp 'ediff-make-wide-control-buffer-id)
-    (advice-add 'ediff-make-wide-control-buffer-id
-                :around #'metal-agent--ediff-make-wide-control-buffer-id-autour)))
-
-(defun metal-agent--ediff-retirer-protection-wide ()
-  "Retirer la protection contre le bug du panneau de contrôle wide d'Ediff."
-  (when (fboundp 'ediff-make-wide-control-buffer-id)
-    (advice-remove 'ediff-make-wide-control-buffer-id
-                   #'metal-agent--ediff-make-wide-control-buffer-id-autour)))
-
-(defun metal-agent--ediff-refresh-mode-lines-autour (orig-fn &rest args)
-  "Neutraliser le faux positif « vital Ediff buffer » des mode-lines.
-
-Quand une seconde session démarre alors que les buffers AVANT/APRÈS de la
-précédente survivent (enterrés ; Ediff conserve les variantes par défaut),
-le rafraîchissement des mode-lines d'Ediff repasse sur des restes de
-session dont le panneau est mort et lève à tort
-« You have killed a vital Ediff buffer---you must leave Ediff now! ».
-
-Cette protection, présente dans la conception d'origine de Metal Agent et
-validée empiriquement, ne filtre QUE cette erreur précise ; toute autre
-erreur continue de remonter normalement."
-  (condition-case err
-      (apply orig-fn args)
-    (error
-     (let ((msg (error-message-string err)))
-       (unless (string-match-p "vital Ediff buffer" msg)
-         (signal (car err) (cdr err)))))))
-
-(defun metal-agent--ediff-installer-protection-refresh ()
-  "Installer la protection contre les faux positifs de refresh Ediff."
-  (when (fboundp 'ediff-refresh-mode-lines)
-    (advice-add 'ediff-refresh-mode-lines
-                :around #'metal-agent--ediff-refresh-mode-lines-autour)))
-
-(defun metal-agent--ediff-retirer-protection-refresh ()
-  "Retirer la protection contre les faux positifs de refresh Ediff."
-  (when (fboundp 'ediff-refresh-mode-lines)
-    (advice-remove 'ediff-refresh-mode-lines
-                   #'metal-agent--ediff-refresh-mode-lines-autour)))
-
-(defun metal-agent--ediff-tuer-buffers-temporaires ()
-  "Nettoyer doucement les anciens buffers temporaires Metal Agent.
-
-On évite ici TOUT `kill-buffer' et toute manipulation des buffers ou
-panneaux de contrôle Ediff : Ediff veut être seul maître de ses buffers,
-et toute intervention programmée (kill-buffer, ediff-cleanup-mess hors
-session) déclenche « You have killed a vital Ediff buffer ».  On se
-contente donc d'enterrer nos propres buffers temporaires AVANT/APRÈS d'une
-session antérieure ; Ediff nettoie les siens à la fermeture normale via
-`ediff-quit'."
-  (dolist (buf (buffer-list))
-    (let ((name (buffer-name buf)))
-      (when (and (buffer-live-p buf)
-                 (not (eq buf metal-agent--ediff-avant-buf))
-                 (not (eq buf metal-agent--ediff-apres-buf))
-                 (or (buffer-local-value 'metal-agent--ediff-temp-buffer-p buf)
-                     (and name
-                          (string-match-p
-                           "\`\*Metal Agent: \(AVANT\|APRÈS\)\*"
-                           name))))
-        (ignore-errors (bury-buffer buf))))))
-
-(defun metal-agent--ediff-commande-native (commande)
-  "Exécuter COMMANDE Ediff depuis le buffer de contrôle natif.
-On bascule dans le buffer de contrôle avant l'appel : c'est le contexte
-qu'Ediff exige (`ediff-barf-if-not-control-buffer').  On laisse Ediff
-gérer son propre état — bornes, marqueurs, raffinage — sans intervention.
-Aucun ajustement manuel de `ediff-current-difference' : c'est ce
-bidouillage qui causait `number-or-marker-p, nil'."
-  (let ((control metal-agent--ediff-control-buffer))
-    (if (not (buffer-live-p control))
-        (message "Aucune session Ediff active.")
-      (let ((win (get-buffer-window control t)))
-        (if win
-            (with-selected-window win
-              (call-interactively commande))
-          ;; Le panneau n'est pas affiché dans une fenêtre : on exécute
-          ;; tout de même la commande dans le buffer de contrôle.
-          (with-current-buffer control
-            (call-interactively commande)))))))
-
-(defun metal-agent-ediff-suivant ()
-  "Aller à la différence suivante (commande native `ediff-next-difference')."
-  (interactive)
-  (metal-agent--ediff-commande-native #'ediff-next-difference))
-
-(defun metal-agent-ediff-precedent ()
-  "Aller à la différence précédente (commande native `ediff-previous-difference')."
-  (interactive)
-  (metal-agent--ediff-commande-native #'ediff-previous-difference))
-
-(defun metal-agent--ediff-bornes-bloc-A ()
-  "Retourne (DEBUT . FIN) du bloc courant dans le buffer A, ou nil.
-À appeler depuis le buffer de contrôle Ediff."
-  (let ((n ediff-current-difference))
-    (when (and n (>= n 0))
-      (let ((beg (ediff-get-diff-posn 'A 'beg n))
-            (end (ediff-get-diff-posn 'A 'end n)))
-        (when (and beg end)
-          (cons beg end))))))
-
-(defun metal-agent-ediff-accepter ()
-  "Accepter la modification courante : copie B (APRÈS) vers A (AVANT).
-Avant la copie, mémorise le texte d'origine du bloc dans A afin de pouvoir
-l'annuler ensuite (`metal-agent-ediff-annuler-bloc'), sans dépendre du
-mécanisme interne d'Ediff."
-  (interactive)
-  (let ((control metal-agent--ediff-control-buffer))
-    (when (buffer-live-p control)
-      (with-current-buffer control
-        (let ((n ediff-current-difference)
-              (bornes (metal-agent--ediff-bornes-bloc-A)))
-          (when (and n (>= n 0) bornes
-                     ;; Ne pas écraser un original déjà mémorisé (si on
-                     ;; ré-accepte après avoir annulé, on garde le tout
-                     ;; premier original).
-                     (not (assq n metal-agent--ediff-originaux-blocs)))
-            (let ((texte (with-current-buffer ediff-buffer-A
-                           (buffer-substring-no-properties
-                            (car bornes) (cdr bornes)))))
-              (push (cons n texte) metal-agent--ediff-originaux-blocs)))))))
-  (metal-agent--ediff-commande-native #'ediff-copy-B-to-A))
-
-(defun metal-agent-ediff-annuler-bloc ()
-  "Annuler l'acceptation du bloc courant : restaurer sa version d'origine.
-Réinsère dans A le texte d'origine mémorisé lors de l'acceptation
-(`metal-agent-ediff-accepter').  Fonctionne à tout moment, y compris
-après être passé à d'autres blocs puis revenu.  Si le bloc n'a pas été
-accepté, informe l'utilisateur sans rien changer."
-  (interactive)
-  (let ((control metal-agent--ediff-control-buffer))
-    (if (not (buffer-live-p control))
-        (message "Aucune session Ediff active.")
-      (with-current-buffer control
-        (let* ((n ediff-current-difference)
-               (entree (and n (assq n metal-agent--ediff-originaux-blocs))))
-          (cond
-           ((not (and n (>= n 0)))
-            (message "Aucun bloc courant."))
-           ((null entree)
-            (message "Ce bloc n'a pas été accepté — rien à annuler."))
-           (t
-            (let ((bornes (metal-agent--ediff-bornes-bloc-A)))
-              (if (not bornes)
-                  (message "Bornes du bloc introuvables.")
-                (with-current-buffer ediff-buffer-A
-                  (let ((inhibit-read-only t))
-                    (goto-char (car bornes))
-                    (delete-region (car bornes) (cdr bornes))
-                    (insert (cdr entree))))
-                ;; Oublier l'original : le bloc est revenu à son état initial.
-                (setq metal-agent--ediff-originaux-blocs
-                      (assq-delete-all n metal-agent--ediff-originaux-blocs))
-                ;; Recalculer les différences pour rafraîchir l'affichage.
-                (ignore-errors (ediff-recenter))
-                (message "Correction annulée pour ce bloc."))))))))))
-
-(defun metal-agent--ediff-quit-natif-sans-confirmation (control)
-  "Clore la session Ediff du buffer CONTROL via `ediff-quit', sans confirmer.
-On neutralise la question « quitter ? » en forçant les fonctions de
-confirmation à répondre oui le temps de l'appel.  Plus robuste que
-d'appeler une fonction interne d'Ediff dont la signature varie selon les
-versions.
-
-Sous Windows, un clic sur un bouton de header-line fait de
-`last-nonmenu-event' un événement souris : toute question posée pendant la
-fermeture passerait alors par une boîte de dialogue native, qui peut
-s'ouvrir derrière le frame et figer Emacs en boucle modale.  On force donc
-le minibuffer (`use-dialog-box' nil, `last-nonmenu-event' t)."
-  (when (buffer-live-p control)
-    (with-current-buffer control
-      (let ((use-dialog-box nil)
-            (last-nonmenu-event t))
-        (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
-                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
-          (with-demoted-errors "Metal Agent (ediff-quit) : %S"
-            (ediff-quit nil)))))))
-
-(defun metal-agent-ediff-quitter ()
-  "Terminer la session Ediff et appliquer les corrections acceptées.
-On capture d'abord le résultat (le buffer AVANT), PUIS on clôt la session
-Ediff native — car `ediff-cleanup-mess' tue les buffers A/B — et enfin on
-applique le résultat capturé via le hook (APPLIQUER non-nil).  C'est le
-seul chemin qui applique."
-  (interactive)
-  (let ((control metal-agent--ediff-control-buffer)
-        (use-dialog-box nil)
-        (last-nonmenu-event t))
-    (if (not (buffer-live-p control))
-        (progn
-          ;; Session à moitié fermée (erreur antérieure) : on nettoie quand
-          ;; même, pour ne pas laisser le frame et les variables en plan.
-          (when (or metal-agent--ediff-frame metal-agent--ediff-target-buffer)
-            (metal-agent--ediff-quit-hook nil))
-          (message "Aucune session Ediff active."))
-      ;; 1. Capturer le résultat AVANT toute fermeture native.
-      (let ((resultat (metal-agent--ediff-texte-buffer
-                       metal-agent--ediff-avant-buf))
-            (termine nil))
-        (unwind-protect
-            (progn
-              ;; 2. Détacher notre hook, clore la session Ediff nativement.
-              (with-current-buffer control
-                (remove-hook 'ediff-quit-hook #'metal-agent--ediff-quit-hook t))
-              (metal-agent--ediff-quit-natif-sans-confirmation control)
-              ;; 3. Appliquer le résultat capturé et nettoyer.
-              (metal-agent--ediff-quit-hook t resultat)
-              (setq termine t))
-          ;; Erreur ou C-g en cours de route : le hook n'a pas pu finir.
-          ;; On force le nettoyage (sans réappliquer) pour rendre la main.
-          (unless termine
-            (setq metal-agent--ediff-nettoyage-fait-p nil)
-            (metal-agent--ediff-quit-hook nil)))))))
-
-(defun metal-agent-ediff-annuler ()
-  "Fermer la révision sans appliquer aucune correction.
-On clôt la session Ediff native puis on nettoie en appelant le hook avec
-APPLIQUER nil : la cible reste inchangée.  C'est le pendant explicite du
-bouton X de macOS, mais déclenché depuis la barre."
-  (interactive)
-  (let ((control metal-agent--ediff-control-buffer))
-    (if (not (buffer-live-p control))
-        (message "Aucune session Ediff active.")
-      (with-current-buffer control
-        (remove-hook 'ediff-quit-hook #'metal-agent--ediff-quit-hook t))
-      (metal-agent--ediff-quit-natif-sans-confirmation control)
-      (metal-agent--ediff-quit-hook nil))))
-
-(defun metal-agent--ediff-button (label command help)
-  "Créer un bouton de header-line Ediff via `metal-toolbar-button'.
-Conserve le fond permanent (`mode-line-highlight') propre aux boutons
-Ediff et câble header-line + mode-line.  COMMAND est enveloppée pour
-rester appelable interactivement."
-  (let* ((cmd (lambda ()
-                (interactive)
-                (call-interactively command)))
-         (bouton (metal-toolbar-button label help cmd
-                                       '(header-line mode-line))))
-    ;; Ajouter le fond permanent caractéristique des boutons Ediff,
-    ;; sans écraser les autres propriétés posées par metal-toolbar-button.
-    (propertize bouton 'face 'mode-line-highlight)))
-
-(defun metal-agent--ediff-alignement-code ()
-  "Retourner un préfixe de header-line aligné sur le début du code.
-
-On aligne le libellé après la zone des numéros de ligne, avec un petit
-écart supplémentaire pour que ORIGINAL et CORRECTION(S) commencent au
-même endroit visuel que le code Python."
-  (let* ((cols (cond
-                ((fboundp 'line-number-display-width)
-                 (line-number-display-width))
-                ((and (boundp 'display-line-numbers-width)
-                      (integerp display-line-numbers-width))
-                 display-line-numbers-width)
-                (t 3)))
-         ;; largeur des numéros + séparateur + petit décalage visuel
-         (offset (+ cols 2)))
-    (propertize " " 'display `(space :align-to ,offset))))
-
-(defun metal-agent--ediff-apres-header-line ()
-  "Header-line compacte du buffer APRÈS avec actions Ediff en icônes."
-  (concat
-   (metal-agent--ediff-alignement-code)
-   "CORRECTION(S)  "
-   (metal-agent--ediff-button
-    (metal-toolbar-emoji "⬅️" :color "#7f8c8d")
-    #'metal-agent-ediff-precedent "Différence précédente")
-   " "
-   (metal-agent--ediff-button
-    (metal-toolbar-emoji "➡️" :color "#7f8c8d")
-    #'metal-agent-ediff-suivant "Différence suivante")
-   " "
-   (metal-agent--ediff-button
-    (metal-toolbar-emoji "✅" :color "#27ae60")
-    #'metal-agent-ediff-accepter "Accepter cette correction")
-   " "
-   (metal-agent--ediff-button
-    (metal-toolbar-emoji "↩️" :color "#e67e22")
-    #'metal-agent-ediff-annuler-bloc
-    "Annuler cette correction (restaurer l'original de ce bloc)")
-   " "
-   (metal-agent--ediff-button
-    (concat (metal-toolbar-emoji "✔️" :color "#27ae60") " Terminer")
-    #'metal-agent-ediff-quitter
-    "Terminer et appliquer les corrections acceptées")
-   " "
-   (metal-agent--ediff-button
-    (concat (metal-toolbar-emoji "🚫" :color "#c0392b") " Annuler")
-    #'metal-agent-ediff-annuler
-    "Fermer sans appliquer aucune correction")
-   "  "))
-
-(defun metal-agent--ediff-frame-supprime-garde (frame)
-  "Garde appelé via `delete-frame-functions' quand FRAME est supprimé.
-Si FRAME est le frame de révision Metal Agent (fermé par le bouton X de
-macOS, `C-x 5 0', etc.), on annule proprement la session : nettoyage,
-restauration des header-lines et des variables Ediff, SANS appliquer la
-moindre correction dans la cible."
-  (when (and (eq frame metal-agent--ediff-frame)
-             (not metal-agent--ediff-nettoyage-fait-p))
-    (let ((metal-agent--ediff-frame-en-suppression frame)
-          (control metal-agent--ediff-control-buffer))
-      ;; On NE rappelle PAS `ediff-quit' ici : le frame est déjà en cours de
-      ;; suppression (nous sommes dans `delete-frame-functions'), et toucher
-      ;; aux fenêtres/frame à ce moment est instable.  On se contente de
-      ;; demander à Ediff de nettoyer ses buffers internes, puis on annule.
-      (when (buffer-live-p control)
-        (with-current-buffer control
-          (remove-hook 'ediff-quit-hook #'metal-agent--ediff-quit-hook t)
-          (when (fboundp 'ediff-cleanup-mess)
-            (ignore-errors (ediff-cleanup-mess)))))
-      ;; Annulation : on n'applique rien (appliquer = nil).
-      (ignore-errors (metal-agent--ediff-quit-hook nil)))))
-
-(defun metal-agent--ediff-creer-frame ()
-  "Créer et sélectionner le frame séparé de révision Ediff.
-On greffe un garde sur `delete-frame-functions' afin qu'une fermeture par
-le bouton X de macOS annule la session proprement (header-lines et
-variables restaurées) au lieu de laisser Emacs dans un état incohérent."
-  (let ((frame (make-frame `((name . ,metal-agent-ediff-frame-name)
-                             (width . ,metal-agent-ediff-frame-width)
-                             (height . ,metal-agent-ediff-frame-height)
-                             (minibuffer . t)))))
-    (select-frame-set-input-focus frame)
-    (delete-other-windows)
-    (add-hook 'delete-frame-functions
-              #'metal-agent--ediff-frame-supprime-garde)
-    frame))
-
-(defun metal-agent--ediff-preparer-buffer (buffer texte mode)
-  "Remplir BUFFER avec TEXTE et activer MODE si possible."
-  (with-current-buffer buffer
-    (let ((inhibit-read-only t))
-      (erase-buffer)
-      (insert texte)
-      (goto-char (point-min)))
-    (when (and mode (fboundp mode))
-      (ignore-errors (funcall mode)))
-    ;; Dans le frame de révision, on veut uniquement deux fenêtres :
-    ;; AVANT à gauche et APRÈS à droite.  Si `tab-line-mode' est actif
-    ;; globalement, il peut afficher des onglets de buffers inutiles
-    ;; (*Python*, fichier source, doublons, etc.).  On masque donc la
-    ;; tab-line dans les buffers temporaires de révision.
-    (setq-local tab-line-format nil)
-    (setq-local metal-agent--ediff-temp-buffer-p t)
-    ;; Rendre visibles les espaces insécables et les fins de ligne, afin de
-    ;; repérer un changement purement typographique (insécable devant « : »).
-    (when metal-agent-ediff-afficher-espaces
-      (setq-local whitespace-style '(face nbsp trailing tabs))
-      (ignore-errors (whitespace-mode 1)))
-    buffer))
-
-(defun metal-agent--reviser-via-ediff (original proposed)
-  "Lancer Ediff dans un frame séparé pour réviser ORIGINAL vs PROPOSED.
-Le code AVANT est affiché à gauche dans un buffer temporaire.
-Le code APRÈS proposé est affiché à droite dans un buffer temporaire.
-Les boutons de navigation et de validation sont affichés dans la
-header-line du buffer APRÈS.
-
-À la fermeture d'Ediff, seul le contenu du buffer AVANT révisé est
-réinjecté dans le fichier ou dans la région cible. Ainsi, Ediff ne
-travaille jamais directement sur le buffer original, ce qui évite les
-conflits avec les fenêtres déjà ouvertes, les buffers REPL, Shackle,
-Treemacs et les fenêtres dédiées."
-  (metal-agent--ediff-tuer-buffers-temporaires)
-  (require 'ediff)
-  (metal-agent--ediff-installer-protection-wide)
-  (metal-agent--ediff-installer-protection-refresh)
-  (setq metal-agent--ediff-saved-setup-fn ediff-window-setup-function
-        metal-agent--ediff-saved-split-fn ediff-split-window-function
-        metal-agent--ediff-saved-control-frame-parameters ediff-control-frame-parameters
-        metal-agent--ediff-saved-use-long-help-message (and (boundp 'ediff-use-long-help-message)
-                                                            ediff-use-long-help-message)
-        metal-agent--ediff-saved-verbose-help-p (and (boundp 'ediff-verbose-help-p)
-                                                     ediff-verbose-help-p)
-        metal-agent--ediff-saved-diff-options (and (boundp 'ediff-diff-options)
-                                                   ediff-diff-options)
-        metal-agent--ediff-saved-tab-line-mode (and (boundp 'global-tab-line-mode)
-                                                    global-tab-line-mode)
-        metal-agent--ediff-variables-saved-p t
-        ;; Ediff reste dans le frame courant, qui sera notre frame séparé.
-        ediff-window-setup-function #'ediff-setup-windows-plain
-        ;; A gauche / B droite.
-        ediff-split-window-function #'split-window-horizontally
-        ;; Le panneau de contrôle natif est désormais VISIBLE dans une bande
-        ;; basse du frame (cf. `metal-agent--ediff-imposer-layout').  On garde
-        ;; l'aide courte pour que le panneau affiche les raccourcis n/p/a/b/q.
-        ediff-use-long-help-message nil
-        ediff-verbose-help-p nil
-        ;; Pour la prose, on ignore les différences d'espaces (-w) afin de
-        ;; ne pas signaler des modifications purement typographiques. Pour le
-        ;; code on garde la comparaison stricte (chaîne vide), l'indentation
-        ;; — Python notamment — étant sémantiquement significative.
-        ;; `metal-agent--texte-p' se fonde sur `metal-agent--source-buffer'
-        ;; via son propre `with-current-buffer' : le classement est donc
-        ;; correct ici quel que soit le buffer courant au point d'appel.
-        ediff-diff-options (if (metal-agent--texte-p) "-w" ""))
-  (let* ((target metal-agent--last-target-buffer)
-         (kind   metal-agent--last-target)
-         (mode (and (buffer-live-p target)
-                    (with-current-buffer target major-mode)))
-         (source-frame (selected-frame))
-         (source-config (current-window-configuration))
-         (avant (generate-new-buffer " *metal-agent-original*"))
-         (apres (generate-new-buffer " *metal-agent-corrections*"))
-         (frame (metal-agent--ediff-creer-frame)))
-    ;; Évite que les onglets de buffers du frame source polluent le frame Ediff.
-    ;; On restaure l'état global à la sortie.
-    (when (and (boundp 'global-tab-line-mode) global-tab-line-mode)
-      (global-tab-line-mode -1))
-    (metal-agent--ediff-preparer-buffer avant original mode)
-    (metal-agent--ediff-preparer-buffer apres proposed mode)
-    (with-current-buffer apres
-      (setq-local header-line-format '(:eval (metal-agent--ediff-apres-header-line))))
-    ;; Réarmer le drapeau : s'il était resté à t (C-g pendant un nettoyage
-    ;; antérieur), le hook de fermeture de cette session ne ferait rien.
-    (setq metal-agent--ediff-nettoyage-fait-p nil)
-    (setq metal-agent--ediff-target-buffer target
-          metal-agent--ediff-target-kind   kind
-          metal-agent--ediff-target-beg    metal-agent--last-target-beg
-          metal-agent--ediff-target-end    metal-agent--last-target-end
-          metal-agent--ediff-avant-buf     avant
-          metal-agent--ediff-apres-buf     apres
-          metal-agent--ediff-original-text original
-          metal-agent--ediff-source-frame  source-frame
-          metal-agent--ediff-frame         frame
-          metal-agent--ediff-window-config source-config)
-    ;; Important : le frame Ediff ne contient qu'une fenêtre avant l'appel.
-    ;; `ediff-setup-windows-plain' crée ensuite lui-même la disposition A/B.
-    (switch-to-buffer avant)
-    (ediff-buffers avant apres '(metal-agent--ediff-setup-hook))))
-
-(defcustom metal-agent-ediff-control-height 4
-  "Hauteur en lignes de la bande du panneau de contrôle Ediff natif.
-Affiché sous la fenêtre AVANT, ce panneau reste pilotable au clavier
-(n/p/a/b/q) en complément des boutons de la header-line APRÈS."
-  :type 'integer
-  :group 'metal-agent)
-
-(defvar-local metal-agent--ediff-header-style-applique-p nil
-  "Non-nil si le style de header-line a déjà été appliqué dans ce buffer.
-`metal-agent--ediff-imposer-layout' est rejouée (run-at-time), et
-`metal-toolbar-setup-header-line-style' empile un `face-remap' à chaque
-appel.  Ce drapeau garantit une seule application par buffer.")
-
-(defun metal-agent--ediff-styliser-header-line ()
-  "Appliquer le style de header-line MetalEmacs au buffer courant, une fois.
-S'appuie sur `metal-toolbar-setup-header-line-style' pour éclaircir le
-fond, afin que la barre de boutons Ediff soit cohérente avec les autres
-barres d'outils MetalEmacs."
-  (unless metal-agent--ediff-header-style-applique-p
-    (when (fboundp 'metal-toolbar-setup-header-line-style)
-      (ignore-errors (metal-toolbar-setup-header-line-style))
-      (setq metal-agent--ediff-header-style-applique-p t))))
-
-(defun metal-agent--ediff-imposer-layout ()
-  "Imposer le layout visuel Metal Agent dans le frame Ediff.
-
-Cette fonction ne tue pas la session Ediff.  Elle reconstruit le frame de
-revision avec trois fenetres : AVANT a gauche, APRES a droite, et le
-panneau de controle Ediff natif dans une bande basse a gauche."
-  (when (and (frame-live-p metal-agent--ediff-frame)
-             (buffer-live-p metal-agent--ediff-avant-buf)
-             (buffer-live-p metal-agent--ediff-apres-buf))
-    (select-frame-set-input-focus metal-agent--ediff-frame)
-    (let ((ignore-window-parameters t)
-          (window-min-height 1)
-          (window-min-width 1))
-      ;; Tres important : le *Ediff Control Panel* est souvent affiche dans
-      ;; une fenetre dediee.  Il faut enlever la dedication AVANT tout appel a
-      ;; `delete-other-windows' ou `set-window-buffer', sinon Emacs signale :
-      ;; "Window is dedicated to '*Ediff Control Panel*'".
-      (walk-windows
-       (lambda (win)
-         (set-window-dedicated-p win nil))
-       nil metal-agent--ediff-frame)
-      ;; Choisir explicitement une fenetre du frame Ediff, puis reconstruire
-      ;; le frame a partir de cette fenetre.
-      (let ((base (frame-selected-window metal-agent--ediff-frame)))
-        (select-window base)
-        (delete-other-windows base)
-        (set-window-dedicated-p base nil)
-        (set-window-buffer base metal-agent--ediff-avant-buf)
-        (let ((droite (split-window base nil 'right)))
-          (set-window-dedicated-p droite nil)
-          (set-window-buffer droite metal-agent--ediff-apres-buf)
-          (with-current-buffer metal-agent--ediff-avant-buf
-            (setq-local header-line-format '(:eval (concat (metal-agent--ediff-alignement-code) "ORIGINAL")))
-            (setq-local tab-line-format nil)
-            (metal-agent--ediff-styliser-header-line))
-          (with-current-buffer metal-agent--ediff-apres-buf
-            (setq-local header-line-format '(:eval (metal-agent--ediff-apres-header-line)))
-            (setq-local tab-line-format nil)
-            (metal-agent--ediff-styliser-header-line))
-          ;; Bande basse pour le panneau de controle Ediff natif : on le rend
-          ;; VISIBLE plutot que de le cacher.  Il reste pilotable au clavier
-          ;; (n/p/a/b/q) en complement des boutons de la header-line.  C'est
-          ;; le panneau natif qui pilote la session, gage de robustesse.
-          (when (buffer-live-p metal-agent--ediff-control-buffer)
-            (let ((bas (split-window base
-                                     (- (window-total-height base)
-                                        metal-agent-ediff-control-height)
-                                     'below)))
-              (set-window-dedicated-p bas nil)
-              (set-window-buffer bas metal-agent--ediff-control-buffer)
-              (set-window-dedicated-p bas t)))
-          (select-window droite))))))
-
-(defun metal-agent--ediff-setup-hook ()
-  "Finaliser l'interface apres la creation officielle des fenetres Ediff.
-
-On laisse d'abord Ediff initialiser completement sa session, puis on impose
-le layout visuel souhaite : uniquement AVANT a gauche et APRES a droite dans
-le frame separe.  Le buffer de controle Ediff reste vivant, mais il n'est
-pas affiche ; les commandes utiles sont dans la header-line du buffer APRES."
-  ;; Ce hook est execute depuis le buffer de controle Ediff.  On le garde
-  ;; explicitement, car les clics dans la header-line du buffer APRES ne
-  ;; voient pas toujours la variable globale `ediff-control-buffer'.
-  (setq metal-agent--ediff-control-buffer (current-buffer))
-  ;; Nouvelle session : oublier les originaux de blocs d'une session passée.
-  (setq metal-agent--ediff-originaux-blocs nil)
-  (message nil)
-  (add-hook 'ediff-quit-hook #'metal-agent--ediff-quit-hook nil t)
-  ;; Contraste + raffinage fin : rediriger les faces vers les versions
-  ;; saturées et forcer le calcul mot-à-mot pour chaque hunk affiché, afin
-  ;; que la correction réelle ressorte au lieu d'un paragraphe coloré en bloc.
-  (metal-agent--ediff-appliquer-contraste)
-  (add-hook 'ediff-select-hook #'ediff-make-fine-diffs nil t)
-  (ignore-errors (ediff-make-fine-diffs))
-  ;; Ediff reorganise parfois les fenetres juste apres son hook de setup.
-  ;; On applique donc le nettoyage une premiere fois tout de suite, puis une
-  ;; deuxieme fois au prochain tour de boucle, ce qui evite les buffers
-  ;; parasites (*Python*, *Messages*, fichier source, doublons, Control Panel).
-  (ignore-errors (metal-agent--ediff-imposer-layout))
-  (run-at-time 0.05 nil #'metal-agent--ediff-imposer-layout))
-
-(defun metal-agent--ediff-restaurer-variables ()
-  "Restaurer les variables Ediff modifiées par Metal Agent."
-  (metal-agent--ediff-retirer-protection-wide)
-  (metal-agent--ediff-retirer-protection-refresh)
-  (metal-agent--ediff-restaurer-contraste)
-  (when metal-agent--ediff-variables-saved-p
-    (setq ediff-window-setup-function metal-agent--ediff-saved-setup-fn
-          ediff-split-window-function metal-agent--ediff-saved-split-fn
-          ediff-control-frame-parameters metal-agent--ediff-saved-control-frame-parameters
-          ediff-use-long-help-message metal-agent--ediff-saved-use-long-help-message
-          ediff-verbose-help-p metal-agent--ediff-saved-verbose-help-p
-          ediff-diff-options metal-agent--ediff-saved-diff-options
-          metal-agent--ediff-saved-setup-fn nil
-          metal-agent--ediff-saved-split-fn nil
-          metal-agent--ediff-saved-control-frame-parameters nil
-          metal-agent--ediff-saved-use-long-help-message nil
-          metal-agent--ediff-saved-verbose-help-p nil
-          metal-agent--ediff-saved-diff-options nil
-          metal-agent--ediff-variables-saved-p nil)
-    (when (and (boundp 'global-tab-line-mode)
-               metal-agent--ediff-saved-tab-line-mode
-               (not global-tab-line-mode))
-      (global-tab-line-mode 1))
-    (setq metal-agent--ediff-saved-tab-line-mode nil)))
-
-(defun metal-agent--ediff-texte-buffer (buffer)
-  "Retourner le texte complet de BUFFER, sans propriétés."
-  (when (buffer-live-p buffer)
-    (with-current-buffer buffer
-      (buffer-substring-no-properties (point-min) (point-max)))))
-
-;; Sous Windows, la suppression différée du frame de révision pouvait
-;; échouer en silence (ancien `ignore-errors') après « Annuler » : le frame
-;; survivait et masquait le frame principal, avec le buffer ORIGINAL affiché.
-(defun metal-agent--ediff-supprimer-frame (frame buffers &optional essai)
-  "Supprimer FRAME de révision, puis tuer les BUFFERS temporaires.
-Réessaie deux fois (à 0,2 s d'intervalle) si la suppression échoue — sous
-Windows, un clic de header-line peut encore être en traitement.  En dernier
-recours, rend FRAME invisible pour qu'il ne masque jamais le frame
-principal.  Les erreurs sont journalisées dans *Messages*, pas avalées."
-  (let ((essai (or essai 0)))
-    (when (frame-live-p frame)
-      (condition-case err
-          (delete-frame frame t)
-        (error (message "Metal Agent (suppression du frame, essai %d) : %S"
-                        essai err))))
-    (cond
-     ((and (frame-live-p frame) (< essai 2))
-      (run-at-time 0.2 nil #'metal-agent--ediff-supprimer-frame
-                   frame buffers (1+ essai)))
-     ((frame-live-p frame)
-      (message "Metal Agent : frame de révision non supprimé, masqué.")
-      (ignore-errors (make-frame-invisible frame t)))
-     (t
-      ;; Frame disparu et session Ediff close : les buffers temporaires
-      ;; peuvent être tués sans risque.
-      (dolist (b buffers)
-        (when (buffer-live-p b)
-          (with-current-buffer b (set-buffer-modified-p nil))
-          (let ((kill-buffer-query-functions nil))
-            (kill-buffer b))))))))
-
-(defun metal-agent--ediff-quit-hook (&optional appliquer texte-resultat)
-  "Nettoyer après Ediff et, si APPLIQUER est non-nil, appliquer le résultat.
-Le buffer AVANT temporaire contient le résultat final de la révision.
-Quand APPLIQUER est non-nil (bouton « Terminer »), ce résultat est appliqué
-au buffer cible complet ou à la région cible.  Quand APPLIQUER est nil
-(bouton « Annuler » ou bouton X de macOS), on annule sans rien appliquer :
-seul le nettoyage a lieu.
-
-TEXTE-RESULTAT, s'il est fourni, est le contenu du buffer AVANT capturé
-AVANT la fermeture native d'Ediff.  C'est indispensable : `ediff-quit'
-natif appelle `ediff-cleanup-mess', qui TUE les buffers A/B.  Lire le
-buffer AVANT après coup donnerait nil.  Le bouton « Terminer » capture
-donc le texte en amont et le passe ici.
-
-Idempotent : un second appel (p. ex. `delete-frame-functions' après
-`ediff-quit') ne refait pas le travail."
-  (unless metal-agent--ediff-nettoyage-fait-p
-    (setq metal-agent--ediff-nettoyage-fait-p t)
-    (let* ((avant   metal-agent--ediff-avant-buf)
-           (target  metal-agent--ediff-target-buffer)
-           (kind    metal-agent--ediff-target-kind)
-           (beg     metal-agent--ediff-target-beg)
-           (end     metal-agent--ediff-target-end)
-           (orig    metal-agent--ediff-original-text)
-           (config  metal-agent--ediff-window-config)
-           (source-frame metal-agent--ediff-source-frame)
-           (ediff-frame  metal-agent--ediff-frame)
-           ;; Priorité au texte pré-capturé ; repli sur le buffer s'il vit
-           ;; encore (cas où aucune fermeture native n'a précédé).
-           (nouveau (or texte-resultat
-                        (metal-agent--ediff-texte-buffer avant))))
-      (unwind-protect
-      (condition-case err
-      (if (not appliquer)
-          (message "Révision annulée (frame fermé) — aucune modification appliquée.")
-        (pcase kind
-          ('buffer
-           (cond
-            ((not (buffer-live-p target))
-             (message "Révision annulée — buffer cible disparu."))
-            ((or (null nouveau) (string= nouveau orig))
-             (message "Aucun hunk accepté — buffer inchangé."))
-            (t
-             (with-current-buffer target
-               (let ((inhibit-read-only t))
-                 (erase-buffer)
-                 (insert nouveau))
-               (set-buffer-modified-p t))
-             (message "Modifications appliquées dans le buffer cible."))))
-          ('region
-           (cond
-            ((or (null nouveau) (not (buffer-live-p target)))
-             (message "Révision annulée."))
-            ((string= nouveau orig)
-             (message "Aucun hunk accepté — région inchangée."))
-            (t
-             (with-current-buffer target
-               (save-excursion
-                 (when (and beg end)
-                   (let ((inhibit-read-only t))
-                     (delete-region beg end)
-                     (goto-char beg)
-                     (insert nouveau))))
-               (set-buffer-modified-p t))
-             (message "Modifications appliquées dans la région cible."))))
-          (_
-           (message "Révision terminée, mais la cible est inconnue."))))
-        ;; Échec de l'application (p. ex. hook de modification Org) : on ne
-        ;; perd pas le travail de révision — le résultat est mis de côté.
-        ((debug error)
-         (metal-agent--ediff-sauver-resultat-non-applique nouveau err)))
-      ;; ── Nettoyage : TOUJOURS exécuté, chaque étape isolée ──────────
-      ;; Ne pas tuer ici les buffers ORIGINAL/CORRECTION(S) : Ediff peut encore
-      ;; tenter de rafraîchir leurs mode-lines au prochain tour de boucle.
-      ;; On les enterre simplement ; ils seront réutilisés ou nettoyés au
-      ;; lancement suivant sans déclencher l'erreur de buffer vital tué.
-      (with-demoted-errors "Metal Agent (nettoyage buffers) : %S"
-        (dolist (buf (list avant metal-agent--ediff-apres-buf))
-          (when (buffer-live-p buf)
-            (with-current-buffer buf
-              (setq-local header-line-format nil)
-              ;; Avec argument : ne touche pas aux fenêtres (sans argument,
-              ;; `bury-buffer' remplace le buffer dans la fenêtre sélectionnée).
-              (bury-buffer buf)))))
-      (with-demoted-errors "Metal Agent (variables Ediff) : %S"
-        (metal-agent--ediff-restaurer-variables))
-      ;; Retirer le garde global de fermeture de frame : il ne doit pas
-      ;; survivre à la session ni se déclencher pour d'autres frames.
-      (remove-hook 'delete-frame-functions
-                   #'metal-agent--ediff-frame-supprime-garde)
-      (with-demoted-errors "Metal Agent (retour au frame source) : %S"
-        (when (and (frame-live-p source-frame) config)
-          (select-frame-set-input-focus source-frame)
-          (set-window-configuration config)))
-      ;; Ne supprimer le frame de révision que s'il est encore vivant ET que
-      ;; ce n'est pas lui qui est déjà en cours de suppression (cas du bouton
-      ;; X, où `delete-frame-functions' nous appelle PENDANT la suppression :
-      ;; re-supprimer lèverait une erreur).  La suppression est DIFFÉRÉE au
-      ;; prochain tour de boucle : quand on vient d'un clic dans la
-      ;; header-line de ce frame, le supprimer pendant le traitement de
-      ;; l'événement souris est instable sous Windows.
-      (when (and (frame-live-p ediff-frame)
-                 (not (eq ediff-frame source-frame))
-                 (not (eq ediff-frame metal-agent--ediff-frame-en-suppression)))
-        (run-at-time 0 nil #'metal-agent--ediff-supprimer-frame
-                     ediff-frame
-                     (list avant metal-agent--ediff-apres-buf)))
-      (with-demoted-errors "Metal Agent (buffers d'interface) : %S"
-        (metal-agent--close-ui-buffers))
-      (setq metal-agent--ediff-target-buffer nil
-            metal-agent--ediff-target-kind nil
-            metal-agent--ediff-target-beg nil
-            metal-agent--ediff-target-end nil
-            metal-agent--ediff-avant-buf nil
-            metal-agent--ediff-apres-buf nil
-            metal-agent--ediff-original-text nil
-            metal-agent--ediff-window-config nil
-            metal-agent--ediff-source-frame nil
-            metal-agent--ediff-frame nil
-            metal-agent--ediff-control-buffer nil
-            metal-agent--ediff-cleanup-en-cours nil
-            ;; Réarmer pour la prochaine session.
-            metal-agent--ediff-nettoyage-fait-p nil)))))
-
-(defun metal-agent--ediff-sauver-resultat-non-applique (texte err)
-  "Mettre TEXTE de côté quand son application a échoué avec ERR.
-Le résultat de la révision est copié dans le kill-ring et dans un buffer
-dédié, pour que les corrections acceptées ne soient jamais perdues."
-  (when (and texte (not (string-empty-p texte)))
-    (kill-new texte)
-    (with-current-buffer
-        (get-buffer-create "*Metal Agent: résultat non appliqué*")
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert texte)
-        (goto-char (point-min)))))
-  (display-warning
-   'metal-agent
-   (format (concat "Échec de l'application des corrections : %s\n"
-                   "Le résultat est dans le kill-ring et dans le buffer "
-                   "*Metal Agent: résultat non appliqué*.")
-           (error-message-string err))
-   :error))
 
 (defun metal-agent--bloc-instructions-libres ()
   "Retourne le bloc d'instructions libres, ou une chaîne vide.
@@ -3945,6 +3123,31 @@ d'état et non d'un bouton."
                          'help-echo (format "Basculer : %s" nom))
           (insert "\n"))))))
 
+(defun metal-agent-panneau--inserer-boutons-barre ()
+  "Insérer les cases à cocher des boutons de la barre d'outils."
+  (dolist (entree metal-agent--boutons-du-panneau)
+    (let* ((id (nth 0 entree))
+           (picto (nth 1 entree))
+           (libelle (nth 2 entree))
+           (visible (metal-agent--bouton-visible-p id))
+           (bouton-id id)
+           (action (lambda (_b)
+                     (metal-agent--basculer-bouton bouton-id)
+                     (metal-agent-panneau-rafraichir))))
+      (insert "  ")
+      (insert-button (if visible "[✓]" "[ ]")
+                     'action action
+                     'follow-link t
+                     'face 'metal-agent-bouton-face
+                     'help-echo (format "Afficher ou masquer : %s" libelle))
+      (insert " " picto " ")
+      (insert-button libelle
+                     'action action
+                     'follow-link t
+                     'face 'metal-agent-bouton-face
+                     'help-echo (format "Afficher ou masquer : %s" libelle))
+      (insert "\n"))))
+
 (defun metal-agent-panneau--inserer-bouton (raccourci label action)
   "Insérer un bouton ligne : « raccourci  label »."
   (insert (propertize (format "  %s  " raccourci)
@@ -3974,6 +3177,8 @@ Doit être appelé dans le buffer du panneau, en mode lecture-écriture."
                     (or (metal-agent--profil-prop :nom) "?")))
     (insert "  Options   :\n")
     (metal-agent-panneau--inserer-options)
+    (insert "\n  Boutons de la barre d'outils :\n")
+    (metal-agent-panneau--inserer-boutons-barre)
     (insert (format "\n  Instructions libres : %s\n"
                     (if (string-empty-p (string-trim metal-agent--instructions-libres))
                         "(aucune)"
@@ -3990,9 +3195,9 @@ Doit être appelé dans le buffer du panneau, en mode lecture-écriture."
     (metal-agent-panneau--inserer-bouton
      "o" "Basculer une option du profil" #'metal-agent-basculer-options-interactif)
     (metal-agent-panneau--inserer-bouton
-     "r" "Réinitialiser les options du profil" #'metal-agent--reinitialiser-options)
+     "r" "Réinitialiser les options et boutons du profil" #'metal-agent--reinitialiser-options)
     (metal-agent-panneau--inserer-bouton
-     "s" "Définir comme options par défaut" #'metal-agent-sauvegarder-etat)
+     "s" "Définir options et boutons comme défauts du profil" #'metal-agent-sauvegarder-etat)
     (insert "\n")
 
     ;; PROFILS
@@ -4326,6 +3531,17 @@ sélecteur de profil) restent toujours présents."
             (format "Formuler une demande d'analyse à %s (réponse texte, sans modification)" label)))
           "   ")
        "")
+     ;; Traitement en lot — configurable :lot
+     (if (metal-agent--bouton-visible-p :lot)
+         (concat
+          (metal-agent--toolbar-button
+           (metal-toolbar-emoji "📚")
+           #'metal-agent-lot
+           (metal-agent--bouton-aide
+            :lot
+            (format "Appliquer une demande à chaque fichier d'un dossier (motif *.tsv, *.txt…) avec %s, un fichier à la fois, avec suivi" label)))
+          "   ")
+       "")
      ;; Afficher/masquer (infrastructure — toujours présent)
      (metal-agent--toolbar-button
       (metal-toolbar-emoji "👁️")
@@ -4497,6 +3713,893 @@ QUE si le mode n'en a pas déjà installé une."
   ;; Fallback pour Emacs < 27 (peu probable, mais on ne casse rien).
   (add-hook 'buffer-list-update-hook #'metal-agent--auto-selectionner-profil))
 
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Traitement en lot : une demande appliquée à chaque fichier d'un dossier
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; Emacs fait la boucle, l'agent ne voit qu'un fichier à la fois : un
+;; appel par fichier, avec le profil actif, ses options et les
+;; instructions libres.  Le résultat de chaque appel est ajouté au
+;; fichier de sortie dès qu'il arrive, et le tampon *Lot agent* suit la
+;; progression.
+;;
+;; Sortie unique ou multiple : un nom de sortie ordinaire (sens.tsv)
+;; accumule tous les résultats dans ce seul fichier ; un nom contenant
+;; « {nom} » ({nom}-sens.tsv, sorties/{nom}.tsv) produit un fichier par
+;; fichier d'entrée.
+;;
+;; Reprise : relancer le même lot reprend là où il s'était arrêté.  En
+;; sortie unique, les fichiers traités sont notés dans un journal caché
+;; (.SORTIE.journal) ; si la sortie a été supprimée, le journal est
+;; ignoré et le lot repart de zéro.  En sorties multiples, une entrée
+;; dont la sortie existe déjà est sautée.
+;;
+;; Blocs à sentinelles : si la réponse contient des lignes
+;; « # --- NOM --- », seul le bloc dont NOM correspond à l'extension du
+;; fichier de sortie est écrit (bloc TSV pour sens.tsv).  Sans
+;; correspondance, toute la réponse est écrite.
+
+(defcustom metal-agent-lot-timeout 1200
+  "Délai maximal (secondes) accordé à l'agent pour UN fichier du lot.
+Remplace `metal-agent-timeout' pendant le traitement en lot."
+  :type 'integer
+  :group 'metal-agent)
+
+(defcustom metal-agent-lot-motif-defaut "*.tsv"
+  "Motif proposé par défaut pour choisir les fichiers d'un lot."
+  :type 'string
+  :group 'metal-agent)
+
+(defcustom metal-agent-lot-sortie-defaut "resultats.tsv"
+  "Nom proposé par défaut pour le fichier de sortie d'un lot."
+  :type 'string
+  :group 'metal-agent)
+
+(defconst metal-agent-lot-buffer-name "*Lot agent*"
+  "Nom du tampon de suivi du traitement en lot.")
+
+(defconst metal-agent-lot--taille-argument-max 30000
+  "Taille maximale d'un prompt passé en argument de ligne de commande.
+Sous Windows, une ligne de commande est limitée à 32 767 caractères :
+au-delà, un agent qui ne lit pas son prompt sur stdin (agy) échoue.")
+
+(cl-defstruct (metal-agent-lot (:constructor metal-agent-lot--creer)
+                               (:copier nil))
+  dossier motif demande sortie journal
+  fichiers            ; liste des chemins absolus, ordre alphabétique
+  etats               ; table : chemin -> plist (:etat :duree :lignes :note)
+  profil options libres provider
+  courant             ; chemin du fichier en cours, ou nil
+  debut-courant       ; float-time du début du fichier en cours
+  debut               ; float-time du début du lot
+  fin                 ; float-time de la fin du lot, ou nil
+  arret               ; non-nil quand l'arrêt est demandé
+  minuterie)          ; timer de rafraîchissement du tampon
+
+(defvar metal-agent-lot--actif nil
+  "Lot en cours ou dernier lot traité (structure `metal-agent-lot').")
+
+(defvar metal-agent-lot--historique-motifs nil)
+(defvar metal-agent-lot--historique-demandes nil
+  "Consignes de lot déjà saisies (M-p / M-n au minibuffer).")
+
+;;; --- Choix des fichiers ------------------------------------------------
+
+(declare-function treemacs-get-local-window "treemacs")
+(declare-function treemacs-node-at-point "treemacs")
+(declare-function treemacs--nearest-path "treemacs")
+
+(defun metal-agent-lot--dossier-treemacs ()
+  "Dossier du nœud courant de Treemacs, ou nil si Treemacs est fermé."
+  (when-let* (((fboundp 'treemacs-get-local-window))
+              (win (treemacs-get-local-window)))
+    (with-selected-window win
+      (when-let* ((node (ignore-errors (treemacs-node-at-point)))
+                  (path (ignore-errors (treemacs--nearest-path node))))
+        (if (file-directory-p path)
+            (file-name-as-directory path)
+          (file-name-directory path))))))
+
+(defun metal-agent-lot--multiple-p (sortie)
+  "Non-nil si SORTIE est un modèle produisant un fichier par entrée.
+C'est le cas quand son nom contient « {nom} » (ex. « {nom}-sens.tsv »,
+« sorties/{nom}.tsv ») ; sinon, tous les résultats s'accumulent dans
+le seul fichier SORTIE."
+  (and sortie (string-search "{nom}" sortie)))
+
+(defun metal-agent-lot--sortie-de (sortie fichier)
+  "Fichier de sortie qui reçoit le résultat de FICHIER selon SORTIE."
+  (if (metal-agent-lot--multiple-p sortie)
+      (replace-regexp-in-string
+       "{nom}" (file-name-sans-extension (file-name-nondirectory fichier))
+       sortie t t)
+    sortie))
+
+(defun metal-agent-lot--est-une-sortie-p (fichier sortie)
+  "Non-nil si FICHIER est une sortie (ou le journal) du lot SORTIE.
+Évite qu'un lot traite ses propres résultats quand le motif les
+englobe (sortie « sens.tsv » ou « {nom}-sens.tsv » et motif « *.tsv »)."
+  (let ((f (expand-file-name fichier)))
+    (if (metal-agent-lot--multiple-p sortie)
+        (and (file-equal-p (file-name-directory f)
+                           (file-name-directory sortie))
+             (string-match-p
+              (concat "\\`"
+                      (replace-regexp-in-string
+                       (regexp-quote "{nom}") ".+"
+                       (regexp-quote (file-name-nondirectory sortie)) t t)
+                      "\\'")
+              (file-name-nondirectory f)))
+      (member f (list sortie (metal-agent-lot--chemin-journal sortie))))))
+
+(defun metal-agent-lot--fichiers (dossier motif sortie)
+  "Fichiers de DOSSIER dont le nom correspond au MOTIF, hors sorties.
+MOTIF est un motif de type shell (*.tsv, phrases-*.txt…)."
+  (let ((case-fold-search (memq system-type '(windows-nt darwin))))
+    (seq-filter
+     (lambda (f)
+       (and (file-regular-p f)
+            (not (metal-agent-lot--est-une-sortie-p f sortie))))
+     (directory-files dossier t (wildcard-to-regexp motif)))))
+
+(defun metal-agent-lot--chemin-journal (sortie)
+  "Chemin du journal de reprise associé au fichier SORTIE."
+  (expand-file-name (concat "." (file-name-nondirectory sortie) ".journal")
+                    (file-name-directory sortie)))
+
+(defun metal-agent-lot--deja-fait-p (lot fichier faits)
+  "Non-nil si FICHIER a déjà été traité par un passage précédent de LOT.
+Plusieurs sorties : son fichier de sortie existe.  Sortie unique : son
+nom figure dans FAITS, lu dans le journal."
+  (if (metal-agent-lot--multiple-p (metal-agent-lot-sortie lot))
+      (file-exists-p (metal-agent-lot--sortie-de (metal-agent-lot-sortie lot)
+                                                 fichier))
+    (member (file-name-nondirectory fichier) faits)))
+
+(defun metal-agent-lot--lire-journal (lot)
+  "Noms des fichiers déjà traités selon le journal de LOT."
+  (let ((journal (metal-agent-lot-journal lot)))
+    (cond
+     ((null journal) nil)
+     ((not (file-exists-p journal)) nil)
+     ;; Sortie supprimée : le journal ne correspond plus à rien.
+     ((not (file-exists-p (metal-agent-lot-sortie lot)))
+      (ignore-errors (delete-file journal))
+      nil)
+     (t
+      (with-temp-buffer
+        (insert-file-contents journal)
+        (split-string (buffer-string) "\n" t "[ \t\r]+"))))))
+
+;;; --- Lecture de la consigne ----------------------------------------------
+;;
+;; La consigne du lot s'écrit en langage naturel, par exemple :
+;;   Dans le sous-dossier "corpus-phrases", il y a des fichiers dont le
+;;   nom correspond à un lemme et la terminaison est .tsv.  Pour chaque
+;;   fichier, utilise le nom en guise de lemme et identifie ses sens.
+;;   Accumule le résultat dans le buffer sens.tsv.
+;; Emacs en tire le dossier (nom entre guillemets ou après « dossier »),
+;; le motif (« .tsv », « *.txt ») et le fichier de sortie (nom de fichier
+;; complet, « sens.tsv »).  Les chemins sont relatifs au dossier courant
+;; de Treemacs.  Ce qui n'a pas pu être lu est demandé au minibuffer, et
+;; le tout est soumis à confirmation avant le lancement.
+
+(defun metal-agent-lot--chaines-citees (texte)
+  "Chaînes entre guillemets (\"…\", « … », '…', `…') dans TEXTE."
+  (let ((pos 0) res)
+    (while (string-match
+            "\"\\([^\"]+\\)\"\\|«[  ]*\\([^»]+?\\)[  ]*»\\|'\\([^' ]+\\)'\\|`\\([^`]+\\)`"
+            texte pos)
+      (push (string-trim (or (match-string 1 texte) (match-string 2 texte)
+                             (match-string 3 texte) (match-string 4 texte)))
+            res)
+      (setq pos (match-end 0)))
+    (nreverse res)))
+
+(defun metal-agent-lot--lire-dossier (texte base)
+  "Dossier désigné par TEXTE, relatif à BASE ; nil si aucun."
+  (let ((candidats (append
+                    (metal-agent-lot--chaines-citees texte)
+                    (let ((pos 0) res)
+                      (while (string-match
+                              "\\(?:sous-\\)?dossier[ \t]+\\([^ \t\n,;:«\"']+\\)"
+                              texte pos)
+                        (push (string-trim (match-string 1 texte) nil "[.]+")
+                              res)
+                        (setq pos (match-end 0)))
+                      (nreverse res)))))
+    (seq-some (lambda (c)
+                (let ((d (expand-file-name c base)))
+                  (and (file-directory-p d) (file-name-as-directory d))))
+              candidats)))
+
+(defun metal-agent-lot--mots (texte)
+  "Mots de TEXTE, débarrassés de la ponctuation et des guillemets qui les
+entourent (« sens.tsv. » → « sens.tsv »)."
+  (delq nil
+        (mapcar (lambda (m)
+                  (let ((m (string-trim m "[\"'«»`(  ]+" "[\"'«»`).,;:!?  ]+")))
+                    (unless (string-empty-p m) m)))
+                (split-string texte "[ \t\n]+" t))))
+
+(defun metal-agent-lot--lire-sortie (texte base)
+  "Fichier de sortie désigné par TEXTE (dernier nom de fichier complet).
+Un nom contenant « {nom} » (« {nom}-sens.tsv ») demande un fichier de
+sortie par fichier d'entrée.  Si un tampon porte le nom trouvé et
+visite un fichier, c'est ce fichier."
+  (let ((dernier
+         (car (last
+               (seq-filter
+                (lambda (m)
+                  (string-match-p
+                   "\\`[[:alnum:]_{][[:alnum:]_.{}/-]*\\.[[:alpha:]][[:alnum:]]*\\'" m))
+                (metal-agent-lot--mots texte))))))
+    (when dernier
+      (let ((buf (get-buffer dernier)))
+        (if (and buf (buffer-file-name buf))
+            (buffer-file-name buf)
+          (expand-file-name dernier base))))))
+
+(defun metal-agent-lot--lire-motif (texte)
+  "Motif des fichiers d'entrée selon TEXTE (« *.tsv », « .tsv »…).
+Un nom de fichier complet (sens.tsv) n'est pas pris pour un motif."
+  (seq-some (lambda (m)
+              (cond
+               ((string-match-p "\\`\\*[^ ]*\\.[[:alnum:]]+\\'" m) m)
+               ((string-match-p "\\`\\.[[:alpha:]][[:alnum:]]*\\'" m)
+                (concat "*" m))))
+            (metal-agent-lot--mots texte)))
+
+(defun metal-agent-lot--lire-modele-sortie (defaut base)
+  "Demander un modèle de sortie contenant « {nom} », à partir de DEFAUT."
+  (let ((m (string-trim
+            (read-string "Modèle de sortie ({nom} = nom de l'entrée) : "
+                         (file-relative-name defaut base)))))
+    (unless (string-search "{nom}" m)
+      (user-error "Le modèle doit contenir {nom}"))
+    (expand-file-name m base)))
+
+(defun metal-agent-lot--libelle-sortie (sortie)
+  (if (metal-agent-lot--multiple-p sortie)
+      (format "un fichier par entrée — %s" (abbreviate-file-name sortie))
+    (format "un seul fichier — %s" (abbreviate-file-name sortie))))
+
+(defun metal-agent-lot--resume (dossier motif sortie n)
+  (format "Dossier : %s\nMotif   : %s (%s)\nSortie  : %s"
+          (abbreviate-file-name dossier) motif
+          (if (> n 0) (format "%d fichier(s)" n) "aucun fichier")
+          (metal-agent-lot--libelle-sortie sortie)))
+
+;;; --- Commandes ----------------------------------------------------------
+
+(defun metal-agent-lot--en-cours-p ()
+  "Non-nil si un lot est en cours de traitement."
+  (and metal-agent-lot--actif
+       (null (metal-agent-lot-fin metal-agent-lot--actif))))
+
+(defun metal-agent-lot ()
+  "Appliquer une consigne à chaque fichier d'un dossier, un appel par fichier.
+La consigne s'écrit en langage naturel ; Emacs y lit le dossier, le
+motif et le fichier de sortie (voir le commentaire de la section), les
+chemins étant relatifs au dossier courant de Treemacs.  Ce qu'il n'a
+pas pu lire est demandé, puis le tout est soumis à confirmation.
+L'agent reçoit la consigne pour UN fichier à la fois, avec le profil
+actif, ses options et les instructions libres, figés au lancement.  La
+progression s'affiche dans le tampon *Lot agent*."
+  (interactive)
+  (when (metal-agent-lot--en-cours-p)
+    (pop-to-buffer (metal-agent-lot--tampon))
+    (user-error "Un lot est déjà en cours — « a » dans *Lot agent* pour l'arrêter"))
+  (when (and metal-agent--process-courant
+             (process-live-p metal-agent--process-courant))
+    (user-error "Une requête agent est en cours ; attendez sa fin"))
+  (unless metal-agent-provider
+    (user-error "Aucun agent sélectionné — voir l'Assistant MetalEmacs"))
+  (let* ((base (file-name-as-directory
+                (expand-file-name (or (metal-agent-lot--dossier-treemacs)
+                                      default-directory))))
+         (consigne (string-trim
+                    (read-string (format "Consigne du lot (depuis %s) : "
+                                         (abbreviate-file-name base))
+                                 nil 'metal-agent-lot--historique-demandes)))
+         (_ (when (string-empty-p consigne) (user-error "Consigne vide")))
+         (dossier (or (metal-agent-lot--lire-dossier consigne base) base))
+         (sortie (or (metal-agent-lot--lire-sortie consigne base)
+                     (expand-file-name
+                      (read-file-name "Fichier de sortie : " base nil nil
+                                      metal-agent-lot-sortie-defaut)
+                      base)))
+         (motif (or (metal-agent-lot--lire-motif consigne)
+                    (let ((m (string-trim
+                              (read-string
+                               (format "Motif des fichiers (défaut %s) : "
+                                       metal-agent-lot-motif-defaut)
+                               nil 'metal-agent-lot--historique-motifs
+                               metal-agent-lot-motif-defaut))))
+                      (if (string-empty-p m) metal-agent-lot-motif-defaut m))))
+         (fichiers nil))
+    ;; Confirmation, avec possibilité de corriger ce qui a été compris.
+    (let ((pret nil))
+      (while (not pret)
+        (setq fichiers (metal-agent-lot--fichiers dossier motif sortie))
+        (pcase (car (read-multiple-choice
+                     (concat (metal-agent-lot--resume dossier motif sortie
+                                                      (length fichiers))
+                             "\n")
+                     (append (when fichiers '((?l "lancer")))
+                             '((?d "dossier") (?m "motif") (?s "sortie"))
+                             (if (metal-agent-lot--multiple-p sortie)
+                                 '((?u "une seule sortie"))
+                               '((?p "plusieurs sorties")))
+                             '((?q "annuler")))))
+          (?l (setq pret t))
+          (?d (setq dossier (file-name-as-directory
+                             (expand-file-name
+                              (read-directory-name "Dossier : " dossier nil t)))))
+          (?m (setq motif (string-trim
+                           (read-string "Motif : " motif
+                                        'metal-agent-lot--historique-motifs))))
+          (?s (setq sortie
+                    (if (metal-agent-lot--multiple-p sortie)
+                        (metal-agent-lot--lire-modele-sortie sortie base)
+                      (expand-file-name
+                       (read-file-name "Fichier de sortie : "
+                                       (file-name-directory sortie) nil nil
+                                       (file-name-nondirectory sortie))))))
+          (?p (setq sortie
+                    (metal-agent-lot--lire-modele-sortie
+                     (expand-file-name
+                      (concat "{nom}-" (file-name-nondirectory sortie))
+                      (file-name-directory sortie))
+                     base)))
+          (?u (setq sortie
+                    (expand-file-name
+                     (read-file-name
+                      "Fichier de sortie unique : "
+                      (file-name-directory sortie) nil nil
+                      (replace-regexp-in-string
+                       "{nom}-?" "" (file-name-nondirectory sortie) t t)))))
+          (_ (user-error "Lot annulé")))))
+    (setq metal-agent-lot-motif-defaut motif
+          metal-agent-lot-sortie-defaut (file-name-nondirectory sortie))
+    (let* ((journal (unless (metal-agent-lot--multiple-p sortie)
+                      (metal-agent-lot--chemin-journal sortie)))
+           (lot (metal-agent-lot--creer
+                 :dossier dossier :motif motif :demande consigne
+                 :sortie sortie :journal journal
+                 :fichiers fichiers
+                 :etats (make-hash-table :test 'equal)
+                 :profil metal-agent-profil-actif
+                 :options (copy-sequence metal-agent--options-actives)
+                 :libres metal-agent--instructions-libres
+                 :provider metal-agent-provider))
+           (faits (metal-agent-lot--lire-journal lot))
+           (n-faits 0))
+      (dolist (f fichiers)
+        (if (metal-agent-lot--deja-fait-p lot f faits)
+            (progn (cl-incf n-faits)
+                   (puthash f '(:etat deja) (metal-agent-lot-etats lot)))
+          (puthash f '(:etat attente) (metal-agent-lot-etats lot))))
+      (when (= n-faits (length fichiers))
+        (user-error (if journal
+                        "Les %d fichiers figurent déjà dans le journal de %s (supprimez la sortie pour tout refaire)"
+                      "Les %d fichiers ont déjà leur sortie %s (supprimez-les pour tout refaire)")
+                    n-faits (file-name-nondirectory sortie)))
+      (when (> n-faits 0)
+        (message "%d fichier(s) déjà traité(s) seront sautés." n-faits))
+      (setf (metal-agent-lot-debut lot) (float-time))
+      (setq metal-agent-lot--actif lot)
+      (setf (metal-agent-lot-minuterie lot)
+            (run-at-time 1 1 #'metal-agent-lot--rafraichir))
+      (pop-to-buffer (metal-agent-lot--tampon))
+      (metal-agent-lot--rafraichir)
+      (metal-agent-lot--suivant))))
+
+(defun metal-agent-lot-arreter ()
+  "Arrêter le lot en cours.
+La requête en cours est interrompue ; son fichier reste à traiter et
+sera repris au prochain lancement du même lot."
+  (interactive)
+  (if (not (metal-agent-lot--en-cours-p))
+      (message "Aucun lot en cours.")
+    (setf (metal-agent-lot-arret metal-agent-lot--actif) t)
+    (if (and metal-agent--process-courant
+             (process-live-p metal-agent--process-courant))
+        (metal-agent-interrompre)
+      (metal-agent-lot--terminer))))
+
+(defun metal-agent-lot--avant-interrompre (&rest _)
+  "Le bouton ❌ de la barre d'outils arrête aussi le lot en cours."
+  (when (metal-agent-lot--en-cours-p)
+    (setf (metal-agent-lot-arret metal-agent-lot--actif) t)))
+
+(advice-add 'metal-agent-interrompre :before #'metal-agent-lot--avant-interrompre)
+
+;;; --- Boucle --------------------------------------------------------------
+
+(defun metal-agent-lot--etat (lot fichier)
+  (gethash fichier (metal-agent-lot-etats lot)))
+
+(defun metal-agent-lot--marquer (lot fichier &rest plist)
+  (puthash fichier plist (metal-agent-lot-etats lot)))
+
+(defun metal-agent-lot--prochain (lot)
+  "Premier fichier de LOT encore en attente, ou nil."
+  (seq-find (lambda (f)
+              (eq (plist-get (metal-agent-lot--etat lot f) :etat) 'attente))
+            (metal-agent-lot-fichiers lot)))
+
+(defmacro metal-agent-lot--avec-contexte (lot &rest corps)
+  "Exécuter CORPS avec le profil, les options et l'agent figés dans LOT.
+Un changement de tampon pendant le lot peut déclencher l'auto-sélection
+d'un autre profil ; le lot n'en tient pas compte."
+  (declare (indent 1))
+  `(let ((metal-agent-profil-actif (metal-agent-lot-profil ,lot))
+         (metal-agent--options-actives (metal-agent-lot-options ,lot))
+         (metal-agent--instructions-libres (metal-agent-lot-libres ,lot))
+         (metal-agent-provider (metal-agent-lot-provider ,lot)))
+     ,@corps))
+
+(defun metal-agent-lot--blocs-du-profil ()
+  "Noms des blocs à sentinelles « # --- NOM --- » prévus par le profil actif.
+Cherchés dans le préambule, la section [Tâche] et les options cochées."
+  (let ((textes (append (list (metal-agent--profil-prop :systeme)
+                              (metal-agent--profil-prop :tache))
+                        (metal-agent--fragments-actifs)))
+        noms)
+    (dolist (texte textes)
+      (when (stringp texte)
+        (let ((pos 0))
+          (while (string-match "# --- \\([^ \t\n]+\\) ---" texte pos)
+            (cl-pushnew (upcase (string-trim (match-string 1 texte))) noms
+                        :test #'equal)
+            (setq pos (match-end 0))))))
+    (nreverse noms)))
+
+(defun metal-agent-lot--demande-effective (lot fichier)
+  "Consigne de LOT recadrée pour FICHIER seul.
+La consigne parle souvent du lot entier (« pour chaque fichier »,
+« accumule dans… ») : on précise à l'agent que le parcours et
+l'accumulation sont faits par Emacs et qu'il ne traite que FICHIER.
+Si le format du profil prévoit plusieurs blocs à sentinelles et que
+l'un d'eux porte le nom de l'extension du fichier de sortie (bloc TSV
+pour un .tsv), on demande de ne produire que celui-là : les autres
+seraient écartés à l'écriture, autant ne pas les générer.
+« {nom} » et « {fichier} » sont remplacés s'ils figurent dans la
+consigne.  À appeler dans `metal-agent-lot--avec-contexte'."
+  (let* ((nom-complet (file-name-nondirectory fichier))
+         (nom (file-name-sans-extension nom-complet))
+         (ext (upcase (or (file-name-extension
+                           (metal-agent-lot--sortie-de
+                            (metal-agent-lot-sortie lot) fichier))
+                          "")))
+         (blocs (metal-agent-lot--blocs-du-profil))
+         (consigne (replace-regexp-in-string
+                    "{nom}" nom
+                    (replace-regexp-in-string
+                     "{fichier}" nom-complet (metal-agent-lot-demande lot) t t)
+                    t t)))
+    (concat
+     (format "Traitement en lot : Emacs parcourt lui-même les fichiers et
+accumule les résultats.  Tu traites ici UN SEUL fichier, « %s »,
+dont le nom sans extension est « %s » ; son contenu est fourni plus
+bas.  N'ouvre aucun fichier et n'écris rien : rends seulement le
+résultat pour ce fichier.\n"
+             nom-complet nom)
+     (if (and (> (length blocs) 1) (member ext blocs))
+         (format "Le format prévoit plusieurs blocs ; produis SEULEMENT le bloc
+« # --- %s --- », avec sa sentinelle, et aucun autre : le résultat va
+dans un fichier .%s.\n"
+                 ext (downcase ext))
+       "")
+     (format "\nConsigne d'origine, à appliquer à ce seul fichier :\n%s"
+             consigne))))
+
+(defun metal-agent-lot--prompt (demande contenu)
+  "Prompt pour un fichier du lot : DEMANDE appliquée à CONTENU.
+Sur un profil à section [Tâche], on reprend le gabarit commun : la
+tâche du profil pilote et DEMANDE la précise.  Sans [Tâche], DEMANDE
+est la tâche, sans la règle de modification minimale (qui n'a de sens
+qu'en correction)."
+  (if (let ((tc (metal-agent--profil-prop :tache)))
+        (and (stringp tc) (not (string-empty-p (string-trim tc)))))
+      (metal-agent--prompt-final-code demande contenu
+                                      "le résultat pour ce fichier" demande)
+    (let ((fragments (metal-agent--fragments-actifs)))
+      (format
+       "%s%s
+Tâche :
+%s
+
+Contraintes obligatoires :
+- Ne modifie AUCUN fichier sur le disque. Tu ne fais qu'analyser le
+  contenu fourni ci-dessous et RETOURNER le résultat dans ta réponse.
+- Ne donne aucun préambule ni aucune question.
+- Encadre le résultat STRICTEMENT entre les deux marqueurs suivants,
+  seuls sur leur ligne, et ne place RIEN d'autre en dehors :
+%s
+(contenu ici)
+%s
+%s%s
+Contenu du fichier :
+%s
+%s
+%s"
+       (metal-agent--context-header)
+       (metal-agent--blindage-anti-agentique)
+       demande
+       metal-agent--marqueur-debut
+       metal-agent--marqueur-fin
+       (if fragments
+           (concat "\nContraintes du profil :\n"
+                   (mapconcat (lambda (f) (concat "- " f)) fragments "\n")
+                   "\n")
+         "")
+       (metal-agent--bloc-instructions-libres)
+       metal-agent--marqueur-debut
+       contenu
+       metal-agent--marqueur-fin))))
+
+(defun metal-agent-lot--suivant ()
+  "Lancer l'agent sur le prochain fichier en attente, ou terminer le lot."
+  (let* ((lot metal-agent-lot--actif)
+         (fichier (and lot (not (metal-agent-lot-arret lot))
+                       (metal-agent-lot--prochain lot))))
+    (cond
+     ((null lot) nil)
+     ((null fichier) (metal-agent-lot--terminer))
+     (t
+      (let* ((deja-ouvert (get-file-buffer fichier))
+             (source (or deja-ouvert (find-file-noselect fichier t)))
+             (contenu (with-current-buffer source
+                        (buffer-substring-no-properties (point-min)
+                                                        (point-max))))
+             (rappel-fait (list nil))
+             (liberer (lambda ()
+                        (unless (or deja-ouvert (not (buffer-live-p source)))
+                          (with-current-buffer source
+                            (set-buffer-modified-p nil))
+                          (kill-buffer source))))
+             proc)
+        (setf (metal-agent-lot-courant lot) fichier
+              (metal-agent-lot-debut-courant lot) (float-time))
+        (metal-agent-lot--marquer lot fichier :etat 'en-cours)
+        (metal-agent-lot--rafraichir)
+        (condition-case err
+            (metal-agent-lot--avec-contexte lot
+              (setq metal-agent--source-buffer source
+                    metal-agent--saved-region-beg nil
+                    metal-agent--saved-region-end nil
+                    metal-agent--last-original contenu)
+              (let ((prompt (metal-agent-lot--prompt
+                             (metal-agent-lot--demande-effective lot fichier)
+                             contenu))
+                    (metal-agent-timeout metal-agent-lot-timeout))
+                (when (and (not (metal-agent--current-prompt-via-stdin-p))
+                           (> (length prompt)
+                              metal-agent-lot--taille-argument-max))
+                  (error "Fichier trop long pour cet agent (%d caractères de prompt)"
+                         (length prompt)))
+                (setq proc
+                      (metal-agent--run-codex
+                       prompt
+                       (format "lot : %s" (file-name-nondirectory fichier))
+                       (lambda (code raw)
+                         (setcar rappel-fait t)
+                         (funcall liberer)
+                         (metal-agent-lot--recevoir lot fichier code raw contenu))
+                       (format "Lot %d/%d : %s"
+                               (1+ (seq-position (metal-agent-lot-fichiers lot)
+                                                 fichier))
+                               (length (metal-agent-lot-fichiers lot))
+                               (file-name-nondirectory fichier))))))
+          (error
+           (funcall liberer)
+           (metal-agent-lot--echec lot fichier (error-message-string err))
+           (run-at-time 0 nil #'metal-agent-lot--suivant)))
+        ;; Sentinelle complémentaire : le sentinel de `metal-agent--run-codex'
+        ;; n'appelle pas le rappel quand la requête est interrompue (❌,
+        ;; arrêt du lot) ou tuée par le délai.  Sans ce relais, le lot
+        ;; resterait bloqué sur ce fichier.
+        (when (processp proc)
+          (add-function
+           :after (process-sentinel proc)
+           (lambda (p _evenement)
+             (when (and (memq (process-status p) '(exit signal))
+                        (not (car rappel-fait)))
+               (setcar rappel-fait t)
+               (funcall liberer)
+               (if (metal-agent-lot-arret lot)
+                   (progn
+                     (metal-agent-lot--marquer lot fichier :etat 'attente)
+                     (run-at-time 0 nil #'metal-agent-lot--terminer))
+                 (metal-agent-lot--echec
+                  lot fichier
+                  (format "délai de %d s dépassé"
+                          metal-agent-lot-timeout))
+                 (run-at-time 0 nil #'metal-agent-lot--suivant)))))))))))
+
+(defun metal-agent-lot--bloc-pour-sortie (texte sortie)
+  "Partie de TEXTE à écrire dans SORTIE.
+Si TEXTE contient des blocs « # --- NOM --- », retourne celui dont NOM
+correspond à l'extension de SORTIE ; sinon retourne TEXTE entier."
+  (let ((ext (upcase (or (file-name-extension sortie) "")))
+        (re "^# --- \\(.+?\\) ---[ \t]*$")
+        (blocs nil))
+    (with-temp-buffer
+      (insert texte)
+      (goto-char (point-min))
+      (while (re-search-forward re nil t)
+        (let ((nom (upcase (string-trim (match-string 1))))
+              (debut (1+ (line-end-position))))
+          (push (cons nom (save-excursion
+                            (buffer-substring-no-properties
+                             (min debut (point-max))
+                             (if (re-search-forward re nil t)
+                                 (line-beginning-position)
+                               (point-max)))))
+                blocs))))
+    (or (cdr (assoc ext blocs)) texte)))
+
+(defun metal-agent-lot--recevoir (lot fichier code raw contenu)
+  "Traiter la réponse RAW de l'agent pour FICHIER."
+  (let ((resultat
+         (and (= code 0)
+              (let ((metal-agent--last-original contenu))
+                (metal-agent-lot--avec-contexte lot
+                  (metal-agent--extract-code-block raw))))))
+    (cond
+     ((/= code 0)
+      (metal-agent-lot--echec
+       lot fichier
+       (if (metal-agent--erreur-auth-p raw)
+           "agent non authentifié"
+         (format "erreur de l'agent (code %d)" code))))
+     ((null resultat)
+      (metal-agent-lot--echec
+       lot fichier
+       (pcase (metal-agent--diagnostiquer-reponse raw)
+         ('vide "réponse vide")
+         ('tronquee "réponse tronquée")
+         ('sans-marqueurs "format non respecté (marqueurs absents)")
+         (_ "réponse inexploitable"))))
+     (t
+      (let* ((multiple (metal-agent-lot--multiple-p (metal-agent-lot-sortie lot)))
+             (sortie (metal-agent-lot--sortie-de (metal-agent-lot-sortie lot)
+                                                 fichier))
+             (texte (string-trim
+                     (metal-agent-lot--bloc-pour-sortie resultat sortie)
+                     "[ \t\n\r]*" "[ \t\n\r]*"))
+             (lignes (if (string-empty-p texte)
+                         0
+                       (length (split-string texte "\n")))))
+        (let ((coding-system-for-write 'utf-8-unix))
+          (if multiple
+              ;; Un fichier par entrée : il est (ré)écrit en entier, et son
+              ;; existence marque l'entrée comme traitée.
+              (progn
+                (make-directory (file-name-directory sortie) t)
+                (write-region (if (string-empty-p texte) "" (concat texte "\n"))
+                              nil sortie nil 'silent))
+            (unless (string-empty-p texte)
+              (write-region (concat texte "\n") nil sortie t 'silent))
+            (write-region (concat (file-name-nondirectory fichier) "\n") nil
+                          (metal-agent-lot-journal lot) t 'silent)))
+        ;; Tampon de sortie ouvert et non modifié : le mettre à jour.
+        (when-let ((buf (get-file-buffer sortie)))
+          (with-current-buffer buf
+            (unless (buffer-modified-p)
+              (revert-buffer t t t))))
+        (metal-agent-lot--marquer
+         lot fichier :etat 'fait :lignes lignes
+         :duree (- (float-time) (metal-agent-lot-debut-courant lot))))))
+    (setf (metal-agent-lot-courant lot) nil)
+    (metal-agent-lot--rafraichir)
+    (run-at-time 0 nil #'metal-agent-lot--suivant)))
+
+(defun metal-agent-lot--echec (lot fichier note)
+  "Marquer FICHIER en échec dans LOT avec NOTE ; le lot continue."
+  (metal-agent-lot--marquer
+   lot fichier :etat 'echec :note note
+   :duree (- (float-time) (or (metal-agent-lot-debut-courant lot)
+                              (float-time))))
+  (setf (metal-agent-lot-courant lot) nil)
+  (metal-agent-lot--rafraichir))
+
+(defun metal-agent-lot--terminer ()
+  "Clore le lot actif et afficher le bilan."
+  (when-let ((lot metal-agent-lot--actif))
+    (unless (metal-agent-lot-fin lot)
+      (when (timerp (metal-agent-lot-minuterie lot))
+        (cancel-timer (metal-agent-lot-minuterie lot)))
+      (when-let ((f (metal-agent-lot-courant lot)))
+        (when (eq (plist-get (metal-agent-lot--etat lot f) :etat) 'en-cours)
+          (metal-agent-lot--marquer lot f :etat 'attente)))
+      (setf (metal-agent-lot-courant lot) nil
+            (metal-agent-lot-fin lot) (float-time))
+      (metal-agent-lot--rafraichir)
+      (let ((c (metal-agent-lot--compter lot)))
+        (message "%s Lot %s : %d traité(s), %d échec(s), %d restant(s)."
+                 (metal-agent--picto "📚")
+                 (if (metal-agent-lot-arret lot) "arrêté" "terminé")
+                 (plist-get c :fait) (plist-get c :echec)
+                 (plist-get c :attente))))))
+
+;;; --- Tampon de suivi ---------------------------------------------------
+
+(defvar metal-agent-lot-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    (define-key map (kbd "a") #'metal-agent-lot-arreter)
+    (define-key map (kbd "o") #'metal-agent-lot-ouvrir-sortie)
+    (define-key map (kbd "b") #'metal-agent-afficher-codex)
+    (define-key map (kbd "RET") #'metal-agent-lot-ouvrir-fichier)
+    (define-key map (kbd "g") #'metal-agent-lot--rafraichir)
+    map)
+  "Touches du tampon *Lot agent*.")
+
+(define-derived-mode metal-agent-lot-mode special-mode "Lot-agent"
+  "Suivi d'un traitement en lot par l'agent.
+\\{metal-agent-lot-mode-map}"
+  (setq-local truncate-lines t)
+  (setq-local metal-agent--buffer-sortie-p t)
+  (setq-local header-line-format nil))
+
+(defun metal-agent-lot--tampon ()
+  (let ((buf (get-buffer-create metal-agent-lot-buffer-name)))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'metal-agent-lot-mode)
+        (metal-agent-lot-mode)))
+    buf))
+
+(defun metal-agent-lot-ouvrir-sortie ()
+  "Ouvrir le fichier de sortie du lot.
+Avec plusieurs sorties : celle du fichier de la ligne courante, ou à
+défaut le dossier des sorties."
+  (interactive)
+  (if-let ((lot metal-agent-lot--actif))
+      (let* ((modele (metal-agent-lot-sortie lot))
+             (ligne (get-text-property (line-beginning-position)
+                                       'metal-agent-lot-fichier))
+             (cible (cond
+                     ((not (metal-agent-lot--multiple-p modele)) modele)
+                     (ligne (metal-agent-lot--sortie-de modele ligne)))))
+        (cond
+         ((and cible (file-exists-p cible)) (find-file-other-window cible))
+         ((metal-agent-lot--multiple-p modele)
+          (if (file-directory-p (file-name-directory modele))
+              (dired-other-window (file-name-directory modele))
+            (message "Aucune sortie produite pour l'instant.")))
+         (t (message "Le fichier de sortie n'existe pas encore."))))
+    (message "Aucun lot.")))
+
+(defun metal-agent-lot-ouvrir-fichier ()
+  "Ouvrir le fichier d'entrée de la ligne courante."
+  (interactive)
+  (if-let ((f (get-text-property (line-beginning-position)
+                                 'metal-agent-lot-fichier)))
+      (find-file-other-window f)
+    (message "Pas de fichier sur cette ligne.")))
+
+(defun metal-agent-lot--compter (lot)
+  "Décompte des états de LOT, en plist."
+  (let ((c (list :fait 0 :echec 0 :attente 0 :deja 0 :en-cours 0)))
+    (maphash (lambda (_f e)
+               (let ((k (intern (format ":%s" (plist-get e :etat)))))
+                 (setq c (plist-put c k (1+ (or (plist-get c k) 0))))))
+             (metal-agent-lot-etats lot))
+    c))
+
+(defun metal-agent-lot--rafraichir ()
+  "Redessiner le tampon *Lot agent*."
+  (interactive)
+  (when-let ((lot metal-agent-lot--actif)
+             (buf (get-buffer metal-agent-lot-buffer-name)))
+    (with-current-buffer buf
+      (let* ((inhibit-read-only t)
+             (ligne (line-number-at-pos))
+             (c (metal-agent-lot--compter lot))
+             (faits (plist-get c :fait))
+             (durees (delq nil
+                           (mapcar
+                            (lambda (f)
+                              (let ((e (metal-agent-lot--etat lot f)))
+                                (and (eq (plist-get e :etat) 'fait)
+                                     (plist-get e :duree))))
+                            (metal-agent-lot-fichiers lot))))
+             (restants (+ (plist-get c :attente) (plist-get c :en-cours)))
+             (ecoule (- (or (metal-agent-lot-fin lot) (float-time))
+                        (metal-agent-lot-debut lot)))
+             (largeur (apply #'max 10
+                             (mapcar (lambda (f)
+                                       (string-width (file-name-nondirectory f)))
+                                     (metal-agent-lot-fichiers lot)))))
+        (erase-buffer)
+        (insert (propertize "Traitement en lot" 'face 'bold)
+                (format " — %s · profil « %s »\n\n"
+                        (metal-agent-lot--avec-contexte lot
+                          (or (metal-agent--current-label) "agent"))
+                        (or (metal-agent--profil-prop
+                             :nom (metal-agent-lot-profil lot))
+                            "?")))
+        (insert (format "Dossier : %s\n"
+                        (abbreviate-file-name (metal-agent-lot-dossier lot)))
+                (format "Motif   : %s (%d fichiers)\n"
+                        (metal-agent-lot-motif lot)
+                        (length (metal-agent-lot-fichiers lot)))
+                (format "Sortie  : %s\n"
+                        (metal-agent-lot--libelle-sortie
+                         (metal-agent-lot-sortie lot)))
+                (format "Demande : %s\n\n" (metal-agent-lot-demande lot)))
+        (insert (propertize
+                 (format "%s : %d fait(s)%s%s · %d restant(s) · écoulé %s%s"
+                         (cond ((null (metal-agent-lot-fin lot)) "En cours")
+                               ((metal-agent-lot-arret lot) "Arrêté")
+                               (t "Terminé"))
+                         faits
+                         (if (> (plist-get c :echec) 0)
+                             (format ", %d échec(s)" (plist-get c :echec))
+                           "")
+                         (if (> (plist-get c :deja) 0)
+                             (format ", %d déjà traité(s)" (plist-get c :deja))
+                           "")
+                         restants
+                         (metal-agent--format-duree (round ecoule))
+                         (if (and durees (> restants 0)
+                                  (null (metal-agent-lot-fin lot)))
+                             (format " · reste ≈ %s"
+                                     (metal-agent--format-duree
+                                      (round (* restants
+                                                (/ (apply #'+ durees)
+                                                   (float (length durees)))))))
+                           ""))
+                 'face 'bold)
+                "\n\n")
+        (dolist (f (metal-agent-lot-fichiers lot))
+          (let* ((e (metal-agent-lot--etat lot f))
+                 (etat (plist-get e :etat))
+                 (nom (file-name-nondirectory f))
+                 (debut (point)))
+            (insert
+             (pcase etat
+               ('fait (propertize "  ✓ " 'face 'success))
+               ('echec (propertize "  ✗ " 'face 'error))
+               ('en-cours (propertize "  » " 'face 'warning))
+               ('deja (propertize "  = " 'face 'shadow))
+               (_ (propertize "  · " 'face 'shadow)))
+             (propertize (string-pad nom (+ 2 largeur))
+                         'face (if (memq etat '(attente deja)) 'shadow 'default))
+             (pcase etat
+               ('fait (format "%d ligne(s) · %s"
+                              (plist-get e :lignes)
+                              (metal-agent--format-duree
+                               (round (plist-get e :duree)))))
+               ('echec (propertize (or (plist-get e :note) "échec")
+                                   'face 'error))
+               ('en-cours (format "en cours… %s"
+                                  (metal-agent--format-duree
+                                   (round (- (float-time)
+                                             (metal-agent-lot-debut-courant
+                                              lot))))))
+               ('deja (propertize "déjà traité" 'face 'shadow))
+               (_ ""))
+             "\n")
+            (put-text-property debut (point) 'metal-agent-lot-fichier f)))
+        (insert "\n"
+                (propertize
+                 (if (metal-agent-lot-fin lot)
+                     (concat "o : ouvrir la sortie   RET : ouvrir le fichier   "
+                             "b : sortie brute de l'agent   q : fermer"
+                             (if (> (+ restants (plist-get c :echec)) 0)
+                                 "\nRelancer le même lot reprend les fichiers restants et en échec."
+                               ""))
+                   (concat "a : arrêter   o : ouvrir la sortie   RET : ouvrir le fichier   "
+                           "b : sortie brute de l'agent   q : masquer"))
+                 'face 'shadow)
+                "\n")
+        (goto-char (point-min))
+        (forward-line (1- ligne))))))
+
 (defvar metal-correction-prompt
   "Identifie d'abord le cours et le travail concernés en lisant l'énoncé/mandat présent dans ce répertoire (cherche un .org, .qmd ou .pdf décrivant les compétences visées et le barème). Corrige ensuite chaque sous-dossier de travail en fonction de ces consignes, en appliquant le skill correction-travaux, puis écris la grille Org cumulative."
   "Consigne envoyée à Claude Code pour la correction.")
@@ -4529,6 +4632,7 @@ QUE si le mode n'en a pas déjà installé une."
 (global-set-key (kbd "C-c m p") #'metal-agent-choisir-provider)
 (global-set-key (kbd "C-c m P") #'metal-agent-choisir-profil)
 (global-set-key (kbd "C-c m e") #'metal-agent-ouvrir-panneau)
+(global-set-key (kbd "C-c m l") #'metal-agent-lot)
 
 (provide 'metal-agent)
 ;;; metal-agent.el ends here
