@@ -268,7 +268,8 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
 ;; Apparence et interface
 (column-number-mode 1)
 (context-menu-mode 1)
-(load-theme 'modus-operandi t)
+;; Thème : chargé par `metal-apparence-appliquer', après la lecture des
+;; préférences (voir plus bas, après `metal-prefs-load-all').
 (header-line-indent-mode 1)
 (setq debug-on-error nil)
 
@@ -554,9 +555,16 @@ Increments de 10 (1pt)."
 Ne sauvegarde la position/taille que si les valeurs sont numeriques
 (evite les symboles comme + qui causent des erreurs au rechargement)."
   (metal-frame--lire-geom)
+  (let ((coding-system-for-write 'utf-8-unix))
   (with-temp-file metal-prefs-file
-    (insert ";;; metal-prefs.el --- Preferences MetalEmacs, genere automatiquement  -*- lexical-binding: t; -*-\n")
+    (insert ";;; metal-prefs.el --- Preferences MetalEmacs, genere automatiquement  -*- lexical-binding: t; coding: utf-8 -*-\n")
     (insert (format "(setq metal-font-size-offset %d)\n" metal-font-size-offset))
+    ;; Apparence : thème et prénom de l'accueil
+    (when (boundp 'metal-apparence-theme)
+      (insert (format "(setq metal-apparence-theme '%s)\n" metal-apparence-theme)))
+    (when (and (boundp 'metal-utilisateur-prenom)
+               (stringp metal-utilisateur-prenom))
+      (insert (format "(setq metal-utilisateur-prenom %S)\n" metal-utilisateur-prenom)))
     ;; Taille des icônes des barres (offset emoji, en centièmes)
     (when (boundp 'metal-toolbar-emoji-size-offset)
       (insert (format "(setq metal-toolbar-emoji-size-offset %d)\n"
@@ -580,7 +588,7 @@ Ne sauvegarde la position/taille que si les valeurs sont numeriques
     (insert (format "(setq metal-frame-fullscreen %s)\n"
                     (if metal-frame-fullscreen
                         (format "'%s" metal-frame-fullscreen)
-                      "nil")))))
+                      "nil"))))))
 
 (defun metal-prefs-save-all ()
   "Sauvegarde toutes les preferences MetalEmacs."
@@ -693,7 +701,8 @@ L'argument FRAME est ignore (garde pour compatibilite)."
                       treemacs-git-conflict-face
                       treemacs-tags-face))
         (when (facep face)
-          (set-face-attribute face nil :family mono-font :height font-height))))
+          ;; Police d'interface (proportionnelle) dans l'explorateur
+          (set-face-attribute face nil :family prop-font :height font-height))))
     (when (fboundp 'metal-treemacs--update-line-spacing)
       (metal-treemacs--update-line-spacing))
 
@@ -720,6 +729,14 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 
 ;; Charger les preferences (offset) des le demarrage
 (metal-prefs-load-all)
+
+;; Apparence : thème Modus (clair, sombre ou système), onglets plats,
+;; mode-line épurée.  Après les préférences, qui fixent le thème choisi.
+;; Chemin explicite : `user-emacs-directory' n'est ajouté à `load-path'
+;; que plus bas.
+(require 'metal-apparence
+         (expand-file-name "metal-apparence" user-emacs-directory))
+(metal-apparence-appliquer)
 
 
 ;; Restaurer taille/position du frame APRES affichage complet (plus fiable)
@@ -1181,16 +1198,11 @@ Hors minibuffer, demande le motif via read-string."
 
 ;; Début Onglets
 
-(use-package powerline)
-(defvar my/tab-height 22)
-(defvar my/tab-left (powerline-wave-right 'tab-line nil my/tab-height))
-(defvar my/tab-right (powerline-wave-left nil 'tab-line my/tab-height))
-
-(defun my/tab-line-tab-name-buffer (buffer &optional _buffers)
-  (powerline-render (list my/tab-left
-                          (format " %s  " (buffer-name buffer))
-                          my/tab-right)))
-(setq tab-line-tab-name-function #'my/tab-line-tab-name-buffer)
+;; Onglets plats aux couleurs du thème (`metal-apparence').  Les vagues
+;; powerline d'avant étaient des images calculées une seule fois : elles
+;; ne suivaient pas le passage au thème sombre.
+(setq tab-line-tab-name-function #'metal-apparence--nom-onglet
+      tab-line-separator "")
 (setq tab-line-new-button-show nil)
 
 ;; --- Tab-line mur à mur : afficher un onglet PARTOUT, sans exception -------

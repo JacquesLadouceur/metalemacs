@@ -124,9 +124,8 @@ un changement d'environnement Python."
   (setq window-divider-default-right-width 6
         window-divider-default-places 'right-only)
   (window-divider-mode 1)
-  (set-face-background 'window-divider "#d0d0d0")
-  (set-face-background 'window-divider-first-pixel "#d0d0d0")
-  (set-face-background 'window-divider-last-pixel "#d0d0d0")
+  ;; Couleurs du séparateur : fixées par `metal-apparence' selon le thème
+  ;; (teinte du panneau + filet d'un pixel).
 
   ;; --- Persistance de la largeur ---
   ;; Treemacs gère lui-même le verrouillage via `t w`.
@@ -201,9 +200,16 @@ un changement d'environnement Python."
   "Face pour les lignes impaires dans Treemacs (alias)."
   :group 'treemacs)
 
+(defcustom metal-treemacs-bandes nil
+  "Si non nil, alterner la couleur de fond des lignes de l'explorateur.
+Désactivé par défaut : le panneau est teinté par `metal-apparence'."
+  :type 'boolean
+  :group 'treemacs)
+
 (defun metal-treemacs--stripe-rows ()
-  "Ajoute une couleur de fond alternée dans Treemacs."
+  "Ajoute une couleur de fond alternée dans Treemacs (si activé)."
   (metal-treemacs--clear-stripes)
+  (when metal-treemacs-bandes
   (save-excursion
     (goto-char (point-min))
     (let ((line-num 0))
@@ -219,7 +225,7 @@ un changement d'environnement Python."
                                      '(space :align-to right-fringe)
                                      'face 'metal-treemacs-stripe-face))))
         (setq line-num (1+ line-num))
-        (forward-line 1)))))
+        (forward-line 1))))))
 
 ;; Alias pour compatibilité avec l'ancien nom
 (defalias 'my/treemacs-stripe-rows 'metal-treemacs--stripe-rows)
@@ -367,10 +373,11 @@ Destinée à `after-change-functions', d'où les arguments ignorés."
   (let ((font-height (if (fboundp 'metal-font-height)
                          (metal-font-height)
                        120))
-        (mono-font (cond 
-                    ((eq system-type 'darwin) "Menlo")
-                    ((eq system-type 'windows-nt) "Consolas")
-                    (t "DejaVu Sans Mono"))))
+        ;; Police d'interface (proportionnelle), comme dans `metal-setup-fonts'
+        (mono-font (cond
+                    ((eq system-type 'darwin) "Helvetica Neue")
+                    ((eq system-type 'windows-nt) "Segoe UI")
+                    (t "Sans Serif"))))
     (dolist (face '(treemacs-root-face
                     treemacs-root-unreadable-face
                     treemacs-root-remote-face

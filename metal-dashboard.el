@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Jacques Ladouceur
 ;; Auteur: Jacques Ladouceur
-;; Version: 1.1
+;; Version: 1.2
 
 
 ;;; Commentaires:
@@ -1184,257 +1184,384 @@ n'est jamais posée si le dossier contient déjà un .qmd."
          (annee (nth 5 maintenant)))
     (format "%s %d %s %d" jour-semaine jour nom-mois annee)))
 
+;;; ── Mise en forme (couleurs, pastilles, boutons) ───────────────────
+
+(defconst metal-dashboard--types
+  ;; type  libellé  encre-clair  fond-clair  encre-sombre  fond-sombre
+  '((qmd   "QMD" "#2448B0" "#E3E9F8" "#8AA8FF" "#252E45")
+    (py    "PY"  "#7A5A00" "#F6EED6" "#E6C16A" "#36311E")
+    (pl    "PL"  "#A63E06" "#FBE7DA" "#F0955E" "#3A2A20")
+    (org   "ORG" "#5B33B5" "#ECE5FA" "#B79CF7" "#2F2940")
+    (pdf   "PDF" "#A42525" "#F8E1E1" "#F07F7F" "#3A2426")
+    (el    "EL"  "#16725C" "#DDF0EA" "#6FCFB5" "#1F3531")
+    (dia   "DIA" "#16725C" "#DDF0EA" "#6FCFB5" "#1F3531")
+    (autre nil   "#4A5260" "#E9EBEE" "#AEB6C1" "#2A2D33"))
+  "Libellé et couleurs des pastilles de type de fichier.")
+
+(defconst metal-dashboard--extensions
+  '(("qmd" . qmd) ("md" . qmd) ("py" . py) ("pl" . pl) ("pro" . pl)
+    ("org" . org) ("pdf" . pdf) ("el" . el) ("drawio" . dia))
+  "Correspondance extension → type de pastille.")
+
+(defun metal-dashboard--sombre-p ()
+  "Retourner non nil si le thème courant est sombre."
+  (if (fboundp 'metal-apparence-sombre-p)
+      (metal-apparence-sombre-p)
+    (eq (frame-parameter nil 'background-mode) 'dark)))
+
+(defun metal-dashboard--couleur (cle)
+  "Retourner la couleur d'interface CLE pour le thème courant."
+  (let ((sombre (metal-dashboard--sombre-p)))
+    (pcase cle
+      ('accent  (if sombre "#8AA8FF" "#2C55C9"))
+      ('pilule  (if (fboundp 'metal-apparence-couleur)
+                    (metal-apparence-couleur 'bg-dim (if sombre "#1E2126" "#EDEFF2"))
+                  (if sombre "#1E2126" "#EDEFF2")))
+      ('survol  (if sombre "#2B303A" "#DCE4F7"))
+      ('bordure (if (fboundp 'metal-apparence-couleur)
+                    (metal-apparence-couleur 'border (if sombre "#3A3F48" "#C9CED6"))
+                  (if sombre "#3A3F48" "#C9CED6")))
+      (_ nil))))
+
+(defvar metal-dashboard--mono nil
+  "Famille monospace utilisée dans le tableau de bord (calculée au rendu).")
+
+(defun metal-dashboard--aller (colonne)
+  "Retourner un espace qui aligne la suite à COLONNE."
+  (propertize " " 'display `(space :align-to ,colonne)))
+
+(defun metal-dashboard--centrer (texte largeur)
+  "Centrer TEXTE dans LARGEUR caractères."
+  (let* ((n (max 0 (- largeur (length texte))))
+         (g (/ n 2)))
+    (concat (make-string g ?\s) texte (make-string (- n g) ?\s))))
+
+(defun metal-dashboard--type-fichier (fichier)
+  "Retourner (TYPE . LIBELLÉ) de la pastille pour FICHIER."
+  (let* ((ext (downcase (or (file-name-extension fichier) "")))
+         (type (or (cdr (assoc ext metal-dashboard--extensions)) 'autre))
+         (libelle (or (nth 1 (assq type metal-dashboard--types))
+                      (upcase (truncate-string-to-width
+                               (if (string-empty-p ext) "—" ext) 3)))))
+    (cons type libelle)))
+
+(defun metal-dashboard--pastille (type &optional libelle)
+  "Retourner la pastille colorée du TYPE, avec LIBELLE éventuel."
+  (let* ((e (assq type metal-dashboard--types))
+         (sombre (metal-dashboard--sombre-p))
+         (encre (if sombre (nth 4 e) (nth 2 e)))
+         (fond  (if sombre (nth 5 e) (nth 3 e))))
+    (propertize (metal-dashboard--centrer (or libelle (nth 1 e) "") 3)
+                'face `(:family ,metal-dashboard--mono :height 0.8 :weight bold
+                        :foreground ,encre :background ,fond
+                        :box (:line-width (6 . 3) :color ,fond)))))
+
+(defun metal-dashboard--carre (couleur fond)
+  "Petit carré COULEUR sur FOND (SVG ; repli : caractère ■)."
+  (if (and (display-graphic-p) (image-type-available-p 'svg))
+      (let ((px (max 8 (round (* (frame-char-height) 0.45)))))
+        (propertize
+         " " 'display
+         (create-image
+          (format "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d'><rect width='%d' height='%d' fill='%s'/><rect width='%d' height='%d' rx='2' fill='%s'/></svg>"
+                  px px px px fond px px couleur)
+          'svg t :ascent 'center)))
+    (propertize "■" 'face `(:foreground ,couleur))))
+
+(defun metal-dashboard--cliquable (texte action aide &optional mouse-face)
+  "Rendre TEXTE cliquable (souris et RET) : ACTION, infobulle AIDE."
+  (let ((map (make-sparse-keymap))
+        (cmd (if (commandp action)
+                 action
+               (lambda () (interactive) (funcall action)))))
+    (define-key map [mouse-1] cmd)
+    (define-key map (kbd "RET") cmd)
+    (propertize texte
+                'mouse-face (or mouse-face 'highlight)
+                'help-echo aide
+                'pointer 'hand
+                'keymap map)))
+
+(defun metal-dashboard--pilule (couleur libelle aide action)
+  "Bouton arrondi : carré COULEUR, LIBELLE, infobulle AIDE, ACTION."
+  (let* ((fond  (metal-dashboard--couleur 'pilule))
+         (survol (metal-dashboard--couleur 'survol))
+         (face  `(:background ,fond :weight medium
+                  :box (:line-width (12 . 7) :color ,fond)))
+         (s (concat (metal-dashboard--carre couleur fond) "  " libelle)))
+    (add-face-text-property 0 (length s) face t s)
+    (metal-dashboard--cliquable
+     s action aide
+     `(:background ,survol :box (:line-width (12 . 7) :color ,survol)))))
+
+(defun metal-dashboard--touche (touche)
+  "Indication de raccourci clavier TOUCHE."
+  (propertize (concat " " touche " ")
+              'face `(:family ,metal-dashboard--mono :height 0.8
+                      :inherit shadow
+                      :box (:line-width 1 :color ,(metal-dashboard--couleur 'bordure)))))
+
+(defun metal-dashboard--titre-section (texte)
+  "Titre de section discret, en capitales."
+  (propertize (upcase texte) 'face '(:inherit shadow :height 0.8 :weight bold)))
+
+(defun metal-dashboard--lien (texte action aide)
+  "Lien textuel couleur d'accent."
+  (metal-dashboard--cliquable
+   (propertize texte 'face `(:foreground ,(metal-dashboard--couleur 'accent)))
+   action aide))
+
+(defun metal-dashboard--prenom ()
+  "Prénom de l'accueil, ou nil."
+  (and (fboundp 'metal-utilisateur-prenom-affiche)
+       (metal-utilisateur-prenom-affiche)))
+
+;;; ── Rendu ──────────────────────────────────────────────────────────
+
+(defun metal-dashboard--inserer-entete (marge largeur)
+  "Insérer la date, l'accueil et les boutons de navigation."
+  (insert (propertize (metal-dashboard--date-francaise) 'face 'shadow)
+          (metal-dashboard--aller (- (+ marge largeur) 15))
+          (propertize "MetalEmacs 1.1" 'face 'shadow)
+          "\n")
+  (let ((prenom (metal-dashboard--prenom)))
+    (insert (metal-dashboard--cliquable
+             (propertize (if prenom (format "Bonjour, %s" prenom) "Bonjour")
+                         'face '(:height 1.8 :weight semi-bold))
+             (lambda ()
+               (when (fboundp 'metal-utilisateur-definir-prenom)
+                 (call-interactively 'metal-utilisateur-definir-prenom)))
+             "Modifier le prénom affiché"
+             '(:height 1.8 :weight semi-bold))
+            "\n\n"))
+  (let ((boutons
+         (list
+          (metal-dashboard--pilule
+           "#D9534F" "METAL" "Ouvrir le guide METAL (PDF)"
+           (lambda ()
+             (find-file (expand-file-name "Metal.pdf" user-emacs-directory))))
+          (metal-dashboard--pilule
+           "#E0701E" "Calendrier" "Ouvrir le calendrier"
+           (lambda ()
+             (if (fboundp 'metal-calendrier-ouvrir)
+                 (metal-calendrier-ouvrir)
+               (calendar))))
+          (metal-dashboard--pilule
+           "#C9A220" "Notes rapides" "Ouvrir les notes rapides"
+           #'metal-dashboard-notes-ouvrir)
+          (metal-dashboard--pilule
+           "#7B4FDB" "Signets" "Ouvrir les signets web"
+           #'metal-dashboard-signets-ouvrir)
+          (metal-dashboard--pilule
+           "#2C55C9" "Actualités" "Choisir un site d'actualités"
+           #'metal-dashboard-actualites-menu)
+          (metal-dashboard--pilule
+           "#1F9E80" "Assistant" "Ouvrir l'assistant d'installation"
+           (lambda ()
+             (require 'metal-deps nil t)
+             (if (fboundp 'metal-deps-afficher-etat)
+                 (metal-deps-afficher-etat)
+               (message "metal-deps non disponible")))))))
+    (insert (mapconcat #'identity boutons "   "))
+    (when (fboundp 'metal-agent-dashboard-buttons)
+      (let ((extra (metal-agent-dashboard-buttons)))
+        (when (and extra (not (string-empty-p extra)))
+          (insert "   " extra))))
+    (insert "\n\n\n")))
+
+(defun metal-dashboard--inserer-nouveau (marge largeur)
+  "Insérer la grille « Nouveau » (2 rangées de 3 cartes)."
+  (insert (metal-dashboard--titre-section "Nouveau") "\n")
+  (let* ((cartes
+          `(("p" qmd "Présentation" "Quarto · Beamer"
+             metal-dashboard-new-qmd "Créer une présentation Quarto")
+            ("d" qmd "Document" "Quarto · LuaLaTeX"
+             metal-dashboard-new-qmd-document "Créer un document Quarto")
+            ("y" py "Python" "Script .py"
+             metal-dashboard-new-python "Créer un fichier Python")
+            ("r" pl "Prolog" "SWI-Prolog .pl"
+             metal-dashboard-new-prolog "Créer un fichier Prolog")
+            ("o" org "Document Org" "Notes .org"
+             metal-dashboard-new-org-document "Créer un document Org-mode")
+            ("g" dia "Diagramme" "draw.io"
+             metal-dashboard-new-drawio "Créer un diagramme draw.io")))
+         (colw (/ largeur 3)))
+    (dolist (rangee (list (seq-take cartes 3) (seq-drop cartes 3)))
+      (let ((ligne1 "") (ligne2 "") (i 0))
+        (dolist (c rangee)
+          (pcase-let* ((`(,touche ,type ,nom ,desc ,action ,aide) c)
+                       (x (+ marge (* i colw))))
+            (setq ligne1
+                  (concat ligne1
+                          (metal-dashboard--aller x)
+                          (metal-dashboard--cliquable
+                           (concat (metal-dashboard--pastille type)
+                                   (metal-dashboard--aller (+ x 6))
+                                   (propertize nom 'face '(:weight semi-bold)))
+                           action aide)
+                          (metal-dashboard--aller (+ x colw -6))
+                          (metal-dashboard--touche touche))
+                  ligne2
+                  (concat ligne2
+                          (metal-dashboard--aller (+ x 6))
+                          (propertize desc 'face '(:inherit shadow :height 0.9))))
+            (setq i (1+ i))))
+        (insert ligne1 "\n" ligne2 "\n\n"))))
+  (insert "\n"))
+
+(defun metal-dashboard--inserer-recents (marge largeur)
+  "Insérer la liste numérotée des fichiers récents."
+  (insert (metal-dashboard--titre-section "Fichiers récents")
+          (metal-dashboard--aller (- (+ marge largeur) 13))
+          (metal-dashboard--lien
+           "Tout afficher"
+           (if (fboundp 'recentf-open) #'recentf-open #'recentf-open-files)
+           "Parcourir tous les fichiers récents")
+          "\n")
+  (let* ((fichiers (seq-take
+                    (seq-filter #'metal-dashboard--recentf-acceptable-p
+                                recentf-list)
+                    9))
+         (x-nom (+ marge 6))
+         (x-dossier (+ marge (max 34 (round (* largeur 0.6)))))
+         (x-num (- (+ marge largeur) 2))
+         (n 0))
+    (if (null fichiers)
+        (insert (propertize "Aucun fichier récent pour l'instant." 'face 'shadow) "\n")
+      (dolist (f fichiers)
+        (setq n (1+ n))
+        (let* ((type (metal-dashboard--type-fichier f))
+               (nom (truncate-string-to-width
+                     (file-name-nondirectory f) (- x-dossier x-nom 2) nil nil "…"))
+               (dossier (truncate-string-to-width
+                         (file-name-nondirectory
+                          (directory-file-name (file-name-directory f)))
+                         (max 8 (- x-num x-dossier 3)) nil nil "…"))
+               (chemin f))
+          (insert (metal-dashboard--aller marge)
+                  (metal-dashboard--cliquable
+                   (concat (metal-dashboard--pastille (car type) (cdr type))
+                           (metal-dashboard--aller x-nom)
+                           (propertize nom 'face `(:family ,metal-dashboard--mono)))
+                   (lambda () (find-file chemin))
+                   chemin)
+                  (metal-dashboard--aller x-dossier)
+                  (propertize dossier 'face 'shadow)
+                  (metal-dashboard--aller x-num)
+                  (propertize (number-to-string n)
+                              'face `(:inherit shadow :family ,metal-dashboard--mono))
+                  "\n")))))
+  (insert "\n\n")
+  ;; Retourner la liste affichée pour les raccourcis 1 à 9.
+  (seq-take (seq-filter #'metal-dashboard--recentf-acceptable-p recentf-list) 9))
+
+(defun metal-dashboard--inserer-reglages ()
+  "Insérer la ligne discrète des réglages d'affichage."
+  (let ((sep (propertize "     ·     " 'face 'shadow))
+        (police (if (fboundp 'metal-font-height) (metal-font-height) 120))
+        (icones (if (fboundp 'metal-toolbar-emoji-size) (metal-toolbar-emoji-size) 120))
+        (rafraichir (lambda (f) (lambda () (when (fboundp f) (funcall f) (metal-dashboard-open))))))
+    (insert
+     (propertize (format "Police %d  " police) 'face 'shadow)
+     (metal-dashboard--lien "−" (funcall rafraichir 'metal-font-decrease) "Diminuer la police (touche -)")
+     "  "
+     (metal-dashboard--lien "+" (funcall rafraichir 'metal-font-increase) "Augmenter la police (touche +)")
+     "  "
+     (metal-dashboard--lien "réinitialiser" (funcall rafraichir 'metal-font-reset) "Taille par défaut (touche 0)")
+     sep
+     (propertize (format "Icônes %d  " icones) 'face 'shadow)
+     (metal-dashboard--lien "−" (funcall rafraichir 'metal-toolbar-emoji-decrease) "Diminuer les icônes")
+     "  "
+     (metal-dashboard--lien "+" (funcall rafraichir 'metal-toolbar-emoji-increase) "Augmenter les icônes")
+     "  "
+     (metal-dashboard--lien "réinitialiser" (funcall rafraichir 'metal-toolbar-emoji-reset) "Taille par défaut")
+     sep
+     (propertize (format "Thème %s  "
+                         (if (fboundp 'metal-apparence-nom-theme)
+                             (metal-apparence-nom-theme)
+                           "Clair"))
+                 'face 'shadow)
+     (metal-dashboard--lien "changer"
+                            (lambda ()
+                              (if (fboundp 'metal-apparence-choisir)
+                                  (call-interactively #'metal-apparence-choisir)
+                                (message "metal-apparence non chargé")))
+                            "Clair, sombre ou système (touche t : basculer)")
+     "\n")))
+
+(defun metal-dashboard--clavier (recents)
+  "Construire le clavier local ; RECENTS est la liste numérotée."
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "p") #'metal-dashboard-new-qmd)
+    (define-key map (kbd "d") #'metal-dashboard-new-qmd-document)
+    (define-key map (kbd "y") #'metal-dashboard-new-python)
+    (define-key map (kbd "r") #'metal-dashboard-new-prolog)
+    (define-key map (kbd "o") #'metal-dashboard-new-org-document)
+    (define-key map (kbd "g") #'metal-dashboard-new-drawio)
+    (define-key map (kbd "G") #'metal-dashboard-open)
+    (define-key map (kbd "+") (lambda () (interactive)
+                                (when (fboundp 'metal-font-increase)
+                                  (metal-font-increase) (metal-dashboard-open))))
+    (define-key map (kbd "-") (lambda () (interactive)
+                                (when (fboundp 'metal-font-decrease)
+                                  (metal-font-decrease) (metal-dashboard-open))))
+    (define-key map (kbd "0") (lambda () (interactive)
+                                (when (fboundp 'metal-font-reset)
+                                  (metal-font-reset) (metal-dashboard-open))))
+    (define-key map (kbd "t") (lambda () (interactive)
+                                (when (fboundp 'metal-apparence-basculer)
+                                  (metal-apparence-basculer))))
+    (let ((n 0))
+      (dolist (f recents)
+        (setq n (1+ n))
+        (let ((chemin f))
+          (define-key map (kbd (number-to-string n))
+            (lambda () (interactive) (find-file chemin))))))
+    map))
+
 (defun metal-dashboard-open ()
-  "Afficher le tableau de bord MetalEmacs dans un buffer lisible et joli."
+  "Afficher le tableau de bord MetalEmacs."
   (interactive)
-
-  ;; Précharger les icônes SVG couleur du tableau de bord (silencieux ;
-  ;; téléchargées si absentes, repli sur emoji Unicode si hors-ligne).
-  (when (fboundp 'metal-icones-precharger)
-    (metal-icones-precharger
-     '("👤" "❓" "📅" "📝" "🔖" "📰" "🔧"
-       "📊" "📄" "🐍" "🦉" "📋" "🗂" "➕")
-     (metal-dashboard--icone-taille-px)))
-
   ;; S'assurer que recentf est actif et à jour
   (recentf-mode 1)
   (ignore-errors (recentf-save-list))
   (ignore-errors (recentf-load-list))
-  
+
   (let ((buf (get-buffer-create metal-dashboard-buffer-name)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
-      (erase-buffer)
-      (fundamental-mode)
-      ;; Réglages d'affichage
-      (setq-local cursor-type nil
-                  line-spacing 0.3
-                  truncate-lines t
-                  buffer-read-only nil)
-
-      ;; Largeur dynamique basée sur la fenêtre qui affiche ce buffer
-      (let* ((dash-window (or (get-buffer-window buf)
-                              (selected-window)))
-             (avail-width (max 60 (- (window-width dash-window) 4))))
-
-      ;; --------------------------------------------------
-      ;;  Titre encadré
-      ;; --------------------------------------------------
-      (let* ((title (concat (metal-dashboard--icone "👤")
-                            " - MetalEmacs 1.1 – Tableau de bord "))
-             (line-len (max (length title) avail-width))
-             (line     (make-string line-len ?═))
-             (pad-left (/ (- line-len (length title)) 2))
-             (pad-right (- line-len pad-left (length title) 1 )))
-        (insert "╔" line "╗\n")
-        (insert "║"
-                (make-string pad-left ? )
-                title
-                (make-string pad-right ? )
-                "║\n")
-        (insert "╚" line "╝\n\n"))
-
-      ;; --------------------------------------------------
-      ;;  Barre d'icônes principale
-      ;; --------------------------------------------------
-      (insert "  " (metal-dashboard--header-buttons) "\n")
-
-      ;; Petite ligne de séparation
-      (insert (make-string avail-width ?─) "\n\n")
-      
-      ;; --------------------------------------------------
-      ;;  Section : Nouveaux fichiers (grille 2x2)
-      ;; --------------------------------------------------
-      (insert "■ Nouveaux fichiers\n")
-
-      (let* ((icon-presentation
-              (metal-dashboard--mdicon "📊" nil 1.2))
-             (icon-document
-              (metal-dashboard--mdicon "📄" nil 1.2))
-             (icon-python
-              (metal-dashboard--mdicon "🐍" nil 1.2))
-             (icon-prolog
-              (metal-dashboard--mdicon "🦉" nil 1.2))
-             (icon-org
-              (metal-dashboard--mdicon "📋" nil 1.2))
-             (icon-drawio
-              (if (fboundp 'metal-icone-locale)
-                  (let ((s (metal-icone-locale
-                            "organigramme"
-                            (round (* (metal-dashboard--icone-taille-px) 1.2)))))
-                    (if (and s (> (length s) 0))
-                        s
-                      (metal-dashboard--mdicon "🗂️" nil 1.2)))
-                (metal-dashboard--mdicon "🗂️" nil 1.2)))
-             (left-key-column 3)
-             (right-key-column 42))
-        (metal-dashboard--insert-new-file-row
-         "p" icon-presentation "Présentation QMD"
-         #'metal-dashboard-new-qmd
-         "Créer une présentation Quarto Markdown"
-         "d" icon-document "Document QMD"
-         #'metal-dashboard-new-qmd-document
-         "Créer un document Quarto Markdown"
-         left-key-column right-key-column)
-        (metal-dashboard--insert-new-file-row
-         "y" icon-python "Python"
-         #'metal-dashboard-new-python
-         "Créer un fichier Python"
-         "r" icon-prolog "Prolog"
-         #'metal-dashboard-new-prolog
-         "Créer un fichier Prolog"
-         left-key-column right-key-column)
-        (metal-dashboard--insert-new-file-row
-         "o" icon-org "Document ORG"
-         #'metal-dashboard-new-org-document
-         "Créer un document Org-mode"
-         "g" icon-drawio "Diagramme"
-         #'metal-dashboard-new-drawio
-         "Créer un diagramme draw.io"
-         left-key-column right-key-column)
-        (insert "\n"))
-      (insert (metal-dashboard--separator avail-width))
-
-      (insert "\n")
-      
-
-      ;; --------------------------------------------------
-      ;;  Section : Derniers fichiers
-      ;; --------------------------------------------------
-      (insert "■ Fichiers récents\n")
-      (recentf-load-list)
-      (dolist (f (seq-take
-                  (seq-filter #'metal-dashboard--recentf-acceptable-p
-                              recentf-list)
-                  10))
-        (let* ((name (file-name-nondirectory f))
-               (dir (file-name-nondirectory
-                     (directory-file-name (file-name-directory f))))
-               (filepath f))
-          (insert "   • ")
-          (insert-text-button name
-                              'face '(:foreground "#0066cc" :underline nil)
-                              'mouse-face 'highlight
-                              'help-echo filepath
-                              'action `(lambda (_btn) (find-file ,filepath))
-                              'follow-link t
-                              'pointer 'hand)
-          (insert (propertize (format "  (%s)" dir) 'face '(:foreground "#666666")))
-          (insert "\n")))
-      (insert "\n")
-      (insert (metal-dashboard--separator avail-width))
-
-      ;; --------------------------------------------------
-      ;;  Section : Taille des polices
-      ;; --------------------------------------------------
-      (insert "\n■ Taille des polices\n")
-      (insert "   ")
-      (insert-text-button "[ - ]"
-                          'face '(:foreground "#cc0000" :weight bold)
-                          'mouse-face 'highlight
-                          'help-echo "Diminuer la taille des polices (C--)"
-                          'action (lambda (_btn) 
-                                    (when (fboundp 'metal-font-decrease)
-                                      (metal-font-decrease)
-                                      (metal-dashboard-open)))
-                          'follow-link t
-                          'pointer 'hand)
-      (insert "  ")
-      (let ((current-size (if (fboundp 'metal-font-height) 
-                              (metal-font-height) 
-                            120)))
-        (insert (propertize (format " %d " current-size) 
-                            'face '(:foreground "#333333" :weight bold))))
-      (insert "  ")
-      (insert-text-button "[ + ]"
-                          'face '(:foreground "#006600" :weight bold)
-                          'mouse-face 'highlight
-                          'help-echo "Augmenter la taille des polices (C-+)"
-                          'action (lambda (_btn) 
-                                    (when (fboundp 'metal-font-increase)
-                                      (metal-font-increase)
-                                      (metal-dashboard-open)))
-                          'follow-link t
-                          'pointer 'hand)
-      (insert "   ")
-      (insert-text-button "[Réinitialiser]"
-                          'face '(:foreground "#666666")
-                          'mouse-face 'highlight
-                          'help-echo "Réinitialiser la taille des polices (C-0)"
-                          'action (lambda (_btn) 
-                                    (when (fboundp 'metal-font-reset)
-                                      (metal-font-reset)
-                                      (metal-dashboard-open)))
-                          'follow-link t
-                          'pointer 'hand)
-      (insert "\n\n")
-
-      ;; --------------------------------------------------
-      ;;  Section : Taille des icônes
-      ;; --------------------------------------------------
-      (insert "■ Taille des icônes\n")
-      (insert "   ")
-      (insert-text-button "[ - ]"
-                          'face '(:foreground "#cc0000" :weight bold)
-                          'mouse-face 'highlight
-                          'help-echo "Diminuer la taille des icônes des barres d'outils"
-                          'action (lambda (_btn)
-                                    (when (fboundp 'metal-toolbar-emoji-decrease)
-                                      (metal-toolbar-emoji-decrease)
-                                      (metal-dashboard-open)))
-                          'follow-link t
-                          'pointer 'hand)
-      (insert "  ")
-      (let ((current (if (fboundp 'metal-toolbar-emoji-size)
-                         (metal-toolbar-emoji-size)
-                       120)))
-        (insert (propertize (format " %d " current)
-                            'face '(:foreground "#333333" :weight bold))))
-      (insert "  ")
-      (insert-text-button "[ + ]"
-                          'face '(:foreground "#006600" :weight bold)
-                          'mouse-face 'highlight
-                          'help-echo "Augmenter la taille des icônes des barres d'outils"
-                          'action (lambda (_btn)
-                                    (when (fboundp 'metal-toolbar-emoji-increase)
-                                      (metal-toolbar-emoji-increase)
-                                      (metal-dashboard-open)))
-                          'follow-link t
-                          'pointer 'hand)
-      (insert "   ")
-      (insert-text-button "[Réinitialiser]"
-                          'face '(:foreground "#666666")
-                          'mouse-face 'highlight
-                          'help-echo "Réinitialiser la taille des icônes"
-                          'action (lambda (_btn)
-                                    (when (fboundp 'metal-toolbar-emoji-reset)
-                                      (metal-toolbar-emoji-reset)
-                                      (metal-dashboard-open)))
-                          'follow-link t
-                          'pointer 'hand)
-      (insert "\n\n")
-      (insert (metal-dashboard--separator avail-width))
-
-      ;; Raccourcis clavier locaux
-      (local-set-key (kbd "p") #'metal-dashboard-new-qmd)
-      (local-set-key (kbd "d") #'metal-dashboard-new-qmd-document)
-      (local-set-key (kbd "y") #'metal-dashboard-new-python)
-      (local-set-key (kbd "r") #'metal-dashboard-new-prolog)
-      (local-set-key (kbd "o") #'metal-dashboard-new-org-document)
-      (local-set-key (kbd "g") #'metal-dashboard-new-drawio)
-      (local-set-key (kbd "G") #'metal-dashboard-open)  ; rafraîchir (déplacé de g à G)
-      (local-set-key (kbd "+") #'metal-font-increase)
-      (local-set-key (kbd "-") #'metal-font-decrease)
-      (local-set-key (kbd "0") #'metal-font-reset)
-
-      ;; Mise en forme finale
-      (goto-char (point-min))
-      (forward-line 4)
-      (setq buffer-read-only t))))
-    ;; Afficher le buffer si appelé interactivement
+        (erase-buffer)
+        (fundamental-mode)
+        ;; Famille monospace lue AVANT le remappage proportionnel.
+        (setq metal-dashboard--mono (face-attribute 'default :family nil t))
+        (setq-local cursor-type nil
+                    line-spacing 0.35
+                    truncate-lines t
+                    buffer-face-mode-face 'variable-pitch)
+        (buffer-face-mode 1)
+        (let* ((fenetre (or (get-buffer-window buf) (selected-window)))
+               (marge 6)
+               (largeur (max 72 (- (window-width fenetre) (* 2 marge) 2)))
+               recents)
+          (setq-local line-prefix `(space :width ,marge))
+          (setq-local wrap-prefix `(space :width ,marge))
+          (insert "\n")
+          (metal-dashboard--inserer-entete marge largeur)
+          (metal-dashboard--inserer-nouveau marge largeur)
+          (setq recents (metal-dashboard--inserer-recents marge largeur))
+          (metal-dashboard--inserer-reglages)
+          (use-local-map (metal-dashboard--clavier recents)))
+        (goto-char (point-min))
+        (setq buffer-read-only t)))
     (when (called-interactively-p 'any)
       (switch-to-buffer buf))
     buf))
+
+;; Redessiner le tableau de bord quand le thème change.
+(add-hook 'metal-apparence-apres-changement-hook
+          (lambda ()
+            (when (get-buffer metal-dashboard-buffer-name)
+              (metal-dashboard-open))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Démarrage automatique
