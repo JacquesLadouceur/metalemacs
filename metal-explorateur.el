@@ -379,6 +379,7 @@ Destinée à `after-change-functions', d'où les arguments ignorés."
                     ((eq system-type 'windows-nt) "Segoe UI")
                     (t "Sans Serif"))))
     (dolist (face '(treemacs-root-face
+                    treemacs-git-unmodified-face
                     treemacs-root-unreadable-face
                     treemacs-root-remote-face
                     treemacs-directory-face
@@ -1096,6 +1097,19 @@ Le nom est saisi dans le minibuffer, sans dialogue graphique."
             (treemacs-create-icon :icon ico-ferme :extensions (dir-closed) :fallback "+ ")
             (treemacs-create-icon :icon ico-ouvert :extensions (dir-open) :fallback "- ")
             (treemacs-create-icon :icon ico-fichier :extensions (fallback))
+            ;; Toutes les icônes héritées de « Default » : les dossiers à nom
+            ;; spécial (« test-closed », « src-open »…) prennent le dossier
+            ;; au trait, les extensions de fichier la page grise.  Les
+            ;; couleurs par type sont posées ensuite.
+            (let (dossiers-fermes dossiers-ouverts fichiers)
+              (dolist (cle (ht-keys (treemacs-theme->gui-icons treemacs--current-theme)))
+                (when (stringp cle)
+                  (cond ((string-suffix-p "-closed" cle) (push cle dossiers-fermes))
+                        ((string-suffix-p "-open" cle) (push cle dossiers-ouverts))
+                        (t (push cle fichiers)))))
+              (treemacs-create-icon :icon ico-ferme :extensions dossiers-fermes :fallback "+ ")
+              (treemacs-create-icon :icon ico-ouvert :extensions dossiers-ouverts :fallback "- ")
+              (treemacs-create-icon :icon ico-fichier :extensions fichiers))
             (dolist (paire metal-treemacs--couleurs-types)
               (let ((ico (metal-treemacs--icone-svg
                           metal-treemacs--trace-fichier (cdr paire) px fond))

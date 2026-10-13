@@ -192,7 +192,13 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
     ;; propre face de fond : c'est elle qu'il faut colorer).
     (set-face-attribute 'metal-apparence-panneau nil :background bg-dim)
     (when (facep 'treemacs-window-background-face)
-      (set-face-attribute 'treemacs-window-background-face nil :background bg-dim))))
+      (set-face-attribute 'treemacs-window-background-face nil :background bg-dim))
+    ;; Noms de l'explorateur dans la couleur du texte, sur toutes les
+    ;; plateformes (dossiers et fichiers).
+    (dolist (face '(treemacs-directory-face treemacs-file-face
+                    treemacs-git-unmodified-face))
+      (when (facep face)
+        (set-face-attribute face nil :foreground fg-main)))))
 
 (defun metal-apparence--retoucher-onglets ()
   "Donner aux onglets un aspect plat aux couleurs du thème."
@@ -306,7 +312,16 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
 
 (add-hook 'after-make-frame-functions #'metal-apparence--titre-macos)
 
+(defvar tab-line-tab-close-map)
+
 (with-eval-after-load 'tab-line
+  ;; Bouton de fermeture en texte (×) : l'image XPM d'origine ne
+  ;; s'affiche pas sous Windows et ne suit pas le thème.
+  (setq tab-line-close-button
+        (propertize " ×"
+                    'keymap tab-line-tab-close-map
+                    'mouse-face 'tab-line-close-highlight
+                    'help-echo "Fermer l'onglet"))
   (metal-apparence--retoucher-onglets))
 
 ;;; ═══════════════════════════════════════════════════════════════════

@@ -690,6 +690,7 @@ L'argument FRAME est ignore (garde pour compatibilite)."
     ;; Mettre a jour Treemacs si charge (tous les systemes)
     (when (featurep 'treemacs)
       (dolist (face '(treemacs-root-face
+                      treemacs-git-unmodified-face
                       treemacs-root-unreadable-face
                       treemacs-root-remote-face
                       treemacs-directory-face
