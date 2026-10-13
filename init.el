@@ -164,8 +164,19 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
   (my/decode-raw-bytes-in-buffer 'windows-1252))
 
 
-;; Désactiver cua-mode
+;; Activer cua-mode
 (cua-mode 1)
+
+;; C-a = tout sélectionner sous Windows (Cmd-A le fait déjà sous macOS).
+;; Carte d'émulation : prioritaire sur les cartes locales (Org, etc.).
+(when (eq system-type 'windows-nt)
+  (defvar metal-cua-extra-map
+    (let ((m (make-sparse-keymap)))
+      (define-key m (kbd "C-a") #'mark-whole-buffer)
+      m)
+    "Raccourcis Windows absents de cua-mode.")
+  (add-to-list 'emulation-mode-map-alists
+               `((t . ,metal-cua-extra-map))))
 
 ;; Shift + flèches pour sélectionner visuellement
 (setq shift-select-mode t)
