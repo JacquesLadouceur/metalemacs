@@ -1002,6 +1002,117 @@ Le nom est saisi dans le minibuffer, sans dialogue graphique."
       (toggle-frame-fullscreen))))  ;; Active le mode plein écran
 
 
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Icônes « Metal » (SVG, dessinées au trait)
+;;; ═══════════════════════════════════════════════════════════════════
+;;
+;; Thème d'icônes Treemacs « Metal » : dossiers au trait gris, racine à la
+;; couleur d'accent, fichiers au trait coloré selon leur type (mêmes
+;; familles de couleurs que les pastilles du tableau de bord).  Les icônes
+;; sont générées en SVG — aucune police ni fichier d'image requis — et
+;; régénérées à chaque changement de thème clair/sombre (leur fond doit
+;; suivre celui du panneau).  Repli : thème « Default » (PNG).
+
+(defcustom metal-treemacs-icones-metal t
+  "Si non nil, utiliser les icônes SVG « Metal » dans l'explorateur."
+  :type 'boolean
+  :group 'treemacs)
+
+(defconst metal-treemacs--trace-dossier
+  "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+  "Tracé SVG (24×24) d'un dossier fermé.")
+
+(defconst metal-treemacs--trace-dossier-ouvert
+  "M4 19h13l3.5-8H7.5zM4 19V7a2 2 0 0 1 2-2h4l2 2h5a2 2 0 0 1 2 2v2"
+  "Tracé SVG (24×24) d'un dossier ouvert.")
+
+(defconst metal-treemacs--trace-fichier
+  "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5"
+  "Tracé SVG (24×24) d'une page.")
+
+(defconst metal-treemacs--couleurs-types
+  '((("qmd" "md" "markdown" "tex" "bib" "docx" "doc" "rtf") . "#3D6BE0")
+    (("py" "ipynb" "pyc") . "#C9A220")
+    (("pl" "pro" "plt") . "#E0701E")
+    (("org") . "#7B4FDB")
+    (("pdf") . "#D23F3F")
+    (("el" "elc") . "#1F9E80")
+    (("csv" "tsv" "xlsx" "xls" "ods") . "#1F9E80")
+    (("drawio" "svg" "png" "jpg" "jpeg" "gif" "webp") . "#C2477A")
+    (("pptx" "ppt" "key") . "#E0701E"))
+  "Couleur du trait des icônes de fichier, par extension.")
+
+(defun metal-treemacs--image-svg (trace couleur px fond &optional remplir)
+  "Image SVG du TRACE en COULEUR, PX pixels, sur FOND ; REMPLIR teinte l'intérieur."
+  (create-image
+   (format (concat "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d' viewBox='0 0 24 24'>"
+                   "<path d='%s' fill='%s' fill-opacity='%s' stroke='%s' stroke-width='1.7'"
+                   " stroke-linecap='round' stroke-linejoin='round'/></svg>")
+           px px trace couleur (if remplir "0.18" "0") couleur)
+   'svg t :ascent 'center :background fond))
+
+(defun metal-treemacs--icone-svg (trace couleur px fond &optional remplir)
+  "Chaîne d'icône Treemacs (image + espace) pour TRACE en COULEUR."
+  (concat (propertize " " 'display
+                      (metal-treemacs--image-svg trace couleur px fond remplir))
+          " "))
+
+(defvar treemacs--themes)
+(declare-function treemacs-theme->name "treemacs-themes")
+(declare-function treemacs-load-theme "treemacs-themes")
+(declare-function treemacs-get-local-window "treemacs-scope")
+
+(with-eval-after-load 'treemacs
+  (defun metal-treemacs-installer-icones ()
+    "Créer (ou recréer) le thème d'icônes « Metal » et l'activer."
+    (interactive)
+    (when (and metal-treemacs-icones-metal
+               (display-graphic-p)
+               (image-type-available-p 'svg))
+      (let* ((sombre (and (fboundp 'metal-apparence-sombre-p)
+                          (metal-apparence-sombre-p)))
+             (px (max 12 (or metal-treemacs-icones-taille 20)))
+             (fond (or (face-background 'treemacs-window-background-face nil 'default)
+                       (face-background 'default)))
+             (gris (if sombre "#8A93A0" "#7A8290"))
+             (accent (if sombre "#8AA8FF" "#2C55C9"))
+             (ico-racine (metal-treemacs--icone-svg
+                          metal-treemacs--trace-dossier accent px fond t))
+             (ico-ferme (metal-treemacs--icone-svg
+                         metal-treemacs--trace-dossier gris px fond))
+             (ico-ouvert (metal-treemacs--icone-svg
+                          metal-treemacs--trace-dossier-ouvert gris px fond))
+             (ico-fichier (metal-treemacs--icone-svg
+                           metal-treemacs--trace-fichier gris px fond)))
+        ;; Retirer une version précédente du thème avant de le recréer.
+        (setq treemacs--themes
+              (cl-remove "Metal" treemacs--themes
+                         :key #'treemacs-theme->name :test #'equal))
+        (treemacs-create-theme "Metal"
+          :extends "Default"
+          :config
+          (progn
+            (treemacs-create-icon :icon ico-racine :extensions (root-open root-closed) :fallback "")
+            (treemacs-create-icon :icon ico-ferme :extensions (dir-closed) :fallback "+ ")
+            (treemacs-create-icon :icon ico-ouvert :extensions (dir-open) :fallback "- ")
+            (treemacs-create-icon :icon ico-fichier :extensions (fallback))
+            (dolist (paire metal-treemacs--couleurs-types)
+              (let ((ico (metal-treemacs--icone-svg
+                          metal-treemacs--trace-fichier (cdr paire) px fond))
+                    (exts (car paire)))
+                (treemacs-create-icon :icon ico :extensions exts)))))
+        (treemacs-load-theme "Metal")
+        (when-let ((w (treemacs-get-local-window)))
+          (with-selected-window w
+            (ignore-errors (treemacs-refresh)))))))
+  (metal-treemacs-installer-icones)
+  ;; Changement de taille (M-x treemacs-resize-icons) : regénérer en SVG.
+  (advice-add 'treemacs-resize-icons :after
+              (lambda (&rest _) (metal-treemacs-installer-icones)))
+  ;; Changement de thème clair/sombre : le fond des icônes doit suivre.
+  (add-hook 'metal-apparence-apres-changement-hook
+            #'metal-treemacs-installer-icones))
+
 (provide 'metal-explorateur)
 
 ;;; metal-treemacs.el ends here

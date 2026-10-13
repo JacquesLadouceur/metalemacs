@@ -188,8 +188,11 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
       (set-face-attribute 'window-divider-first-pixel nil :foreground bg-dim)
       (set-face-attribute 'window-divider-last-pixel nil :foreground border))
     (set-face-attribute 'vertical-border nil :foreground border)
-    ;; Panneau latéral teinté.
-    (set-face-attribute 'metal-apparence-panneau nil :background bg-dim)))
+    ;; Panneau latéral teinté (Treemacs remappe déjà `default' sur sa
+    ;; propre face de fond : c'est elle qu'il faut colorer).
+    (set-face-attribute 'metal-apparence-panneau nil :background bg-dim)
+    (when (facep 'treemacs-window-background-face)
+      (set-face-attribute 'treemacs-window-background-face nil :background bg-dim))))
 
 (defun metal-apparence--retoucher-onglets ()
   "Donner aux onglets un aspect plat aux couleurs du thème."
@@ -201,6 +204,9 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
     (set-face-attribute 'tab-line nil
                         :background bg-dim :foreground fg-dim
                         :box nil :overline nil :underline nil)
+    ;; `tab-line-tab-special' met en italique les tampons sans fichier.
+    (when (facep 'tab-line-tab-special)
+      (set-face-attribute 'tab-line-tab-special nil :slant 'normal :weight 'unspecified))
     (dolist (face '(tab-line-tab tab-line-tab-inactive
                     tab-line-tab-inactive-alternate))
       (when (facep face)
@@ -397,7 +403,7 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
 
 (with-eval-after-load 'treemacs
   (add-to-list 'treemacs-ignored-file-predicates #'metal-apparence--masquer-p)
-  (add-hook 'treemacs-mode-hook #'metal-apparence--panneau))
+  (metal-apparence--retoucher))
 
 (provide 'metal-apparence)
 

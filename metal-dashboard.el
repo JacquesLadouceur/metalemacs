@@ -767,6 +767,8 @@ Elle est plus stable entre macOS et Windows pour ce dashboard."
        (not (string-match-p "recentf$" file))
        (not (string-match-p "#" file))
        (not (string-match-p "~$" file))
+       ;; Exclure les copies de conflit de Syncthing
+       (not (string-match-p "\\.sync-conflict-" file))
        ;; Exclure les fichiers de cache et configuration Emacs
        (not (string-match-p "\\.cache" file))
        (not (string-match-p "treemacs-persist" file))
