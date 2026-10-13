@@ -1400,9 +1400,7 @@ n'est jamais posée si le dossier contient déjà un .qmd."
                            (concat (metal-dashboard--pastille type)
                                    (metal-dashboard--aller (+ x 6))
                                    (propertize nom 'face '(:weight semi-bold)))
-                           action aide)
-                          (metal-dashboard--aller (+ x colw -6))
-                          (metal-dashboard--touche touche))
+                           action (format "%s (touche %s)" aide touche)))
                   ligne2
                   (concat ligne2
                           (metal-dashboard--aller (+ x 6))
@@ -1424,7 +1422,7 @@ n'est jamais posée si le dossier contient déjà un .qmd."
                     (seq-filter #'metal-dashboard--recentf-acceptable-p
                                 recentf-list)
                     9))
-         (x-nom marge)
+         (x-nom (+ marge 6))
          (x-dossier (+ marge (max 34 (round (* largeur 0.6)))))
          (x-num (- (+ marge largeur) 2))
          (n 0))
@@ -1432,7 +1430,8 @@ n'est jamais posée si le dossier contient déjà un .qmd."
         (insert (propertize "Aucun fichier récent pour l'instant." 'face 'shadow) "\n")
       (dolist (f fichiers)
         (setq n (1+ n))
-        (let* ((nom (truncate-string-to-width
+        (let* ((type (metal-dashboard--type-fichier f))
+               (nom (truncate-string-to-width
                      (file-name-nondirectory f) (- x-dossier x-nom 2) nil nil "…"))
                (dossier (truncate-string-to-width
                          (file-name-nondirectory
@@ -1441,7 +1440,9 @@ n'est jamais posée si le dossier contient déjà un .qmd."
                (chemin f))
           (insert (metal-dashboard--aller marge)
                   (metal-dashboard--cliquable
-                   (propertize nom 'face `(:family ,metal-dashboard--mono))
+                   (concat (metal-dashboard--pastille (car type) (cdr type))
+                           (metal-dashboard--aller x-nom)
+                           (propertize nom 'face `(:family ,metal-dashboard--mono)))
                    (lambda () (find-file chemin))
                    chemin)
                   (metal-dashboard--aller x-dossier)
