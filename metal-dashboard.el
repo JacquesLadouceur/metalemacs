@@ -1225,6 +1225,15 @@ n'est jamais posée si le dossier contient déjà un .qmd."
                   (if sombre "#3A3F48" "#C9CED6")))
       (_ nil))))
 
+;; Segoe UI (Windows) a des métriques verticales plus hautes que
+;; Helvetica Neue (macOS) : à interligne égal, les lignes s'écartent
+;; davantage sous Windows.  On compense par plateforme.
+(defcustom metal-dashboard-interligne
+  (if (eq system-type 'windows-nt) 0.12 0.35)
+  "Interligne du tableau de bord (fraction de la hauteur de ligne)."
+  :type 'number
+  :group 'metal-apparence)
+
 (defvar metal-dashboard--mono nil
   "Famille monospace utilisée dans le tableau de bord (calculée au rendu).")
 
@@ -1535,10 +1544,14 @@ n'est jamais posée si le dossier contient déjà un .qmd."
         ;; Famille monospace lue AVANT le remappage proportionnel.
         (setq metal-dashboard--mono (face-attribute 'default :family nil t))
         (setq-local cursor-type nil
-                    line-spacing 0.35
+                    line-spacing metal-dashboard-interligne
                     truncate-lines t
                     buffer-face-mode-face 'variable-pitch)
         (buffer-face-mode 1)
+        ;; Pas de surlignage de la ligne courante dans le tableau de bord.
+        (when (fboundp 'global-hl-line-unhighlight)
+          (global-hl-line-unhighlight))
+        (setq-local global-hl-line-mode nil)
         (let* ((fenetre (or (get-buffer-window buf) (selected-window)))
                (marge 6)
                (largeur (max 72 (- (window-width fenetre) (* 2 marge) 2)))
