@@ -2265,38 +2265,90 @@ sont disponibles — ansi-term rend mal les TUI Ink/React modernes
 
 (declare-function w32-shell-execute "w32fns.c")
 
-(defun metal-agent--lancer-terminal-externe (command)
-  "Lancer COMMAND dans un terminal externe selon `metal-agent-terminal-externe'."
-  (pcase metal-agent-terminal-externe
-    ('macos-terminal
-     (call-process
-      "osascript" nil 0 nil
-      "-e" (format "tell application \"Terminal\" to do script \"%s\""
-                   (replace-regexp-in-string "\"" "\\\\\"" command))
-      "-e" "tell application \"Terminal\" to activate"))
-    ('iterm2
-     (call-process
-      "osascript" nil 0 nil
-      "-e" (format "tell application \"iTerm\" to create window with default profile command \"%s\""
-                   (replace-regexp-in-string "\"" "\\\\\"" command))))
-    ('x-terminal-emulator
-     (call-process "x-terminal-emulator" nil 0 nil "-e" command))
-    ('windows-terminal
-     ;; wt new-tab cmd /K command — la commande reste affichée après exit.
-     (call-process "wt.exe" nil 0 nil "new-tab" "cmd" "/K" command))
-    ('powershell
-     ;; -NoExit garde la fenêtre ouverte après la fin de la commande.
-     (if (fboundp 'w32-shell-execute)
-         (w32-shell-execute "open" "powershell.exe"
-                            (format "-NoExit -Command \"%s\"" command))
-       (call-process "powershell.exe" nil 0 nil
-                     "-NoExit" "-Command" command)))
-    ('cmd
-     (if (fboundp 'w32-shell-execute)
-         (w32-shell-execute "open" "cmd.exe" (format "/K %s" command))
-       (call-process "cmd.exe" nil 0 nil "/C" "start" "cmd" "/K" command)))
-    (_
-     (user-error "Aucun terminal externe configuré (voir `metal-agent-terminal-externe')"))))
+(defun metal-agent--argv (commande)
+  "Normaliser COMMANDE en liste d'arguments (programme en tête).
+COMMANDE est soit une liste de chaînes, soit une chaîne de commande
+(découpée selon les règles du shell, guillemets compris)."
+  (if (listp commande) commande (split-string-and-unquote commande)))
+
+(defun metal-agent--argv-shell (argv)
+  "Ligne de commande POSIX (sh/zsh/bash) correspondant à ARGV."
+  (mapconcat #'shell-quote-argument argv " "))
+
+(defun metal-agent--argv-applescript (argv)
+  "Ligne shell de ARGV, échappée pour une chaîne littérale AppleScript."
+  (replace-regexp-in-string
+   "\"" "\\\\\""
+   (replace-regexp-in-string "\\\\" "\\\\\\\\" (metal-agent--argv-shell argv))))
+
+(defun metal-agent--argv-cmd (argv)
+  "Ligne de commande cmd.exe correspondant à ARGV.
+Chaque argument contenant une espace ou un caractère spécial de cmd est
+entouré de guillemets doubles."
+  (mapconcat (lambda (a)
+               (if (or (string-empty-p a)
+                       (string-match-p "[ \t&|<>^()%!,;=]" a))
+                   (concat "\"" a "\"")
+                 a))
+             argv " "))
+
+(defun metal-agent--argv-powershell (argv)
+  "Ligne PowerShell `& 'prog' 'arg' …' correspondant à ARGV.
+Le programme est résolu en chemin complet : PowerShell préfère sinon le
+script `.ps1' des paquets npm (codex, claude…), que la politique
+d'exécution par défaut de Windows refuse de lancer."
+  (let ((prog (or (executable-find (car argv)) (car argv))))
+    (concat "& "
+            (mapconcat (lambda (a)
+                         (concat "'" (replace-regexp-in-string "'" "''" a) "'"))
+                       (cons prog (cdr argv)) " "))))
+
+(defun metal-agent--lancer-terminal-externe (commande)
+  "Lancer COMMANDE dans un terminal externe selon `metal-agent-terminal-externe'.
+
+COMMANDE est une liste d'arguments (programme en tête) ou une chaîne.
+Chaque terminal reçoit la commande selon ses propres règles de
+citation : les arguments ne sont jamais recollés en une chaîne unique
+passée comme un seul argument (sous Windows Terminal, « \"codex login\" »
+devenait « \"cmd /K codex\" login » : fichier introuvable)."
+  (let ((argv (metal-agent--argv commande)))
+    (pcase metal-agent-terminal-externe
+      ('macos-terminal
+       (call-process
+        "osascript" nil 0 nil
+        "-e" (format "tell application \"Terminal\" to do script \"%s\""
+                     (metal-agent--argv-applescript argv))
+        "-e" "tell application \"Terminal\" to activate"))
+      ('iterm2
+       (call-process
+        "osascript" nil 0 nil
+        "-e" (format "tell application \"iTerm\" to create window with default profile command \"%s\""
+                     (metal-agent--argv-applescript argv))))
+      ('x-terminal-emulator
+       (apply #'call-process "x-terminal-emulator" nil 0 nil "-e" argv))
+      ('windows-terminal
+       ;; « -- » : wt.exe ne réinterprète plus ce qui suit ; chaque mot
+       ;; est un argument distinct.  cmd /K garde la fenêtre ouverte.
+       (apply #'call-process "wt.exe" nil 0 nil
+              "new-tab" "--" "cmd" "/K" argv))
+      ('powershell
+       ;; -NoExit garde la fenêtre ouverte après la fin de la commande.
+       (let ((ligne (metal-agent--argv-powershell argv)))
+         (if (fboundp 'w32-shell-execute)
+             (w32-shell-execute "open" "powershell.exe"
+                                (format "-NoExit -Command \"%s\"" ligne))
+           (call-process "powershell.exe" nil 0 nil
+                         "-NoExit" "-Command" ligne))))
+      ('cmd
+       (if (fboundp 'w32-shell-execute)
+           ;; Guillemets extérieurs : cmd /K ne retire qu'eux, et garde
+           ;; intacts ceux des arguments (chemins avec espaces).
+           (w32-shell-execute "open" "cmd.exe"
+                              (format "/K \"%s\"" (metal-agent--argv-cmd argv)))
+         (apply #'call-process "cmd.exe" nil 0 nil
+                "/C" "start" "" "cmd" "/K" argv)))
+      (_
+       (user-error "Aucun terminal externe configuré (voir `metal-agent-terminal-externe')")))))
 
 (defun metal-agent--auth-info-pour (id key)
   "Retourne la valeur de KEY (`:auth-args' ou `:auth-aide') pour l'agent ID.
@@ -2318,6 +2370,25 @@ toute la session terminal, sans gêner la CLI."
       (setq-local header-line-format
                   (propertize (concat " 📋 " aide)
                               'face '(:weight bold))))))
+
+(declare-function make-term "term")
+(declare-function term-mode "term")
+(declare-function term-char-mode "term")
+
+(defun metal-agent--ansi-term-argv (argv buffer-name)
+  "Ouvrir ARGV (programme + arguments) dans un terminal term.el.
+`ansi-term' n'accepte qu'un nom de programme, sans arguments : « codex
+login » y était cherché comme un exécutable unique.  On passe donc par
+`make-term', qui reçoit les arguments séparément.  BUFFER-NAME est le
+nom complet du buffer, astérisques compris."
+  (require 'term)
+  (let* ((nom (string-trim buffer-name "\\*" "\\*"))
+         (buf (apply #'make-term nom (car argv) nil (cdr argv))))
+    (with-current-buffer buf
+      (term-mode)
+      (term-char-mode))
+    (pop-to-buffer buf)
+    buf))
 
 (defun metal-agent-authentifier-cli (&optional provider-id forcer-ansi-term)
   "Lancer la CLI de PROVIDER-ID en mode interactif pour s'authentifier.
@@ -2348,10 +2419,16 @@ Avec un préfixe (`C-u', FORCER-ANSI-TERM non nil), force ansi-term."
                       (metal-agent--current-command)))
          (auth-args (metal-agent--auth-info-pour id :auth-args))
          (auth-aide (metal-agent--auth-info-pour id :auth-aide))
-         ;; Liste complète d'arguments pour l'auth (vide si pas d'auth-args).
-         (cmd-line  (if auth-args
-                        (mapconcat #'identity (cons command auth-args) " ")
-                      command)))
+         ;; Arguments de l'auth sous forme de LISTE (programme en tête) :
+         ;; chaque terminal la cite à sa façon.  Une chaîne recollée
+         ;; (« codex login ») se fait mal découper sous Windows Terminal
+         ;; et casse dès qu'un chemin contient une espace.
+         (argv      (cons command
+                          (if (stringp auth-args)
+                              (split-string-and-unquote auth-args)
+                            auth-args)))
+         ;; Même commande, en ligne de shell POSIX (EAT, vterm).
+         (cmd-line  (metal-agent--argv-shell argv)))
     (unless (executable-find command)
       (user-error
        "CLI « %s » introuvable.  Installer d'abord via l'Assistant (M-x metal-deps-afficher-etat)"
@@ -2367,9 +2444,8 @@ Avec un préfixe (`C-u', FORCER-ANSI-TERM non nil), force ansi-term."
           (kill-buffer old-buf)))
       (cond
        (forcer-ansi-term
-        (ansi-term cmd-line (format "Metal Agent — Auth %s" label))
-        (metal-agent--installer-aide-auth
-         (get-buffer (format "*Metal Agent — Auth %s*" label)) auth-aide))
+        (metal-agent--ansi-term-argv argv buffer-name)
+        (metal-agent--installer-aide-auth (get-buffer buffer-name) auth-aide))
        ((and (require 'eat nil t) (fboundp 'eat))
         (let ((eat-buffer-name buffer-name))
           (eat cmd-line))
@@ -2380,16 +2456,15 @@ Avec un préfixe (`C-u', FORCER-ANSI-TERM non nil), force ansi-term."
           (vterm buffer-name))
         (metal-agent--installer-aide-auth (get-buffer buffer-name) auth-aide))
        (metal-agent-terminal-externe
-        (metal-agent--lancer-terminal-externe cmd-line)
+        (metal-agent--lancer-terminal-externe argv)
         (when auth-aide
           (display-message-or-buffer
            (format "Authentification %s\n\n%s\n\nUne fois terminé, fermez la fenêtre du terminal et relancez la commande dans Emacs."
                    label auth-aide)
            "*Metal Agent — Aide auth*")))
        (t
-        (ansi-term cmd-line (format "Metal Agent — Auth %s" label))
-        (metal-agent--installer-aide-auth
-         (get-buffer (format "*Metal Agent — Auth %s*" label)) auth-aide)
+        (metal-agent--ansi-term-argv argv buffer-name)
+        (metal-agent--installer-aide-auth (get-buffer buffer-name) auth-aide)
         (message
          "ansi-term peut mal rendre l'UI de %s.  Installer `eat' ou `vterm' pour un meilleur rendu."
          label))))))
