@@ -9,7 +9,7 @@
 ;; - Activation automatique de l'environnement Conda à l'ouverture d'un .py
 ;; - Sélection automatique de l'interpréteur (IPython/Python)
 ;; - Gestion des environnements Conda (créer, supprimer, changer)
-;; - Installation automatique de libmamba
+;; - Signalement de libmamba (installation sur demande)
 ;; - Indentation TAB/Shift-TAB
 ;; - Position du shell Python (bas/droite), avec ouverture automatique à l'exécution
 ;; - Complétion Corfu + Cape
@@ -159,24 +159,37 @@ Couvre du même coup les `envs_dirs' personnalisés déclarés dans un
      "libmamba"
      (shell-command-to-string (format "\"%s\" config --show solver" conda-exe)))))
 
-(defun metal-conda--ensure-libmamba ()
-  "Installer libmamba si nécessaire. Retourne t si prêt, nil sinon.
-Si l'installation est nécessaire, elle est lancée dans un buffer Eat
-et la fonction retourne nil (il faudra relancer la création après)."
+(defun metal-conda--signaler-libmamba ()
+  "Signaler, sans bloquer, que le solveur libmamba n'est pas actif.
+Depuis conda 23.10, libmamba est le solveur par défaut : ce cas ne
+concerne que les installations plus anciennes. Rien n'est installé
+ici. Lancer l'installation de libmamba en même temps que
+`conda env create' ferait tourner deux commandes conda en parallèle,
+dont l'une modifie l'environnement `base' : la création se fait donc
+avec le solveur en place (plus lent mais fonctionnel), et
+l'installation reste disponible séparément via
+`metal-conda-installer-libmamba'."
+  (unless (metal-conda--libmamba-installed-p)
+    (message "ℹ Solveur classique utilisé (conda < 23.10). Pour accélérer : M-x metal-conda-installer-libmamba")
+    (sit-for 1.5)))
+
+(defun metal-conda-installer-libmamba ()
+  "Installer le solveur libmamba et le définir comme solveur de conda.
+Inutile depuis conda 23.10, où libmamba est déjà le solveur par défaut."
+  (interactive)
   (let ((conda-exe (metal-conda--require-conda)))
-    (when conda-exe
-      (cond
-       ((metal-conda--libmamba-installed-p)
-        (message "✓ Solver libmamba déjà configuré") t)
-       ((yes-or-no-p "⚡ Installer libmamba pour accélérer la création d'environnements ? ")
-        (message "⏳ Installation de libmamba en cours...")
-        (metal-util-run-in-eat
-         (format "\"%s\" install -n base conda-libmamba-solver -y && \"%s\" config --set solver libmamba"
-                 conda-exe conda-exe)
-         "*Conda libmamba*"
-         t)
-        (message "📦 Installation lancée dans un terminal Eat. Relancez la création après.")
-        nil)))))
+    (cond
+     ((null conda-exe)
+      (user-error "Conda n'est pas installé"))
+     ((metal-conda--libmamba-installed-p)
+      (message "✓ Solveur libmamba déjà configuré"))
+     (t
+      (message "⏳ Installation de libmamba en cours...")
+      (metal-util-run-in-eat
+       (format "\"%s\" install -n base conda-libmamba-solver -y && \"%s\" config --set solver libmamba"
+               conda-exe conda-exe)
+       "*Conda libmamba*"
+       t)))))
 
 (defun metal-conda--accepter-tos ()
   "Pré-accepter les Terms of Service Conda pour les channels Anaconda.
@@ -740,7 +753,7 @@ Variantes directes :
   (interactive)
   (unless (metal-conda--require-conda)
     (user-error "Conda n'est pas installé"))
-  (metal-conda--ensure-libmamba)
+  (metal-conda--signaler-libmamba)
   (metal-conda--accepter-tos)
   (let* ((yaml-dir (expand-file-name user-emacs-directory))
          (yaml-files (seq-filter
