@@ -4642,7 +4642,7 @@ Exclut les outils déjà installés, non applicables, ou sans installeur."
     (nreverse resultat)))
 
 ;;; ═══════════════════════════════════════════════════════════════════
-;;; Interface graphique avec widgets
+;;; Interface graphique (style du tableau de bord)
 ;;; ═══════════════════════════════════════════════════════════════════
 
 (defun metal-deps-afficher-etat (&optional forcer)
@@ -4667,30 +4667,342 @@ devant un Emacs figé."
                       (metal-deps-prechauffer)
                       (metal-deps--rendre-etat)))))
 
+;;; ── Mise en forme (style du tableau de bord) ───────────────────────
+;;
+;; L'Assistant reprend le langage visuel du tableau de bord : police
+;; proportionnelle, titres de section en petites capitales grises,
+;; pilules pour les actions globales, pastilles pour les états, colonnes
+;; alignées par `:align-to'.  Les primitives (couleurs, pilules,
+;; liens cliquables) sont celles de metal-dashboard.el ; le thème est
+;; celui que l'utilisateur choisit au tableau de bord (`load-theme'
+;; global) — l'Assistant n'a pas de sélecteur à lui et se redessine via
+;; `metal-apparence-apres-changement-hook'.
+;;
+;; Les anciens `push-button' de widget.el sont remplacés par du texte
+;; cliquable (souris et RET) : leur habillage « [Installer] » ne se
+;; laisse pas styler proprement.  TAB / S-TAB parcourent les éléments
+;; cliquables, comme le faisait `widget-keymap'.
+
+(defvar metal-dashboard--mono)
+(defvar metal-dashboard--types)
+(defvar metal-dashboard-interligne)
+(declare-function metal-dashboard--sombre-p "metal-dashboard")
+(declare-function metal-dashboard--couleur "metal-dashboard")
+(declare-function metal-dashboard--aller "metal-dashboard")
+(declare-function metal-dashboard--cliquable "metal-dashboard")
+(declare-function metal-dashboard--pilule "metal-dashboard")
+(declare-function metal-dashboard--lien "metal-dashboard")
+(declare-function metal-dashboard--titre-section "metal-dashboard")
+(declare-function metal-dashboard--touche "metal-dashboard")
+
+(defconst metal-deps--assistant-tampon "*MetalEmacs Assistant*"
+  "Nom du tampon de l'Assistant.")
+
+(defun metal-deps--ui-charger ()
+  "Charger les primitives graphiques du tableau de bord si nécessaire.
+metal-deps.el est chargé avant metal-dashboard.el dans init.el ; au
+moment d'un rendu, le tableau de bord est normalement déjà là."
+  (or (featurep 'metal-dashboard)
+      (require 'metal-dashboard nil t)
+      (load (expand-file-name "metal-dashboard" user-emacs-directory) t t)))
+
+(defun metal-deps--ui-teinte (cle)
+  "Couleur d'état CLE (`vert', `gris', `orange', `rouge') selon le thème."
+  (let ((sombre (metal-dashboard--sombre-p)))
+    (pcase cle
+      ('vert   (if sombre "#6FCFB5" "#1F9E80"))
+      ('gris   (if sombre "#5A616C" "#AEB6C1"))
+      ('orange (if sombre "#F0955E" "#E0701E"))
+      ('rouge  (if sombre "#F07F7F" "#A42525")))))
+
+(defun metal-deps--ui-pastille (texte type)
+  "Pastille TEXTE (en capitales) aux couleurs du TYPE du tableau de bord.
+TYPE : `el' (vert), `autre' (gris), `pl' (orange)…"
+  (let* ((e (assq type metal-dashboard--types))
+         (sombre (metal-dashboard--sombre-p))
+         (encre (if sombre (nth 4 e) (nth 2 e)))
+         (fond  (if sombre (nth 5 e) (nth 3 e))))
+    (propertize (upcase texte)
+                'face `(:family ,metal-dashboard--mono :height 0.8 :weight bold
+                        :foreground ,encre :background ,fond
+                        :box (:line-width (6 . 3) :color ,fond)))))
+
+(defun metal-deps--ui-rond (couleur &optional style)
+  "Petit disque de COULEUR.  STYLE : nil (plein), `creux' ou `radio'.
+Dessiné en SVG pour un rendu identique sur toutes les plateformes ;
+repli sur ● ○ ◉ sans support SVG."
+  (if (and (display-graphic-p) (image-type-available-p 'svg))
+      (let* ((px (max 9 (round (* (frame-char-height) 0.5))))
+             (c (/ px 2.0))
+             (corps
+              (pcase style
+                ('creux (format "<circle cx='%s' cy='%s' r='%s' fill='none' stroke='%s' stroke-width='1.5'/>"
+                                c c (- c 1) couleur))
+                ('radio (format "<circle cx='%s' cy='%s' r='%s' fill='none' stroke='%s' stroke-width='1.5'/><circle cx='%s' cy='%s' r='%s' fill='%s'/>"
+                                c c (- c 1) couleur c c (* c 0.45) couleur))
+                (_ (format "<circle cx='%s' cy='%s' r='%s' fill='%s'/>"
+                           c c (* c 0.8) couleur)))))
+        (propertize " " 'display
+                    (create-image
+                     (format "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d'>%s</svg>"
+                             px px corps)
+                     'svg t :ascent 'center)))
+    (propertize (pcase style ('creux "○") ('radio "◉") (_ "●"))
+                'face `(:foreground ,couleur))))
+
+(defun metal-deps--ui-discret (texte action aide)
+  "Action secondaire grise (ex. « Désinstaller ») ; rouge au survol."
+  (metal-dashboard--cliquable
+   (propertize texte 'face '(:inherit shadow :height 0.92))
+   action aide
+   `(:foreground ,(metal-deps--ui-teinte 'rouge) :underline t)))
+
+(defun metal-deps--ui-bouton (texte action aide)
+  "Bouton plein couleur d'accent (ex. « Installer »)."
+  (let* ((sombre (metal-dashboard--sombre-p))
+         (fond (metal-dashboard--couleur 'accent))
+         (encre (if sombre "#16181C" "#FFFFFF"))
+         (survol (if sombre "#A9BFFF" "#2448B0")))
+    (metal-dashboard--cliquable
+     (propertize texte 'face `(:foreground ,encre :background ,fond
+                               :weight semi-bold :height 0.92
+                               :box (:line-width (10 . -1) :color ,fond)))
+     action aide
+     `(:foreground ,encre :background ,survol
+       :box (:line-width (10 . -1) :color ,survol)))))
+
+(defun metal-deps--ui-filet (debut fin)
+  "Filet horizontal fin de la colonne DEBUT à la colonne FIN."
+  (concat (metal-dashboard--aller debut)
+          (propertize " "
+                      'display `(space :align-to ,fin)
+                      'face `(:height 0.4
+                              :underline (:color ,(metal-dashboard--couleur 'bordure)
+                                          :position t)))
+          (propertize "\n" 'face '(:height 0.5))))
+
+;;; ── Navigation au clavier ──────────────────────────────────────────
+
+(defun metal-deps--ui-cible-p (pos)
+  "Non nil si POS porte un élément cliquable."
+  (eq (get-text-property pos 'pointer) 'hand))
+
+(defun metal-deps--ui-suivant ()
+  "Aller à l'élément cliquable suivant (reprend au début)."
+  (interactive)
+  (let ((pos (point)) (fin (point-max)))
+    (while (and (< pos fin) (metal-deps--ui-cible-p pos)) (setq pos (1+ pos)))
+    (while (and (< pos fin) (not (metal-deps--ui-cible-p pos))) (setq pos (1+ pos)))
+    (when (>= pos fin)
+      (setq pos (point-min))
+      (while (and (< pos fin) (not (metal-deps--ui-cible-p pos))) (setq pos (1+ pos))))
+    (when (< pos fin) (goto-char pos))))
+
+(defun metal-deps--ui-precedent ()
+  "Aller à l'élément cliquable précédent."
+  (interactive)
+  (let ((pos (point)) (debut (point-min)))
+    ;; Revenir au début de l'élément courant, puis en sortir.
+    (while (and (> pos debut) (metal-deps--ui-cible-p pos)
+                (metal-deps--ui-cible-p (1- pos)))
+      (setq pos (1- pos)))
+    (setq pos (1- pos))
+    (while (and (>= pos debut) (not (metal-deps--ui-cible-p pos))) (setq pos (1- pos)))
+    (when (>= pos debut)
+      (while (and (> pos debut) (metal-deps--ui-cible-p (1- pos))) (setq pos (1- pos)))
+      (goto-char pos))))
+
+(defvar metal-deps-assistant-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m (kbd "TAB") #'metal-deps--ui-suivant)
+    (define-key m (kbd "<backtab>") #'metal-deps--ui-precedent)
+    (define-key m (kbd "g") (lambda () (interactive) (metal-deps-afficher-etat t)))
+    m)
+  "Clavier local de l'Assistant.")
+
+;;; ── Rendu ──────────────────────────────────────────────────────────
+
 (defun metal-deps--afficher-patience ()
   "Peint immédiatement un Assistant minimal pendant la détection.
 Le tampon est le même que celui du rendu complet : il sera simplement
 réécrit sur place, sans changement de fenêtre ni saut visuel."
-  (let ((buf (get-buffer-create "*MetalEmacs Assistant*")))
+  (let ((buf (get-buffer-create metal-deps--assistant-tampon)))
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
         (remove-overlays)
-        (insert "\n  ")
-        (insert (propertize "Assistant MetalEmacs"
-                            'face '(:weight bold :height 1.4)))
-        (insert "\n\n  ")
+        (setq-local buffer-face-mode-face 'variable-pitch
+                    line-prefix '(space :width 6))
+        (buffer-face-mode 1)
+        (insert "\n")
+        (insert (propertize "Assistant" 'face '(:height 1.8 :weight semi-bold)))
+        (insert "\n")
         (insert (propertize "Détection des logiciels installés…" 'face 'shadow))
         (insert "\n")))
     (display-buffer buf)
     (redisplay t)))
 
-(defun metal-deps--rendre-etat ()
+(defun metal-deps--ui-actions (outil present x-action)
+  "Insérer, à partir de X-ACTION, les actions de OUTIL selon PRESENT.
+Une action secondaire (Réparer, Télécharger) se place juste avant la
+colonne d'action, l'action principale dans la colonne."
+  (let ((installeur (plist-get outil :installer))
+        (desinstalleur (plist-get outil :desinstaller))
+        (fn2 (plist-get outil :action-secondaire))
+        (telecharger (plist-get outil :telecharger))
+        (nom (plist-get outil :nom)))
+    (cond
+     (present
+      (when fn2
+        (insert (metal-dashboard--aller (- x-action 10))
+                (metal-dashboard--lien
+                 (or (plist-get outil :bouton-secondaire) "Réparer")
+                 (lambda () (metal-deps--executer-et-rafraichir fn2))
+                 (format "%s : réparer ou reconfigurer" nom))))
+      (when desinstalleur
+        (insert (metal-dashboard--aller x-action)
+                (metal-deps--ui-discret
+                 "Désinstaller"
+                 (lambda () (metal-deps--executer-et-rafraichir desinstalleur))
+                 (format "Désinstaller %s" nom)))))
+     ((and installeur (not (eq installeur 'ignore)))
+      (when (and telecharger (eq system-type 'gnu/linux))
+        (insert (metal-dashboard--aller (- x-action 12))
+                (metal-dashboard--lien "Télécharger"
+                                       (lambda () (funcall telecharger))
+                                       (format "Télécharger %s" nom))))
+      (insert (metal-dashboard--aller x-action)
+              (metal-deps--ui-bouton
+               (or (plist-get outil :libelle-installer) "Installer")
+               (lambda () (metal-deps--executer-et-rafraichir installeur))
+               (format "Installer %s" nom)))))))
+
+(defun metal-deps--ui-ligne-outil (outil x-nom x-desc x-action)
+  "Insérer la ligne d'un outil ordinaire (hors agents IA)."
+  (let* ((present (metal-deps--outil-present-p outil))
+         (desc (let ((d (plist-get outil :description)))
+                 (if (functionp d) (ignore-errors (funcall d)) d))))
+    (insert (if present
+                (metal-deps--ui-rond (metal-deps--ui-teinte 'vert))
+              (metal-deps--ui-rond (metal-deps--ui-teinte 'gris) 'creux))
+            (metal-dashboard--aller x-nom)
+            (propertize (plist-get outil :nom) 'face '(:weight semi-bold)))
+    (when (and desc (not (string-empty-p desc)))
+      (insert (metal-dashboard--aller x-desc)
+              (propertize (truncate-string-to-width
+                           desc (max 10 (- x-action x-desc
+                                           (if (and present (plist-get outil :action-secondaire))
+                                               13 3)))
+                           nil nil "…")
+                          'face '(:inherit shadow :height 0.92))))
+    (metal-deps--ui-actions outil present x-action)
+    (insert "\n")))
+
+(defun metal-deps--ui-ligne-agent (outil x-nom x-desc x-action)
+  "Insérer le bloc d'un agent IA : état, authentification, accès."
+  (let* ((nom (plist-get outil :nom))
+         (present (metal-deps--outil-present-p outil))
+         (agent-id (plist-get outil :agent-id))
+         (spec (cdr (assq agent-id metal-deps-agents-catalogue)))
+         (desc (let ((d (plist-get outil :description)))
+                 (if (functionp d) (ignore-errors (funcall d)) d)))
+         (authentifie (and spec (metal-deps--agent-authentifie-p spec)))
+         (verifiable (and spec
+                          (fboundp 'metal-deps--agent-auth-verifiable-p)
+                          (metal-deps--agent-auth-verifiable-p spec)))
+         ;; Un agent perso (hors catalogue) est réputé utilisable ; un
+         ;; agent à auth externe (agy) aussi : tous deux peuvent devenir
+         ;; l'agent par défaut.
+         (utilisable (and present (or (not spec) authentifie (not verifiable))))
+         (est-defaut (and utilisable (boundp 'metal-agent-provider)
+                          (eq metal-agent-provider agent-id))))
+    ;; --- État : même code que les autres lignes (● installé, ○ absent).
+    ;; Le choix de l'agent par défaut est un attribut distinct, affiché
+    ;; plus loin dans la ligne : le mêler au point d'état rendait un agent
+    ;; installé mais non par défaut indiscernable d'un agent absent.
+    (insert
+     (if present
+         (metal-deps--ui-rond (metal-deps--ui-teinte 'vert))
+       (metal-deps--ui-rond (metal-deps--ui-teinte 'gris) 'creux))
+     (metal-dashboard--aller x-nom)
+     (propertize nom 'face '(:weight semi-bold))
+     (metal-dashboard--aller x-desc))
+    ;; --- Authentification ---
+    (let ((id agent-id))
+      (insert
+       (cond
+        (authentifie (metal-deps--ui-pastille "authentifié" 'el))
+        ((and present spec (not verifiable))
+         (propertize (metal-deps--ui-pastille "auth. externe" 'autre)
+                     'help-echo "Authentification gérée par l'application de l'agent"))
+        ((and present spec)
+         (metal-dashboard--lien "authentifier"
+                                (lambda () (metal-deps--authentifier-agent-ia id))
+                                "Lancer l'authentification dans un terminal"))
+        (spec
+         (metal-dashboard--lien "authentifier"
+                                (lambda () (metal-deps--afficher-procedure-auth id))
+                                "Afficher la procédure d'authentification"))
+        (t ""))))
+    (when (and desc (not (string-empty-p desc)))
+      (insert "  " (propertize (truncate-string-to-width
+                                desc (max 10 (- x-action x-desc 38)) nil nil "…")
+                               'face '(:inherit shadow :height 0.92))))
+    (when (and spec (fboundp 'metal-deps-formulaire-editer-agent))
+      (let ((aid agent-id))
+        (insert "  " (metal-dashboard--lien
+                      "éditer"
+                      (lambda () (metal-deps-formulaire-editer-agent aid))
+                      "Modifier cet agent dans le formulaire"))))
+    ;; --- Agent par défaut : pastille, ou lien pour le devenir ---
+    (cond
+     (est-defaut
+      (insert (metal-dashboard--aller (- x-action 16))
+              (propertize (metal-deps--ui-pastille "par défaut" 'qmd)
+                          'help-echo (format "%s est l'agent utilisé au démarrage" nom))))
+     (utilisable
+      (let ((id agent-id))
+        (insert (metal-dashboard--aller (- x-action 16))
+                (metal-dashboard--lien
+                 "Par défaut"
+                 (lambda () (metal-deps--definir-agent-defaut id))
+                 (format "Faire de « %s » l'agent utilisé au démarrage" nom))))))
+    (metal-deps--ui-actions outil present x-action)
+    (insert "\n")
+    ;; --- Accès aux fichiers (metal-agent-permissions.el) ---
+    (when (and present
+               (require 'metal-agent-permissions nil t)
+               (metal-agent-permissions-spec agent-id))
+      (let* ((id agent-id)
+             (ouvert (ignore-errors (metal-agent-permissions-active-p agent-id)))
+             (aide (concat "L'agent peut-il lire les fichiers que MetalEmacs "
+                           "lui transmet ?  Le changement vaut dès la "
+                           "prochaine requête."))
+             (e (assq (if ouvert 'el 'pl) metal-dashboard--types))
+             (encre (if (metal-dashboard--sombre-p) (nth 4 e) (nth 2 e))))
+        (insert (metal-dashboard--aller x-desc)
+                (propertize "Accès aux fichiers : " 'face '(:inherit shadow :height 0.92)
+                            'help-echo aide)
+                (propertize (if ouvert "autorisé" "bloqué")
+                            'face `(:foreground ,encre :weight semi-bold :height 0.92)
+                            'help-echo aide)
+                (propertize "  ·  " 'face 'shadow)
+                (metal-dashboard--lien
+                 (if ouvert "Bloquer" "Autoriser")
+                 (lambda ()
+                   (metal-deps--executer-et-rafraichir
+                    (lambda () (metal-agent-permissions-basculer id))))
+                 aide)
+                "\n")))))
+
+(defun metal-deps--rendre-etat (&optional sans-afficher)
   "Construit et affiche le tampon de l'Assistant.
 Corps historique de `metal-deps-afficher-etat', désormais appelé sous
 `metal-deps--avec-cache' : les détections répétées d'un même binaire ne
 sont payées qu'une fois par rendu, et pas du tout si le cache est déjà
-chaud."
+chaud.  Avec SANS-AFFICHER, le tampon est redessiné sur place sans être
+affiché ni sélectionné (changement de thème)."
+  (metal-deps--ui-charger)
   (metal-deps--avec-cache
   ;; Précharger les icônes SVG (silencieux ; hors-ligne, chaque emoji
   ;; retombe simplement sur son caractère Unicode).
@@ -4708,335 +5020,157 @@ chaud."
   ;; Enregistrer en mémoire les agents du catalogue dont la CLI est
   ;; présente (ex. installés manuellement).  Fait UNE FOIS ici, avant le
   ;; rendu, pour que `metal-agent-providers' soit stable pendant toute la
-  ;; boucle d'affichage (sinon les boutons ◯ se désynchronisent).
+  ;; boucle d'affichage (sinon les radios se désynchronisent).
   (metal-deps--synchroniser-agents-installes)
-  (let* ((buf (get-buffer-create "*MetalEmacs Assistant*"))
+  (let* ((buf (get-buffer-create metal-deps--assistant-tampon))
          ;; Mémoriser la position d'affichage si le buffer est déjà ouvert,
-         ;; pour la restaurer après le rerendu.  Sans ça, un clic sur ◯
-         ;; (changer agent défaut) ferait remonter l'affichage en haut.
+         ;; pour la restaurer après le rerendu.  Sans ça, un clic sur un
+         ;; radio (changer agent défaut) ferait remonter l'affichage en haut.
          (win-existante (get-buffer-window buf))
          (point-precedent (and win-existante
                                (with-current-buffer buf (point))))
          (start-precedent (and win-existante
                                (window-start win-existante))))
     (with-current-buffer buf
-      ;; Désactiver le read-only pour TOUT le rendu : `widget-insert' a
-      ;; son propre wrap mais `insert-text-button' (pour les liens
-      ;; « authentifier ») n'en a pas, donc faillirait lors d'un
-      ;; rafraîchissement après installation (où read-only-mode est actif).
       (let ((inhibit-read-only t))
         (erase-buffer)
         (remove-overlays)
-        (widget-insert "\n  ")
-        (widget-insert (propertize "Assistant MetalEmacs"
-                                   'face '(:weight bold :height 1.4)))
-      (widget-insert "\n  ")
-      (widget-insert (propertize "Gestion des dépendances et agents IA"
-                                 'face 'shadow))
-      (widget-insert "\n\n  ")
-      (widget-insert (propertize (format "Système : %s"
-                                         (metal-deps--nom-systeme))
-                                 'face 'shadow))
-      (widget-insert "\n")
-      (when metal-deps--installation-en-cours
-        (widget-insert (concat "  " (metal-deps--icone "⏳")
-                               (format " Installation en cours (%d restant%s)\n"
-                                       (length metal-deps--file-attente)
-                                       (if (> (length metal-deps--file-attente) 1) "s" "")))))
-      
-      (dolist (categorie '((prerequis . "📋 Prérequis système")
-                           (gestionnaire . "📦 Gestionnaires de paquets")
-                           (logiciels . "🎓 Logiciels")
-                           (pdf . "📄 Support PDF")
-                           (agents-ia . "👤 Agents IA")))
-        (let* ((cat-id (car categorie))
-               (cat-nom (cdr categorie))
-               (outils-cat (cl-remove-if-not
-                            (lambda (o)
-                              (and (eq (plist-get o :categorie) cat-id)
-                                   (metal-deps--outil-applicable-p o)))
-                            (metal-deps--tous-les-outils))))
-          (when outils-cat
-            ;; --- En-tête de section ---
-            (widget-insert "\n  ")
-            ;; L'icône est insérée séparément du libellé : appliquer un
-            ;; `:height' à un segment porteur d'un emoji casse son rendu.
-            (widget-insert (metal-deps--icone (substring cat-nom 0 1)))
-            (widget-insert (propertize (substring cat-nom 1)
-                                       'face '(:weight bold :height 1.05)))
-            (widget-insert "\n  ")
-            (widget-insert (propertize (make-string 66 ?─) 'face 'shadow))
-            (widget-insert "\n\n")
-            ;; --- Items ---
-            (dolist (outil outils-cat)
-              (let* ((nom (plist-get outil :nom))
-                     (present (metal-deps--outil-present-p outil))
-                     (installeur (plist-get outil :installer))
-                     (desinstalleur (plist-get outil :desinstaller))
-                     (agent-id (plist-get outil :agent-id))
-                     ;; `:description' accepte une chaîne ou une fonction sans
-                     ;; argument.  La forme fonction permet un état recalculé
-                     ;; à chaque affichage plutôt que figé au chargement de
-                     ;; `metal-deps-outils'.
-                     (desc (let ((d (plist-get outil :description)))
-                             (cond ((functionp d) (ignore-errors (funcall d)))
-                                   (t d))))
-                     ;; Pour les agents : déterminer s'il est authentifié,
-                     ;; et s'il est le défaut courant.  Le radio ●/◯
-                     ;; remplace alors le ✓/✗ habituel.
-                     (spec (and agent-id
-                                (cdr (assq agent-id metal-deps-agents-catalogue))))
-                     (authentifie (and agent-id
-                                       (or (not spec)  ; agent perso : on autorise
-                                           (metal-deps--agent-authentifie-p spec))))
-                     ;; Auth non vérifiable (ex: agy, :auth-mode externe) :
-                     ;; l'agent doit quand même pouvoir être choisi comme défaut.
-                     (auth-non-verifiable
-                      (and spec
-                           (fboundp 'metal-deps--agent-auth-verifiable-p)
-                           (not (metal-deps--agent-auth-verifiable-p spec))))
-                     ;; Le radio ●/◯ s'applique dès que l'agent est installé
-                     ;; ET (authentifié OU son auth n'est pas vérifiable).
-                     (radio-applicable (and agent-id present
-                                            (or authentifie auth-non-verifiable)))
-                     (est-defaut (and radio-applicable
-                                      (boundp 'metal-agent-provider)
-                                      (eq metal-agent-provider agent-id)))
-                     ;; Largeur du préfixe « statut + 2 espaces » = 6 cells.
-                     ;; (3 espaces avant + 1 char statut + 2 espaces après)
-                     (largeur-cible (+ 6 metal-deps--largeur-colonne-nom))
-                     (largeur-actuelle (+ 6 (string-width nom)))
-                     (padding (max 2 (- largeur-cible largeur-actuelle))))
-                ;; --- Statut visuel (radio ●/◯ pour agents, sinon ✓/✗) ---
-                (widget-insert "   ")
-                (cond
-                 ;; Agent installé+authentifié + défaut : ● vert (non cliquable)
-                 ((and radio-applicable est-defaut)
-                  (widget-insert
-                   (propertize "●" 'face '(:foreground "#10A37F" :weight bold))))
-                 ;; Agent installé+authentifié non-défaut : ◯ cliquable
-                 (radio-applicable
-                  (let ((id agent-id) (n nom))
-                    (insert-text-button
-                     "◯"
-                     'action (lambda (_)
-                               (metal-deps--definir-agent-defaut id))
-                     'face '(:foreground "#586069" :weight bold)
-                     'follow-link t
-                     'help-echo (format "Définir « %s » comme agent par défaut" n))))
-                 ;; Autres : ✓ vert si présent, ✗ atténué sinon.
-                 (present
-                  (widget-insert
-                   (propertize "✓" 'face '(:foreground "#10A37F" :weight bold))))
-                 (t
-                  (widget-insert (propertize "✗" 'face 'shadow))))
-                (widget-insert "  ")
-                (widget-insert nom)
-                (widget-insert (make-string padding ?\s))
-                ;; --- Bouton principal : Installer ou Désinstaller ---
-                ;; On mémorise la position avant le bouton pour padder ensuite
-                ;; à une largeur fixe (sinon la colonne d'auth est désalignée
-                ;; entre [Installer] et [Désinstaller]).
-                (let ((debut-bouton (point)))
-                  (cond
-                   ;; Installé → Désinstaller (si supporté).
-                   ((and present desinstalleur)
-                    (let ((fn desinstalleur))
-                      (widget-create 'push-button
-                                     :notify (lambda (&rest _)
-                                               (metal-deps--executer-et-rafraichir fn))
-                                     "Désinstaller")))
-                   ;; Non installé → Installer (+ Télécharger sur Linux si défini).
-                   ((and (not present) installeur (not (eq installeur 'ignore)))
-                    (let ((telecharger (plist-get outil :telecharger)))
-                      (when (and telecharger (eq system-type 'gnu/linux))
-                        (widget-create 'push-button
-                                       :notify (lambda (&rest _)
-                                                 (funcall telecharger))
-                                       "Télécharger")
-                        (widget-insert "  ")))
-                    (let ((fn installeur)
-                          ;; `:libelle-installer' permet à une entrée qui
-                          ;; n'installe rien (correction du PATH) d'afficher
-                          ;; un verbe juste plutôt que « Installer ».
-                          (libelle (or (plist-get outil :libelle-installer)
-                                       "Installer")))
-                      (widget-create 'push-button
-                                     :notify (lambda (&rest _)
-                                               (metal-deps--executer-et-rafraichir fn))
-                                     libelle))))
-                  ;; --- Bouton secondaire ---
-                  ;; Action offerte sur un outil DÉJÀ installé, là où ni
-                  ;; « Installer » ni « Désinstaller » ne conviennent :
-                  ;; réparer, reconfigurer.  Sans lui, la réparation du
-                  ;; trousseau MSYS2 n'aurait été joignable que par un
-                  ;; `M-x' de trente-quatre caractères — c.-à-d. par
-                  ;; personne, au moment précis où elle sert.
-                  (let ((fn2 (plist-get outil :action-secondaire)))
-                    (when (and present fn2)
-                      (widget-insert "  ")
-                      (widget-create 'push-button
-                                     :notify (lambda (&rest _)
-                                               (metal-deps--executer-et-rafraichir fn2))
-                                     (or (plist-get outil :bouton-secondaire)
-                                         "Réparer"))))
-                  ;; Padder le bouton principal à largeur fixe (16 chars)
-                  ;; pour aligner la colonne suivante.
-                  (let* ((largeur-bouton (string-width
-                                          (buffer-substring-no-properties
-                                           debut-bouton (point))))
-                         (pad-suite (max 2 (- 16 largeur-bouton))))
-                    (widget-insert (make-string pad-suite ?\s))))
-                ;; --- Statut / description ---
-                (cond
-                 ;; Cas agent : "🔑 statut : description"
-                 (agent-id
-                 (let* ((spec (cdr (assq agent-id metal-deps-agents-catalogue)))
-                        (authentifie (and spec
-                                          (metal-deps--agent-authentifie-p spec)))
-                        ;; Auth verifiable ? (nil si :auth-mode externe ou
-                        ;; aucun mecanisme d'auth fourni — cas agy.)
-                        (verifiable (and spec
-                                         (fboundp 'metal-deps--agent-auth-verifiable-p)
-                                         (metal-deps--agent-auth-verifiable-p spec))))
-                   (widget-insert
-                    (concat (metal-deps--icone "🔑") " "))
-                   (cond
-                    ;; Installé + authentifié : texte vert (non cliquable).
-                    (authentifie
-                     (widget-insert
-                      (propertize "authentifié"
-                                  'face '(:foreground "#10A37F" :weight bold))))
-                    ;; Auth non vérifiable (ex: agy, gérée par l'app) :
-                    ;; statut neutre, pas de bouton trompeur.
-                    ((and present (not verifiable))
-                     (widget-insert
-                      (propertize "auth. externe"
-                                  'face '(:foreground "gray50" :slant italic))))
-                    ;; Installé non authentifié : « authentifier » cliquable
-                    ;; lance l'auth en terminal (comportement habituel).
-                    (present
-                     (let ((id agent-id))
-                       (insert-text-button
-                        "authentifier"
-                        'action (lambda (_)
-                                  (metal-deps--authentifier-agent-ia id))
-                        'face '(:foreground "#0366d6" :underline t :weight bold)
-                        'follow-link t
-                        'help-echo "Lancer l'authentification dans un terminal")))
-                     ;; Pas installé : « authentifier » cliquable affiche
-                     ;; la procédure dans un buffer d'aide.
-                     (t
-                      (let ((id agent-id))
-                        (insert-text-button
-                         "authentifier"
-                         'action (lambda (_)
-                                   (metal-deps--afficher-procedure-auth id))
-                         'face '(:foreground "#0366d6" :underline t :weight bold)
-                         'follow-link t
-                         'help-echo "Afficher la procédure d'authentification"))))
-                    (when desc
-                      (widget-insert
-                       (propertize (concat " : " desc) 'face 'shadow)))
-                    ;; --- Bouton « éditer » (agents du catalogue) ---
-                    ;; Ouvre le formulaire pré-rempli pour modifier cet
-                    ;; agent (args, commande, auth…) sans éditer le
-                    ;; fichier catalogue à la main.
-                    (when (and (assq agent-id metal-deps-agents-catalogue)
-                               (fboundp 'metal-deps-formulaire-editer-agent))
-                      (widget-insert "  ")
-                      (let ((aid agent-id))
-                        (insert-text-button
-                         "éditer"
-                         'action (lambda (_)
-                                   (metal-deps-formulaire-editer-agent aid))
-                         'face '(:foreground "#0366d6" :underline t)
-                         'follow-link t
-                         'help-echo "Modifier cet agent dans le formulaire")))))
-                 ;; Cas non-agent : "— description" (si description)
-                 (desc
-                  (widget-insert (propertize (concat "— " desc) 'face 'shadow))))
-                (widget-insert "\n")
-                ;; --- Accès aux fichiers (metal-agent-permissions.el) ---
-                ;; Deuxième ligne, sous le nom, pour les seuls agents
-                ;; installés qui bloquent la lecture par défaut.  L'état
-                ;; est écrit en toutes lettres ; le bouton porte le verbe.
-                (when (and agent-id present
-                           (require 'metal-agent-permissions nil t)
-                           (metal-agent-permissions-spec agent-id))
-                  (let ((id agent-id)
-                        (ouvert (ignore-errors
-                                  (metal-agent-permissions-active-p agent-id)))
-                        (aide (concat "L'agent peut-il lire les fichiers que "
-                                      "MetalEmacs lui transmet ?  Le changement "
-                                      "vaut dès la prochaine requête.")))
-                    (widget-insert (make-string 6 ?\s))
-                    (widget-insert (propertize "Accès aux fichiers : "
-                                               'help-echo aide))
-                    (widget-insert
-                     (if ouvert
-                         (propertize "autorisé" 'help-echo aide
-                                     'face '(:foreground "#10A37F" :weight bold))
-                       (propertize "bloqué" 'help-echo aide
-                                   'face '(:foreground "#D97706" :weight bold))))
-                    (widget-insert "  ")
-                    (widget-create 'push-button
-                                   :help-echo aide
-                                   :notify (lambda (&rest _)
-                                             (metal-deps--executer-et-rafraichir
-                                              (lambda ()
-                                                (metal-agent-permissions-basculer id))))
-                                   (if ouvert "Bloquer" "Autoriser"))
-                    (widget-insert "\n")))))
-            ;; --- Bouton spécial pour agents-ia : ajouter un agent perso ---
-            (when (eq cat-id 'agents-ia)
-              (widget-insert "\n   ")
-              (widget-create 'push-button
-                             :notify (lambda (&rest _)
-                                       ;; Ouvrir directement le formulaire
-                                       ;; (onglet tab-line) si disponible ;
-                                       ;; sinon, repli sur l'ancien flux.
-                                       (if (fboundp 'metal-deps-formulaire-nouvel-agent)
-                                           (metal-deps-formulaire-nouvel-agent)
-                                         (call-interactively
-                                          #'metal-deps--ajouter-agent-personnalise)))
-                             "+ Ajouter un autre agent…")
-              (widget-insert "\n   ")
-              (widget-insert
-               (propertize
-                "● = agent par défaut au démarrage ; cliquer sur ◯ pour le changer"
-                'face 'shadow))
-              (widget-insert "\n"))
-            (widget-insert "\n"))))
-      
-      (widget-insert "\n  ")
-      (widget-insert (propertize (make-string 66 ?─) 'face 'shadow))
-      (widget-insert "\n\n  ")
-      (widget-insert (propertize "Actions rapides : " 'face 'bold))
-      (widget-create 'push-button
-                     :notify (lambda (&rest _) (metal-deps-installer-logiciels))
-                     "Installer les logiciels")
-      (widget-insert "  ")
-      (widget-create 'push-button
-                     :notify (lambda (&rest _) (metal-deps-installer-tout))
-                     "Tout installer")
-      (widget-insert "  ")
-      (widget-create 'push-button
-                     ;; FORCER : le bouton existe pour relire le système,
-                     ;; pas pour redessiner le cache.
-                     :notify (lambda (&rest _) (metal-deps-afficher-etat t))
-                     "Rafraîchir")
-      (when metal-deps--installation-en-cours
-        (widget-insert "  ")
-        (widget-create 'push-button
-                       :notify (lambda (&rest _)
-                                 (metal-deps--annuler-file-attente)
-                                 (run-with-timer 1 nil #'metal-deps-afficher-etat t))
-                       "Annuler"))
-      (widget-insert "\n\n"))
-      
-      (use-local-map widget-keymap)
-      (widget-setup)
+        (fundamental-mode)
+        ;; Famille monospace lue AVANT le remappage proportionnel.
+        (setq metal-dashboard--mono (face-attribute 'default :family nil t))
+        (setq-local line-spacing metal-dashboard-interligne
+                    truncate-lines t
+                    buffer-face-mode-face 'variable-pitch)
+        (buffer-face-mode 1)
+        (when (fboundp 'global-hl-line-unhighlight)
+          (global-hl-line-unhighlight))
+        (setq-local global-hl-line-mode nil)
+        (let* ((fenetre (or win-existante (selected-window)))
+               (marge 6)
+               (largeur (max 72 (- (window-width fenetre) (* 2 marge) 2)))
+               (x-nom (+ marge 3))
+               (x-desc (+ x-nom (max 18 metal-deps--largeur-colonne-nom)))
+               (x-action (- (+ marge largeur) 14))
+               (sections '((prerequis   . "Prérequis système")
+                           (gestionnaire . "Gestionnaires de paquets")
+                           (logiciels   . "Logiciels")
+                           (pdf         . "Support PDF")
+                           (agents-ia   . "Agents IA")))
+               (tous (cl-remove-if-not #'metal-deps--outil-applicable-p
+                                       (metal-deps--tous-les-outils)))
+               (composants (cl-remove-if (lambda (o)
+                                           (eq (plist-get o :categorie) 'agents-ia))
+                                         tous))
+               (n-presents (cl-count-if #'metal-deps--outil-present-p composants)))
+          (setq-local line-prefix `(space :width ,marge))
+          (setq-local wrap-prefix `(space :width ,marge))
+          ;; --- En-tête ---
+          (insert "\n"
+                  (propertize (metal-deps--nom-systeme) 'face 'shadow)
+                  (metal-dashboard--aller (- (+ marge largeur) 15))
+                  (propertize "MetalEmacs 1.1" 'face 'shadow)
+                  "\n"
+                  (propertize "Assistant" 'face '(:height 1.8 :weight semi-bold))
+                  "\n"
+                  (propertize (format "Dépendances et agents IA  ·  %d composant%s sur %d installé%s"
+                                      n-presents (if (> n-presents 1) "s" "")
+                                      (length composants)
+                                      (if (> n-presents 1) "s" ""))
+                              'face 'shadow)
+                  "\n")
+          (when metal-deps--installation-en-cours
+            (let ((n (length metal-deps--file-attente)))
+              (insert (propertize (format "Installation en cours — %d restant%s"
+                                          n (if (> n 1) "s" ""))
+                                  'face `(:foreground ,(metal-deps--ui-teinte 'orange)
+                                          :weight semi-bold))
+                      "\n")))
+          (insert "\n")
+          ;; --- Actions globales (pilules) ---
+          (insert
+           (mapconcat
+            #'identity
+            (delq nil
+                  (list
+                   (metal-dashboard--pilule
+                    "#2C55C9" "Installer les logiciels"
+                    "Installer tous les logiciels manquants"
+                    #'metal-deps-installer-logiciels)
+                   (metal-dashboard--pilule
+                    "#1F9E80" "Tout installer"
+                    "Installer tous les composants manquants"
+                    #'metal-deps-installer-tout)
+                   (metal-dashboard--pilule
+                    "#7B4FDB" "Rafraîchir"
+                    "Relire l'état du système (touche g)"
+                    ;; FORCER : le bouton existe pour relire le système,
+                    ;; pas pour redessiner le cache.
+                    (lambda () (metal-deps-afficher-etat t)))
+                   (when metal-deps--installation-en-cours
+                     (metal-dashboard--pilule
+                      "#D9534F" "Annuler"
+                      "Annuler les installations en attente"
+                      (lambda ()
+                        (metal-deps--annuler-file-attente)
+                        (run-with-timer 1 nil #'metal-deps-afficher-etat t))))))
+            "   ")
+           "\n\n\n")
+          ;; --- Sections ---
+          (dolist (section sections)
+            (let* ((cat-id (car section))
+                   (outils (cl-remove-if-not
+                            (lambda (o) (eq (plist-get o :categorie) cat-id))
+                            tous))
+                   (n (cl-count-if #'metal-deps--outil-present-p outils)))
+              (when outils
+                (insert (metal-dashboard--titre-section (cdr section))
+                        (metal-dashboard--aller x-action)
+                        (propertize (if (eq cat-id 'agents-ia)
+                                        (format "%d installé%s" n (if (> n 1) "s" ""))
+                                      (format "%d / %d" n (length outils)))
+                                    'face '(:inherit shadow :height 0.85))
+                        "\n")
+                (if (not (eq cat-id 'agents-ia))
+                    (dolist (o outils)
+                      (metal-deps--ui-ligne-outil o x-nom x-desc x-action))
+                  (let ((premier t))
+                    (dolist (o outils)
+                      (unless premier
+                        (insert (metal-deps--ui-filet marge (+ marge largeur))))
+                      (setq premier nil)
+                      (metal-deps--ui-ligne-agent o x-nom x-desc x-action)))
+                  ;; Ajouter un agent perso + légende du radio.
+                  (insert "\n"
+                          (metal-dashboard--lien
+                           "+ Ajouter un autre agent…"
+                           (lambda ()
+                             ;; Ouvrir directement le formulaire (onglet
+                             ;; tab-line) si disponible ; sinon, repli sur
+                             ;; l'ancien flux.
+                             (if (fboundp 'metal-deps-formulaire-nouvel-agent)
+                                 (metal-deps-formulaire-nouvel-agent)
+                               (call-interactively
+                                #'metal-deps--ajouter-agent-personnalise)))
+                           "Déclarer un agent qui n'est pas au catalogue")
+                          "\n"))
+                (insert "\n"))))
+          ;; --- Pied : légende et touches ---
+          (insert (metal-deps--ui-filet marge (+ marge largeur))
+                  (propertize "Légende  " 'face 'shadow)
+                  (metal-deps--ui-rond (metal-deps--ui-teinte 'vert))
+                  (propertize " installé     " 'face 'shadow)
+                  (metal-deps--ui-rond (metal-deps--ui-teinte 'gris) 'creux)
+                  (propertize " absent     " 'face 'shadow)
+                  (metal-deps--ui-pastille "par défaut" 'qmd)
+                  (propertize " agent utilisé au démarrage (lien « Par défaut » pour en changer)"
+                              'face 'shadow)
+                  "\n"
+                  (metal-dashboard--touche "TAB")
+                  (propertize " élément suivant   " 'face 'shadow)
+                  (metal-dashboard--touche "g")
+                  (propertize " rafraîchir" 'face 'shadow)
+                  "\n")))
+      (use-local-map metal-deps-assistant-map)
       ;; Restaurer la position d'affichage : si on était dans un buffer
       ;; déjà ouvert, garder le point et le window-start ; sinon aller
       ;; au début (premier affichage).
@@ -5055,10 +5189,11 @@ chaud."
     ;; est déclenché depuis la fenêtre de sortie d'`async-shell-command'
     ;; (ex. *Homebrew Install*), l'Assistant s'empilerait par-dessus,
     ;; laissant deux vues *MetalEmacs Assistant* côte à côte.
-    (let ((win (get-buffer-window buf)))
-      (if win
-          (select-window win)
-        (switch-to-buffer buf)))
+    (unless sans-afficher
+      (let ((win (get-buffer-window buf)))
+        (if win
+            (select-window win)
+          (switch-to-buffer buf))))
     ;; Le switch-to-buffer peut réinitialiser le window-start ; on
     ;; le restaure explicitement après pour préserver le défilement.
     (when (and start-precedent (get-buffer-window buf))
@@ -5069,6 +5204,13 @@ chaud."
     ;; rendu appelle `metal-deps--rafraichir-path-agent', qui invalide le
     ;; cache s'il découvre un répertoire à ajouter au PATH.
     (setq metal-deps--cache-chaud t))))
+
+;; Le thème se choisit au tableau de bord et vaut pour tout Emacs :
+;; redessiner l'Assistant ouvert pour que pastilles et boutons suivent.
+(add-hook 'metal-apparence-apres-changement-hook
+          (lambda ()
+            (when (get-buffer metal-deps--assistant-tampon)
+              (ignore-errors (metal-deps--rendre-etat t)))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Commandes d'installation groupées (séquentielles)
