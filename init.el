@@ -1535,6 +1535,9 @@ Raccourci Treemacs : M (Shift+M)"
   (define-key dired-mode-map [mouse-2] #'dired-mouse-find-file)
   ;; Idem pour le double-clic gauche.
   (define-key dired-mode-map [double-mouse-1] #'dired-mouse-find-file))
+;; Habillage de Dired dans le style du tableau de bord (fil d'Ariane,
+;; pastilles de type, dates relatives, dossiers d'abord).
+(load (expand-file-name "metal-dired.el" user-emacs-directory))
 
 ;; *******************************************
 ;;  Wikitionnaire

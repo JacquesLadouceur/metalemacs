@@ -165,11 +165,13 @@ Renvoie par exemple « il y a 2 heures », « hier », « il y a 3 jours »."
      ((< jours 7)
       (format "il y a %d jours" (floor jours)))
      ((< jours 30)
-      (format "il y a %d semaines" (floor (/ jours 7))))
+      (let ((n (floor (/ jours 7))))
+        (format "il y a %d semaine%s" n (if (> n 1) "s" ""))))
      ((< jours 365)
       (format "il y a %d mois" (floor (/ jours 30))))
      (t
-      (format "il y a %d ans" (floor (/ jours 365)))))))
+      (let ((n (floor (/ jours 365))))
+        (format "il y a %d an%s" n (if (> n 1) "s" "")))))))
 
 (defun metal-dashboard--notes-creer-template (filepath)
   "Insérer un en-tête Org standard dans le fichier FILEPATH nouvellement créé.
@@ -213,12 +215,15 @@ moment de la dernière modification."
 
 (defun metal-dashboard--notes-trier (fichiers critere)
   "Trier la liste FICHIERS selon CRITERE (`date' ou `nom').
-Pour `date', les plus récents apparaissent en premier."
+Pour `date', les plus récents apparaissent en premier.  Pour `nom',
+casse et accents sont ignorés : « À faire » se range avec les A."
   (cond
    ((eq critere 'nom)
     (sort fichiers (lambda (a b)
-                     (string< (file-name-nondirectory (car a))
-                              (file-name-nondirectory (car b))))))
+                     (string< (metal-dashboard--signets-clef-tri
+                               (file-name-nondirectory (car a)))
+                              (metal-dashboard--signets-clef-tri
+                               (file-name-nondirectory (car b)))))))
    (t  ; date par défaut
     (sort fichiers (lambda (a b)
                      (time-less-p (cdr b) (cdr a)))))))
@@ -245,66 +250,62 @@ Pour `date', les plus récents apparaissent en premier."
         (if (eq metal-dashboard-notes-tri 'date) 'nom 'date))
   (metal-dashboard-notes-ouvrir))
 
+(defun metal-dashboard--notes-rendre ()
+  "Dessiner le tampon `*Notes rapides*' et le retourner (sans l'afficher)."
+  (let* ((buf (get-buffer-create "*Notes rapides*"))
+         (fichiers (metal-dashboard--notes-trier
+                    (metal-dashboard--notes-liste-fichiers)
+                    metal-dashboard-notes-tri))
+         (n (length fichiers))
+         (plus-recente (and fichiers
+                            (car (sort (mapcar #'cdr fichiers)
+                                       (lambda (a b) (time-less-p b a))))))
+         (creer (lambda ()
+                  (let ((liste (current-buffer)))
+                    (call-interactively #'metal-dashboard--notes-creer-nouvelle)
+                    (when (buffer-live-p liste) (kill-buffer liste))))))
+    (metal-dashboard--liste-rendre
+     buf
+     (list
+      :titre "Notes rapides"
+      :dossier metal-dashboard-notes-dir
+      :resume (if plus-recente
+                  (format "%d note%s  ·  la plus récente modifiée %s"
+                          n (if (> n 1) "s" "")
+                          (metal-dashboard--notes-format-date-relative plus-recente))
+                "Aucune note")
+      :pilules (list (metal-dashboard--pilule
+                      "#C9A220" "Nouvelle note"
+                      "Créer une note (touche n)" creer))
+      :section "Notes"
+      :tri metal-dashboard-notes-tri
+      :basculer-tri #'metal-dashboard--notes-changer-tri
+      :rafraichir #'metal-dashboard-notes-ouvrir
+      :entrees
+      (mapcar (lambda (entree)
+                (let ((f (car entree)))
+                  (list :nom (file-name-base f)
+                        :date (metal-dashboard--notes-format-date-relative (cdr entree))
+                        :aide (format "Ouvrir %s" (abbreviate-file-name f))
+                        :action (lambda ()
+                                  (let ((liste (current-buffer)))
+                                    (find-file f)
+                                    (kill-buffer liste))))))
+              fichiers)
+      :clavier `(("n" . ,creer))
+      :touches '(("n" . "nouvelle note"))))
+    buf))
+
 (defun metal-dashboard-notes-ouvrir ()
   "Ouvrir le buffer `*Notes rapides*' listant les notes du dossier.
 Si le dossier n'existe pas, le créer. Si aucune note n'existe,
 demander immédiatement un nom pour créer la première."
   (interactive)
   (make-directory metal-dashboard-notes-dir t)
-  (let ((fichiers (metal-dashboard--notes-liste-fichiers)))
-    (if (null fichiers)
-        ;; Aucune note : on demande directement un nom.
-        (call-interactively #'metal-dashboard--notes-creer-nouvelle)
-      ;; Au moins une note : afficher le buffer dédié.
-      (let ((buffer (get-buffer-create "*Notes rapides*"))
-            (fichiers-tries (metal-dashboard--notes-trier
-                             fichiers metal-dashboard-notes-tri)))
-        (with-current-buffer buffer
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            ;; En-tête
-            (insert (propertize "Notes rapides\n"
-                                'face '(:height 1.5 :weight bold)))
-            (insert "\n")
-            ;; Indication de tri + bouton de bascule
-            (insert (format "Tri : %s  "
-                            (if (eq metal-dashboard-notes-tri 'date)
-                                "par date"
-                              "par nom")))
-            (insert-button "[changer le tri]"
-                           'action (lambda (_b)
-                                     (metal-dashboard--notes-changer-tri))
-                           'follow-link t)
-            (insert "\n\n")
-            (insert "Notes existantes :\n\n")
-            ;; Liste des notes
-            (dolist (entree fichiers-tries)
-              (let* ((filepath (car entree))
-                     (mtime (cdr entree))
-                     (nom (file-name-nondirectory filepath))
-                     (date-relative
-                      (metal-dashboard--notes-format-date-relative mtime)))
-                (insert "  ")
-                (insert-button (concat (metal-dashboard--icone "📝") " " nom)
-                               'action (metal-dashboard--notes-bouton-ouvrir filepath)
-                               'follow-link t
-                               'help-echo (format "Ouvrir %s" filepath))
-                (insert (format "    %s\n" date-relative))))
-            (insert "\n  ")
-            (insert-button (concat (metal-dashboard--icone "➕")
-                                   " Créer une nouvelle note...")
-                           'action (metal-dashboard--notes-bouton-creer)
-                           'follow-link t
-                           'help-echo "Demander un nom et créer une note")
-            (insert "\n\n")
-            (insert (format "Dossier : %s\n"
-                            (abbreviate-file-name
-                             metal-dashboard-notes-dir))))
-          (setq buffer-read-only t)
-          (setq-local tab-line-exclude nil)
-          (tab-line-mode 1)
-          (goto-char (point-min)))
-        (switch-to-buffer buffer)))))
+  (if (null (metal-dashboard--notes-liste-fichiers))
+      ;; Aucune note : on demande directement un nom.
+      (call-interactively #'metal-dashboard--notes-creer-nouvelle)
+    (switch-to-buffer (metal-dashboard--notes-rendre))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Signets : buffer dédié pour gérer plusieurs fichiers de signets
@@ -368,12 +369,15 @@ moment de la dernière modification."
 
 (defun metal-dashboard--signets-trier (fichiers critere)
   "Trier la liste FICHIERS selon CRITERE (`date' ou `nom').
-Pour `date', les plus récents apparaissent en premier."
+Pour `date', les plus récents apparaissent en premier.  Pour `nom',
+casse et accents sont ignorés : « À faire » se range avec les A."
   (cond
    ((eq critere 'nom)
     (sort fichiers (lambda (a b)
-                     (string< (file-name-nondirectory (car a))
-                              (file-name-nondirectory (car b))))))
+                     (string< (metal-dashboard--signets-clef-tri
+                               (file-name-nondirectory (car a)))
+                              (metal-dashboard--signets-clef-tri
+                               (file-name-nondirectory (car b)))))))
    (t  ; date par défaut
     (sort fichiers (lambda (a b)
                      (time-less-p (cdr b) (cdr a)))))))
@@ -613,75 +617,86 @@ page distante."
         (message "Signet ajouté dans %s (%s)"
                  (file-name-nondirectory fichier) section)))))
 
+(defun metal-dashboard--signets-compter (filepath)
+  "Retourner (LIENS . SECTIONS) : nombre de liens Org et de titres de niveau 1."
+  (with-temp-buffer
+    (insert-file-contents filepath)
+    (cons (how-many "\\[\\[[a-z]+:" (point-min) (point-max))
+          (how-many "^\\* " (point-min) (point-max)))))
+
+(defun metal-dashboard--signets-rendre ()
+  "Dessiner le tampon `*Signets*' et le retourner (sans l'afficher)."
+  (let* ((buf (get-buffer-create "*Signets*"))
+         (dir (metal-dashboard--signets-dir))
+         (fichiers (metal-dashboard--signets-trier
+                    (metal-dashboard--signets-liste-fichiers)
+                    metal-dashboard-signets-tri))
+         (comptes (mapcar (lambda (e)
+                            (or (ignore-errors (metal-dashboard--signets-compter (car e)))
+                                (cons 0 0)))
+                          fichiers))
+         (n (length fichiers))
+         (total (apply #'+ (mapcar #'car comptes)))
+         (pluriel (lambda (k mot) (format "%d %s%s" k mot (if (> k 1) "s" ""))))
+         (ajouter (lambda ()
+                    (call-interactively #'metal-dashboard-signets-ajouter-lien)
+                    ;; Mettre à jour les compteurs sans déplacer l'affichage.
+                    (when (get-buffer "*Signets*")
+                      (metal-dashboard--signets-rendre))))
+         (creer (lambda ()
+                  (let ((liste (current-buffer)))
+                    (call-interactively #'metal-dashboard--signets-creer-nouvelle)
+                    (when (buffer-live-p liste) (kill-buffer liste))))))
+    (metal-dashboard--liste-rendre
+     buf
+     (list
+      :titre "Signets"
+      :dossier dir
+      :resume (format "%s  ·  %s"
+                      (funcall pluriel n "liste")
+                      (funcall pluriel total "lien"))
+      :pilules (list (metal-dashboard--pilule
+                      "#7B4FDB" "Ajouter le lien copié"
+                      "Capturer l'adresse copiée dans le navigateur (touche a)"
+                      ajouter)
+                     (metal-dashboard--pilule
+                      "#A88BE8" "Nouvelle liste"
+                      "Créer une liste de signets (touche n)" creer))
+      :section "Listes"
+      :tri metal-dashboard-signets-tri
+      :basculer-tri #'metal-dashboard--signets-changer-tri
+      :rafraichir #'metal-dashboard-signets-ouvrir
+      :entrees
+      (cl-mapcar
+       (lambda (entree compte)
+         (let ((f (car entree)))
+           (list :nom (file-name-base f)
+                 :info (format "%s  ·  %s"
+                               (funcall pluriel (car compte) "lien")
+                               (funcall pluriel (cdr compte) "section"))
+                 :date (metal-dashboard--notes-format-date-relative (cdr entree))
+                 :aide (format "Ouvrir %s" (abbreviate-file-name f))
+                 :action (lambda ()
+                           (let ((liste (current-buffer)))
+                             (when (fboundp 'metal-org-selectionner-signets)
+                               (metal-org-selectionner-signets f))
+                             (find-file f)
+                             (kill-buffer liste))))))
+       fichiers comptes)
+      :clavier `(("a" . ,ajouter) ("n" . ,creer))
+      :touches '(("a" . "ajouter le lien copié") ("n" . "nouvelle liste"))))
+    buf))
+
 (defun metal-dashboard-signets-ouvrir ()
   "Ouvrir le buffer `*Signets*' listant les fichiers de signets du dossier.
 Si le dossier n'existe pas, le créer. Si aucun fichier n'existe,
 demander immédiatement un nom pour créer le premier."
   (interactive)
-  (let ((dir (metal-dashboard--signets-dir)))
-    (make-directory dir t)
-    (let ((fichiers (metal-dashboard--signets-liste-fichiers)))
-      (if (null fichiers)
-          ;; Aucun fichier : on demande directement un nom.
-          (call-interactively #'metal-dashboard--signets-creer-nouvelle)
-        ;; Au moins un fichier : afficher le buffer dédié.
-        (let ((buffer (get-buffer-create "*Signets*"))
-              (fichiers-tries (metal-dashboard--signets-trier
-                               fichiers metal-dashboard-signets-tri)))
-          (with-current-buffer buffer
-            (let ((inhibit-read-only t))
-              (erase-buffer)
-              ;; En-tête
-              (insert (propertize "Signets\n"
-                                  'face '(:height 1.5 :weight bold)))
-              (insert "\n")
-              ;; Indication de tri + bouton de bascule
-              (insert (format "Tri : %s  "
-                              (if (eq metal-dashboard-signets-tri 'date)
-                                  "par date"
-                                "par nom")))
-              (insert-button "[changer le tri]"
-                             'action (lambda (_b)
-                                       (metal-dashboard--signets-changer-tri))
-                             'follow-link t)
-              (insert "\n\n")
-              (insert "Listes de signets existantes :\n\n")
-              ;; Liste des fichiers de signets
-              (dolist (entree fichiers-tries)
-                (let* ((filepath (car entree))
-                       (mtime (cdr entree))
-                       (nom (file-name-nondirectory filepath))
-                       (date-relative
-                        (metal-dashboard--notes-format-date-relative mtime)))
-                  (insert "  ")
-                  (insert-button (concat (metal-dashboard--icone "🔖") " " nom)
-                                 'action (metal-dashboard--signets-bouton-ouvrir filepath)
-                                 'follow-link t
-                                 'help-echo (format "Ouvrir %s" filepath))
-                  (insert (format "    %s\n" date-relative))))
-              (insert "\n  ")
-              (insert-button (concat (metal-dashboard--icone "📋")
-                                     " Ajouter un lien du presse-papiers...")
-                             'action (lambda (_b)
-                                       (call-interactively
-                                        #'metal-dashboard-signets-ajouter-lien))
-                             'follow-link t
-                             'help-echo "Capturer l'URL copiée dans le navigateur")
-              (insert "\n  ")
-              (insert-button (concat (metal-dashboard--icone "➕")
-                                     " Créer une nouvelle liste de signets...")
-                             'action (metal-dashboard--signets-bouton-creer)
-                             'follow-link t
-                             'help-echo "Demander un nom et créer une liste de signets")
-              (insert "\n\n")
-              (insert (format "Dossier : %s\n"
-                              (abbreviate-file-name
-                               (metal-dashboard--signets-dir)))))
-            (setq buffer-read-only t)
-            (setq-local tab-line-exclude nil)
-            (tab-line-mode 1)
-            (goto-char (point-min)))
-          (switch-to-buffer buffer))))))
+  (make-directory (metal-dashboard--signets-dir) t)
+  (if (null (metal-dashboard--signets-liste-fichiers))
+      ;; Aucun fichier : on demande directement un nom.
+      (call-interactively #'metal-dashboard--signets-creer-nouvelle)
+    (switch-to-buffer (metal-dashboard--signets-rendre))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Fonctions auxiliaires
@@ -1418,14 +1433,25 @@ n'est jamais posée si le dossier contient déjà un .qmd."
         (insert ligne1 "\n" ligne2 "\n\n"))))
   (insert "\n"))
 
+(defun metal-dashboard-recents-tous ()
+  "Afficher tous les fichiers récents dans un onglet Dired (metal-dired).
+Les fichiers gardent l'ordre de `recentf-list' : le plus récent en tête.
+Repli sur la sélection au minitampon si metal-dired n'est pas chargé."
+  (interactive)
+  (if (fboundp 'metal-dired-liste)
+      (metal-dired-liste
+       "Fichiers récents"
+       (seq-filter #'metal-dashboard--recentf-acceptable-p recentf-list))
+    (call-interactively (if (fboundp 'recentf-open) #'recentf-open #'recentf-open-files))))
+
 (defun metal-dashboard--inserer-recents (marge largeur)
   "Insérer la liste numérotée des fichiers récents."
   (insert (metal-dashboard--titre-section "Fichiers récents")
           (metal-dashboard--aller (- (+ marge largeur) 13))
           (metal-dashboard--lien
            "Tout afficher"
-           (if (fboundp 'recentf-open) #'recentf-open #'recentf-open-files)
-           "Parcourir tous les fichiers récents")
+           #'metal-dashboard-recents-tous
+           "Tous les fichiers récents, dans un onglet Dired")
           "\n")
   (let* ((fichiers (seq-take
                     (seq-filter #'metal-dashboard--recentf-acceptable-p
@@ -1575,6 +1601,179 @@ n'est jamais posée si le dossier contient déjà un .qmd."
           (lambda ()
             (when (get-buffer metal-dashboard-buffer-name)
               (metal-dashboard-open))))
+
+;;; ── Listes de fichiers (notes rapides, signets) ────────────────────
+;;
+;; Rendu commun aux tampons *Notes rapides* et *Signets*, dans le style
+;; du tableau de bord : police proportionnelle, pastilles, pilules,
+;; colonnes alignées.  Toutes les entrées sont affichées ; les neuf
+;; premières reçoivent en plus un numéro (touches 1 à 9).
+
+(defun metal-dashboard--cible-p (pos)
+  "Non nil si POS porte un élément cliquable."
+  (eq (get-text-property pos 'pointer) 'hand))
+
+(defun metal-dashboard-element-suivant ()
+  "Aller à l'élément cliquable suivant (reprend au début)."
+  (interactive)
+  (let ((pos (point)) (fin (point-max)))
+    (while (and (< pos fin) (metal-dashboard--cible-p pos)) (setq pos (1+ pos)))
+    (while (and (< pos fin) (not (metal-dashboard--cible-p pos))) (setq pos (1+ pos)))
+    (when (>= pos fin)
+      (setq pos (point-min))
+      (while (and (< pos fin) (not (metal-dashboard--cible-p pos))) (setq pos (1+ pos))))
+    (when (< pos fin) (goto-char pos))))
+
+(defun metal-dashboard-element-precedent ()
+  "Aller à l'élément cliquable précédent."
+  (interactive)
+  (let ((pos (point)) (debut (point-min)))
+    (while (and (> pos debut) (metal-dashboard--cible-p pos)
+                (metal-dashboard--cible-p (1- pos)))
+      (setq pos (1- pos)))
+    (setq pos (1- pos))
+    (while (and (>= pos debut) (not (metal-dashboard--cible-p pos))) (setq pos (1- pos)))
+    (when (>= pos debut)
+      (while (and (> pos debut) (metal-dashboard--cible-p (1- pos))) (setq pos (1- pos)))
+      (goto-char pos))))
+
+(defun metal-dashboard--commande (action)
+  "Retourner ACTION sous forme de commande interactive."
+  (if (commandp action) action (lambda () (interactive) (funcall action))))
+
+(defun metal-dashboard--liste-rendre (buf spec)
+  "Dessiner dans BUF une liste de fichiers dans le style du tableau de bord.
+SPEC est une plist :
+  :titre :dossier :resume  textes de l'en-tête ;
+  :pilules                 boutons d'action déjà construites ;
+  :section                 titre de la liste ;
+  :tri :basculer-tri       critère courant (`date'/`nom') et sa commande ;
+  :rafraichir              commande de la touche g ;
+  :entrees                 plists (:nom :info :date :aide :action) ;
+  :clavier :touches        raccourcis propres (touche . action) et leur
+                           libellé pour le pied de page."
+  (with-current-buffer buf
+    (let ((inhibit-read-only t)
+          (point-precedent (point))
+          (win (get-buffer-window buf)))
+      (erase-buffer)
+      (fundamental-mode)
+      ;; Famille monospace lue AVANT le remappage proportionnel.
+      (setq metal-dashboard--mono (face-attribute 'default :family nil t))
+      (setq-local line-spacing metal-dashboard-interligne
+                  truncate-lines t
+                  buffer-face-mode-face 'variable-pitch)
+      (buffer-face-mode 1)
+      (when (fboundp 'global-hl-line-unhighlight)
+        (global-hl-line-unhighlight))
+      (setq-local global-hl-line-mode nil)
+      (let* ((fenetre (or win (selected-window)))
+             (marge 6)
+             (largeur (max 72 (- (window-width fenetre) (* 2 marge) 2)))
+             (droite (+ marge largeur))
+             (x-nom (+ marge 6))
+             (x-date (- droite 18))
+             (x-info (- x-date 24))
+             (x-num (- droite 2))
+             (dossier (plist-get spec :dossier))
+             (critere (plist-get spec :tri))
+             (basculer (plist-get spec :basculer-tri))
+             (entrees (plist-get spec :entrees))
+             (avec-info (cl-some (lambda (e) (plist-get e :info)) entrees))
+             (n 0)
+             (map (make-sparse-keymap)))
+        (setq-local line-prefix `(space :width ,marge))
+        (setq-local wrap-prefix `(space :width ,marge))
+        ;; --- En-tête ---
+        (insert "\n"
+                (propertize (abbreviate-file-name (directory-file-name dossier))
+                            'face 'shadow)
+                (metal-dashboard--aller (- droite 15))
+                (metal-dashboard--lien "Ouvrir le dossier"
+                                       (lambda () (dired dossier))
+                                       "Ouvrir le dossier dans Dired")
+                "\n"
+                (propertize (plist-get spec :titre)
+                            'face '(:height 1.8 :weight semi-bold))
+                "\n"
+                (propertize (plist-get spec :resume) 'face 'shadow)
+                "\n\n"
+                (mapconcat #'identity (plist-get spec :pilules) "   ")
+                "\n\n\n")
+        ;; --- Titre de section et tri ---
+        (insert (metal-dashboard--titre-section (plist-get spec :section))
+                (metal-dashboard--aller (- droite 19))
+                (propertize "Trier par  " 'face '(:inherit shadow :height 0.9))
+                (if (eq critere 'nom)
+                    (metal-dashboard--lien "date" basculer "Trier par date (touche t)")
+                  (propertize "date" 'face '(:weight semi-bold :height 0.9)))
+                (propertize "  ·  " 'face 'shadow)
+                (if (eq critere 'nom)
+                    (propertize "nom" 'face '(:weight semi-bold :height 0.9))
+                  (metal-dashboard--lien "nom" basculer "Trier par nom (touche t)"))
+                "\n")
+        ;; --- Entrées : toutes, numérotées de 1 à 9 ---
+        (dolist (e entrees)
+          (setq n (1+ n))
+          (let ((nom (truncate-string-to-width
+                      (plist-get e :nom)
+                      (max 12 (- (if avec-info x-info x-date) x-nom 2))
+                      nil nil "…"))
+                (action (plist-get e :action)))
+            (insert (metal-dashboard--cliquable
+                     (concat (metal-dashboard--pastille 'org)
+                             (metal-dashboard--aller x-nom)
+                             (propertize nom 'face '(:weight semi-bold)))
+                     action
+                     (plist-get e :aide)))
+            (when (plist-get e :info)
+              (insert (metal-dashboard--aller x-info)
+                      (propertize (plist-get e :info)
+                                  'face '(:inherit shadow :height 0.92))))
+            (insert (metal-dashboard--aller x-date)
+                    (propertize (plist-get e :date)
+                                'face '(:inherit shadow :height 0.92)))
+            (when (<= n 9)
+              (insert (metal-dashboard--aller x-num)
+                      (propertize (number-to-string n)
+                                  'face `(:inherit shadow :family ,metal-dashboard--mono)))
+              (define-key map (kbd (number-to-string n))
+                (metal-dashboard--commande action)))
+            (insert "\n")))
+        ;; --- Pied : raccourcis ---
+        (let ((touches (append (plist-get spec :touches)
+                               (list (cons (cond ((>= n 9) "1–9") ((<= n 1) "1") (t (format "1–%d" n)))
+                                           "ouvrir")
+                                     '("t" . "changer le tri")
+                                     '("g" . "rafraîchir")
+                                     '("TAB" . "élément suivant")))))
+          (insert "\n\n"
+                  (mapconcat (lambda (k)
+                               (concat (metal-dashboard--touche (car k)) " "
+                                       (propertize (cdr k) 'face 'shadow)))
+                             touches "      ")
+                  "\n"))
+        ;; --- Clavier local ---
+        (dolist (k (plist-get spec :clavier))
+          (define-key map (kbd (car k)) (metal-dashboard--commande (cdr k))))
+        (define-key map (kbd "t") (metal-dashboard--commande basculer))
+        (define-key map (kbd "g") (metal-dashboard--commande (plist-get spec :rafraichir)))
+        (define-key map (kbd "TAB") #'metal-dashboard-element-suivant)
+        (define-key map (kbd "<backtab>") #'metal-dashboard-element-precedent)
+        (use-local-map map))
+      (goto-char (min point-precedent (point-max)))
+      (setq buffer-read-only t)
+      (setq-local tab-line-exclude nil)
+      (tab-line-mode 1)))
+  buf)
+
+;; Le thème choisi au tableau de bord vaut aussi pour ces deux tampons.
+(add-hook 'metal-apparence-apres-changement-hook
+          (lambda ()
+            (when (get-buffer "*Notes rapides*")
+              (ignore-errors (metal-dashboard--notes-rendre)))
+            (when (get-buffer "*Signets*")
+              (ignore-errors (metal-dashboard--signets-rendre)))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Démarrage automatique
