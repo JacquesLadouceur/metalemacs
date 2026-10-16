@@ -224,6 +224,8 @@ auto-installée : ce sont des consoles de lecture, pas des documents
 (require 'metal-agent-profils nil t)
 (autoload 'metal-algo-ouvrir "metal-algo"
   "Ouvrir le tampon d'algorithme du script Python courant." t)
+(autoload 'metal-prompt-ouvrir "metal-prompt"
+  "Ouvrir le prompt structuré du programme Prolog courant." t)
 
 (defcustom metal-agent-profil-actif 'tronc-commun
   "Profil actuellement actif (symbole `:id' d'un profil de `metal-agent-profils').
@@ -268,6 +270,7 @@ change de profil.")
     (:reformuler "✍️" "Reformuler (documents texte)")
     (:fonction   "ƒ"  "Ajouter une fonction ou un prédicat (code)")
     (:algorithme "🧭" "Programmation algorithmique (Python)")
+    (:prompt     "📝" "Prompt structuré lié au programme (Prolog)")
     (:demande    "💬" "Demande libre")
     (:analyse    "🔬" "Analyse libre")
     (:lot        "📚" "Traitement en lot"))
@@ -3579,6 +3582,18 @@ sélecteur de profil) restent toujours présents."
            (metal-agent--bouton-aide
             :algorithme
             "Programmation algorithmique : rédiger l'algorithme, puis produire le programme"))
+          "   ")
+       "")
+     ;; Prompt structuré lié au programme — Prolog, configurable :prompt
+     (if (and (derived-mode-p 'prolog-mode)
+              (metal-agent--bouton-visible-p :prompt))
+         (concat
+          (metal-agent--toolbar-button
+           (metal-toolbar-emoji "📝")
+           #'metal-prompt-ouvrir
+           (metal-agent--bouton-aide
+            :prompt
+            "Prompt structuré : rédiger les consignes, puis faire modifier le programme (révision Ediff)"))
           "   ")
        "")
      ;; Demande libre — configurable :demande
