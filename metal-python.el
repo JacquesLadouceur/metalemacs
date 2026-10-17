@@ -90,6 +90,17 @@ et à la fin de la dernière ligne."
   (or (executable-find "conda")
       (executable-find "conda.exe")))
 
+(defun metal-conda--chemin-pour-shell (chemin)
+  "Retourner CHEMIN avec des barres inverses sous Windows.
+`executable-find' renvoie des chemins à barres avant
+(c:/.../condabin/conda.bat). Passés tels quels à cmd.exe, ils cassent
+le `%~dp0' interne de conda.bat, d'où « Le chemin d'accès spécifié est
+introuvable ». À utiliser pour toute chaîne envoyée à un shell ; les
+`call-process' n'en ont pas besoin."
+  (if (and chemin (eq system-type 'windows-nt))
+      (subst-char-in-string ?/ ?\\ chemin)
+    chemin))
+
 (defun metal-conda--require-conda ()
   "Vérifier que conda est disponible. Retourne l'exécutable ou nil."
   (or (metal-conda--get-conda-exe)
@@ -157,7 +168,9 @@ Couvre du même coup les `envs_dirs' personnalisés déclarés dans un
   (when-let ((conda-exe (metal-conda--get-conda-exe)))
     (string-match-p
      "libmamba"
-     (shell-command-to-string (format "\"%s\" config --show solver" conda-exe)))))
+     (shell-command-to-string
+      (format "\"%s\" config --show solver"
+              (metal-conda--chemin-pour-shell conda-exe))))))
 
 (defun metal-conda--signaler-libmamba ()
   "Signaler, sans bloquer, que le solveur libmamba n'est pas actif.
@@ -187,7 +200,8 @@ Inutile depuis conda 23.10, où libmamba est déjà le solveur par défaut."
       (message "⏳ Installation de libmamba en cours...")
       (metal-util-run-in-eat
        (format "\"%s\" install -n base conda-libmamba-solver -y && \"%s\" config --set solver libmamba"
-               conda-exe conda-exe)
+               (metal-conda--chemin-pour-shell conda-exe)
+               (metal-conda--chemin-pour-shell conda-exe))
        "*Conda libmamba*"
        t)))))
 
@@ -770,7 +784,9 @@ Variantes directes :
         (progn
           (message "📦 Création de l'environnement '%s' en cours..." selected)
           (metal-util-run-in-eat
-           (format "\"%s\" env create -f \"%s\"" conda-exe full-path)
+           (format "\"%s\" env create -f \"%s\""
+                   (metal-conda--chemin-pour-shell conda-exe)
+                   (metal-conda--chemin-pour-shell full-path))
            "*Conda Create*"
            t))
       (message "❌ Fichier YAML introuvable : %s" selected))))
@@ -793,7 +809,8 @@ Variantes directes :
      ((yes-or-no-p (format "Supprimer définitivement l'environnement '%s' ? " env))
       (message "🧹 Suppression de l'environnement '%s' en cours..." env)
       (metal-util-run-in-eat
-       (format "\"%s\" env remove -n %s -y" conda-exe env)
+       (format "\"%s\" env remove -n %s -y"
+               (metal-conda--chemin-pour-shell conda-exe) env)
        "*Conda Delete*"
        t)))))
 

@@ -141,6 +141,10 @@ couleurs et progress bars de pip/conda sont activées via les
 variables d'environnement (`metal-util--tty-env-vars')."
   (let* ((buf (get-buffer-create buf-name))
          (process-environment (append metal-util--tty-env-vars process-environment))
+         ;; cmd.exe écrit dans le codage de la locale Windows (cp1252 en
+         ;; français) : sans ceci, « d’accès » s'affiche « d\222accès ».
+         ;; On évite `chcp 65001', qui a des effets de bord avec Quarto.
+         (coding-system-for-read locale-coding-system)
          ;; Si auto-close, ajouter `pause' pour que l'utilisateur voie la
          ;; sortie avant fermeture. Sinon, laisser la commande se terminer
          ;; normalement ; le buffer restera lisible après coup.

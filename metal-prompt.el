@@ -47,6 +47,11 @@
 ;; résultat attendu (plusieurs solutions séparées par « ; », « false »
 ;; pour un échec).  Le bouton Tester les exécute dans un SWI-Prolog
 ;; séparé et affiche OK ou ÉCHEC pour chacun.
+;;
+;; Toute ligne commentée (« # » en tête, syntaxe Org) est ignorée : ni
+;; transmise à l'agent, ni testée.  Une consigne commentée garde son
+;; numéro et entraîne ses sous-consignes ; F9 met en commentaire ou
+;; réactive la consigne au point (ou la ligne, ou la région).
 
 ;;; Code:
 
@@ -160,40 +165,97 @@ les refuser comme n'importe quel bloc."
 
 ;;;; Lecture des consignes (listes numérotées hiérarchiques)
 
+(defconst metal-prompt--re-commentaire "^[ \t]*#\\(?:[ \t]\\|$\\)"
+  "Ligne de commentaire Org : « # » en tête (après d'éventuels blancs).
+Ne reconnaît pas les mots-clés « #+… ».")
+
+(defconst metal-prompt--re-item-commente
+  "^\\([ \t]*\\)# ?\\([ \t]*\\)[0-9]+[.)][ \t]+\\(.*\\)$"
+  "Élément de liste numérotée mis en commentaire : « # 2. texte ».")
+
+(defun metal-prompt--sans-commentaires (texte)
+  "TEXTE privé de ses lignes de commentaire Org, ou nil s'il devient vide."
+  (when texte
+    (let ((r (string-trim
+              (mapconcat #'identity
+                         (seq-remove (lambda (l) (string-match-p
+                                                  metal-prompt--re-commentaire l))
+                                     (split-string texte "\n"))
+                         "\n"))))
+      (unless (string-empty-p r) r))))
+
+(defun metal-prompt--section (noms)
+  "Texte de la section NOMS, sans les lignes commentées."
+  (metal-prompt--sans-commentaires (metal-algo--texte-section noms)))
+
 (defun metal-prompt--analyser-consignes ()
   "Analyser la section « Consignes ».
-Retourne (INTRO CONSIGNES DEBUT FIN), où CONSIGNES est une liste ordonnée
-de (NUMERO TEXTE CORPS POSITION NIVEAU).  La numérotation hiérarchique
-\(1, 2, 2.1…) est calculée d'après l'imbrication des listes ; les
-numéros saisis ne servent qu'à repérer les éléments."
+Retourne (INTRO CONSIGNES DEBUT FIN DESACTIVEES), où CONSIGNES est une
+liste ordonnée de (NUMERO TEXTE CORPS POSITION NIVEAU) et DESACTIVEES la
+liste des numéros des consignes mises en commentaire.
+
+La numérotation hiérarchique (1, 2, 2.1…) est calculée d'après
+l'imbrication des listes ; les numéros saisis ne servent qu'à repérer
+les éléments.  Une consigne commentée (« # 2. … ») garde son numéro,
+pour que les autres ne changent pas de numéro — et leurs marques
+« % Consigne N » dans le code restent justes.  Ses sous-consignes, même
+non commentées, sont désactivées avec elle ; les autres lignes
+commentées sont ignorées."
   (when-let ((debut (metal-algo--section metal-prompt--noms-consignes)))
     (org-with-wide-buffer
      (goto-char debut)
      (let ((fin (save-excursion (org-end-of-subtree t t) (point)))
-           pile intro items courant)
+           pile intro items courant desactivees saut)
        (forward-line 1)
        (while (< (point) fin)
-         (let ((ligne (buffer-substring-no-properties
-                       (line-beginning-position) (line-end-position))))
+         (let* ((ligne (buffer-substring-no-properties
+                        (line-beginning-position) (line-end-position)))
+                (ind-ligne (progn (string-match "^[ \t]*" ligne)
+                                  (string-width (match-string 0 ligne))))
+                (vide (string-blank-p ligne)))
+           ;; Fin du bloc d'une consigne désactivée : ligne non vide qui
+           ;; n'est pas plus indentée que la consigne.
+           (when (and saut (not vide)
+                      (<= (if (string-match metal-prompt--re-item-commente ligne)
+                              (string-width (concat (match-string 1 ligne)
+                                                    (match-string 2 ligne)))
+                            ind-ligne)
+                          saut))
+             (setq saut nil))
            (cond
-            ((string-match metal-algo--re-item ligne)
-             (let ((ind (string-width (match-string 1 ligne)))
-                   (texte (string-trim (match-string 2 ligne))))
+            (saut nil)
+            ((or (string-match metal-algo--re-item ligne)
+                 (string-match metal-prompt--re-item-commente ligne))
+             (let* ((commente (string-match-p metal-prompt--re-commentaire ligne))
+                    (ind (if commente
+                             (progn (string-match metal-prompt--re-item-commente ligne)
+                                    (string-width (concat (match-string 1 ligne)
+                                                          (match-string 2 ligne))))
+                           (string-width (match-string 1 ligne))))
+                    (texte (string-trim (match-string (if commente 3 2) ligne))))
                (while (and pile (> (caar pile) ind)) (pop pile))
                (if (and pile (= (caar pile) ind))
                    (setcdr (car pile) (1+ (cdar pile)))
                  (push (cons ind 1) pile))
                (when courant (push (metal-algo--clore-etape courant) items))
-               (setq courant
-                     (list (mapconcat (lambda (c) (number-to-string (cdr c)))
-                                      (reverse pile) ".")
-                           texte nil (line-beginning-position) (length pile)))))
+               (let ((num (mapconcat (lambda (c) (number-to-string (cdr c)))
+                                     (reverse pile) ".")))
+                 (if commente
+                     (setq courant nil
+                           saut ind)
+                   (setq courant (list num texte nil (line-beginning-position)
+                                       (length pile))))
+                 (when commente (push num desactivees)))))
+            ((string-match-p metal-prompt--re-commentaire ligne) nil)
             (courant (push ligne (nth 2 courant)))
             (t (push ligne intro))))
          (forward-line 1))
        (when courant (push (metal-algo--clore-etape courant) items))
        (list (string-trim (string-join (nreverse intro) "\n"))
-             (nreverse items) debut fin)))))
+             (nreverse items) debut fin (nreverse desactivees))))))
+
+(defun metal-prompt--consignes-desactivees ()
+  (nth 4 (metal-prompt--analyser-consignes)))
 
 (defun metal-prompt--formater-consigne (c)
   (pcase-let* ((`(,num ,texte ,corps ,_pos ,niv) c)
@@ -212,21 +274,30 @@ numéros saisis ne servent qu'à repérer les éléments."
 
 ;;;; Exemples
 
+(defconst metal-prompt--re-but-nu
+  "\\`[a-z][a-zA-Z0-9_]*([^?]*)[ \t]*\\.\\'"
+  "But Prolog complet écrit sans « ?- » : « pred(args). » sur une ligne.")
+
 (defun metal-prompt--exemples ()
   "Liste des exemples de la section « Exemples » : ((REQUÊTE . ATTENDU) …).
 REQUÊTE est le but sans « ?- » ni point final ; ATTENDU est le résultat
 attendu (chaîne, éventuellement vide).  Une requête peut s'étendre sur
-plusieurs lignes, jusqu'à la ligne qui se termine par un point."
-  (let ((texte (or (metal-algo--texte-section metal-prompt--noms-exemples) ""))
-        exemples requete attendu en-requete)
+plusieurs lignes, jusqu'à la ligne qui se termine par un point.
+
+Une ligne qui a la forme d'un but complet sans « ?- », comme
+« conjuguer(manger, pi, [mange, …]). », est aussi un exemple : sans
+ligne de résultat sous elle, elle doit simplement réussir (« true. »)."
+  (let ((texte (or (metal-prompt--section metal-prompt--noms-exemples) ""))
+        exemples requete attendu en-requete nu)
     (cl-flet ((clore ()
                 (when requete
-                  (push (cons (string-trim
-                               (replace-regexp-in-string
-                                "\\.[ \t]*\\'" "" (string-join (nreverse requete) " ")))
-                              (string-trim (string-join (nreverse attendu) " ")))
-                        exemples))
-                (setq requete nil attendu nil)))
+                  (let ((att (string-trim (string-join (nreverse attendu) " "))))
+                    (push (cons (string-trim
+                                 (replace-regexp-in-string
+                                  "\\.[ \t]*\\'" "" (string-join (nreverse requete) " ")))
+                                (if (and nu (string-empty-p att)) "true." att))
+                          exemples)))
+                (setq requete nil attendu nil nu nil)))
       (dolist (l (split-string texte "\n"))
         (let ((l (string-trim l)))
           (cond
@@ -234,6 +305,10 @@ plusieurs lignes, jusqu'à la ligne qui se termine par un point."
             (clore)
             (setq requete (list (string-trim (substring l 2)))
                   en-requete (not (string-suffix-p "." l))))
+           ((and (not en-requete)
+                 (string-match-p metal-prompt--re-but-nu l))
+            (clore)
+            (setq requete (list l) nu t))
            (en-requete
             (push l requete)
             (setq en-requete (not (string-suffix-p "." l))))
@@ -247,7 +322,7 @@ plusieurs lignes, jusqu'à la ligne qui se termine par un point."
 
 (defun metal-prompt--fichiers-lies ()
   "Fichiers de « Contexte » (liens Org ou noms en clair), sans doublons."
-  (let ((txt (or (metal-algo--texte-section metal-prompt--noms-contexte) ""))
+  (let ((txt (or (metal-prompt--section metal-prompt--noms-contexte) ""))
         fichiers)
     (dolist (re (list metal-algo--re-lien-fichier
                       metal-prompt--re-fichier-prolog
@@ -302,11 +377,13 @@ plusieurs lignes, jusqu'à la ligne qui se termine par un point."
 (defun metal-prompt--texte-complet ()
   "Le prompt tel que transmis : titre, contexte, consignes, exemples."
   (let* ((titre (or (metal-algo--mot-cle "TITLE") "Sans titre"))
-         (contexte (metal-algo--texte-section metal-prompt--noms-contexte))
+         (contexte (metal-prompt--section metal-prompt--noms-contexte))
          (consignes (metal-prompt--texte-consignes))
-         (exemples (metal-algo--texte-section metal-prompt--noms-exemples)))
+         (exemples (metal-prompt--section metal-prompt--noms-exemples)))
     (when (string-empty-p consignes)
-      (user-error "La section « Consignes » est vide ou absente"))
+      (user-error (if (metal-prompt--consignes-desactivees)
+                      "Toutes les consignes sont en commentaire"
+                    "La section « Consignes » est vide ou absente")))
     (metal-algo--liens-en-chemins
      (concat "Titre : " titre "\n\n"
              (when contexte (concat "Contexte :\n" contexte "\n\n"))
@@ -408,12 +485,55 @@ Programme actuel (%s) :
     (define-key m (kbd "?") #'metal-prompt-preciser-note)
     m))
 
+(defface metal-prompt-notes-consigne-face
+  '((t :inherit bold))
+  "Titre d'un groupe de notes : numéro et texte de la consigne.")
+
+(defface metal-prompt-notes-texte-face
+  '((t :inherit default))
+  "Texte d'une note de l'agent.")
+
+(defconst metal-prompt--notes-retrait "      "
+  "Retrait des notes sous leur consigne, repris sur les lignes repliées.")
+
 (define-derived-mode metal-prompt-notes-mode special-mode "Notes"
   "Notes de l'agent sur les modifications proposées.
-\\{metal-prompt-notes-mode-map}")
+\\{metal-prompt-notes-mode-map}"
+  (setq-local truncate-lines nil)
+  (visual-line-mode 1)
+  (setq-local header-line-format
+              (concat " Clic sur une consigne : y revenir   ·   "
+                      "❓ ou « ? » sur une note : demander une précision")))
+
+(defun metal-prompt--grouper-notes (lignes)
+  "Grouper LIGNES par consigne : ((NUM . (TEXTE…)) …), dans l'ordre d'arrivée.
+NUM est nil pour une note qui ne nomme aucune consigne.  Le préfixe
+« Consigne N : » est retiré du texte."
+  (let (groupes)
+    (dolist (l lignes)
+      (let* ((num (and (string-match
+                        "\\`[ \t]*Consigne[ \t]+\\([0-9]+\\(?:\\.[0-9]+\\)*\\)[ \t]*:?[ \t]*"
+                        l)
+                       (match-string 1 l)))
+             (texte (string-trim (if num (substring l (match-end 0)) l)))
+             (texte (if (string-empty-p texte) l
+                      (concat (upcase (substring texte 0 1)) (substring texte 1))))
+             (groupe (assoc num groupes)))
+        (if groupe
+            (setcdr groupe (append (cdr groupe) (list texte)))
+          (setq groupes (append groupes (list (list num texte)))))))
+    groupes))
+
+(defun metal-prompt--texte-consigne (prompt num)
+  "Texte de la consigne NUM du tampon PROMPT, ou nil."
+  (when (buffer-live-p prompt)
+    (with-current-buffer prompt
+      (nth 1 (seq-find (lambda (c) (equal (car c) num))
+                       (nth 1 (ignore-errors (metal-prompt--analyser-consignes))))))))
 
 (defun metal-prompt--afficher-notes (prompt lignes &optional propose)
-  "Afficher les notes LIGNES ; PROPOSE est le programme qu'elles commentent."
+  "Afficher les notes LIGNES, groupées par consigne.
+PROPOSE est le programme qu'elles commentent."
   (let ((nom "*Notes de l'agent*"))
     (if (null lignes)
         (when-let ((b (get-buffer nom))) (quit-windows-on b))
@@ -423,27 +543,41 @@ Programme actuel (%s) :
               metal-prompt--notes-propose propose)
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (insert "Notes de l'agent sur les modifications proposées.\n"
-                  "Cliquer sur une consigne pour y revenir ; ❓ (ou « ? » sur la "
-                  "ligne) pour demander des précisions.\n\n")
-          (dolist (l lignes)
-            (insert "• ")
-            (if (string-match "Consigne \\([0-9]+\\(?:\\.[0-9]+\\)*\\)" l)
-                (let ((num (match-string 1 l)))
+          (insert "\n")
+          (dolist (groupe (metal-prompt--grouper-notes lignes))
+            (let* ((num (car groupe))
+                   (titre (if num
+                              (let ((txt (metal-prompt--texte-consigne prompt num)))
+                                (concat "Consigne " num (if txt (concat " — " txt) "")))
+                            "Remarques générales")))
+              (insert " ")
+              (if num
                   (insert-text-button
-                   l 'follow-link t
-                   'action (lambda (_) (metal-prompt--aller-consigne prompt num))))
-              (insert l))
-            (put-text-property (line-beginning-position) (point)
-                               'metal-prompt-note l)
-            (insert "  ")
-            (insert-text-button
-             "❓" 'follow-link t
-             'help-echo "Demander à l'agent de préciser cette note"
-             'action (let ((note l))
-                       (lambda (_) (metal-prompt-preciser-note note))))
-            (insert "\n")))
-        (goto-char (point-min)))
+                   titre 'follow-link t
+                   'face 'metal-prompt-notes-consigne-face
+                   'mouse-face 'highlight
+                   'help-echo "Revenir à cette consigne dans le prompt"
+                   'action (lambda (_) (metal-prompt--aller-consigne prompt num)))
+                (insert (propertize titre 'face 'metal-prompt-notes-consigne-face)))
+              (insert "\n")
+              (dolist (texte (cdr groupe))
+                (let ((note (if num (format "Consigne %s : %s" num texte) texte))
+                      (debut (point)))
+                  (insert "   ")
+                  (insert-text-button
+                   "❓" 'follow-link t
+                   'face 'default
+                   'mouse-face 'highlight
+                   'help-echo "Demander à l'agent de préciser cette note"
+                   'action (lambda (_) (metal-prompt-preciser-note note)))
+                  (insert " " (propertize texte 'face 'metal-prompt-notes-texte-face))
+                  (put-text-property debut (point) 'metal-prompt-note note)
+                  (put-text-property debut (point) 'wrap-prefix
+                                     metal-prompt--notes-retrait)
+                  (insert "\n")))
+              (insert "\n"))))
+        (goto-char (point-min))
+        (forward-line 1))
       (display-buffer nom))))
 
 ;;;; Préciser une note
@@ -616,6 +750,10 @@ affichée en lecture seule ; le programme n'est pas modifié."
     (message "⚠ Fichier(s) introuvable(s) dans « Contexte » : %s"
              (string-join manquants ", "))
     (sit-for 1.5))
+  (when-let ((off (metal-prompt--consignes-desactivees)))
+    (message "📝 Consigne(s) en commentaire, non transmise(s) : %s"
+             (string-join off ", "))
+    (sit-for 1))
   (let ((prompt (current-buffer))
         (texte (metal-prompt--texte-complet)))
     (metal-prompt--avec-contexte
@@ -660,7 +798,8 @@ metal_sol(Vs, S) :-
 
 % Solutions obtenues plus d'une fois : signe d'un fait ou d'une clause
 % en double, que list_to_set masquerait.
-metal_repetees(Ss, Reps) :-
+metal_repetees(Ss0, Reps) :-
+    exclude(==(\"true\"), Ss0, Ss),   % but sans variable : plusieurs preuves, pas un doublon
     msort(Ss, Tri),
     findall(S, (nextto(S, S, Tri)), Rs0),
     list_to_set(Rs0, Reps).
@@ -671,7 +810,10 @@ metal_test(Q, Att, R) :-
             findall(S, (call(T), metal_sol(Vs, S)), Ss0),
             list_to_set(Ss0, Ss),
             ( Ss == [] -> Obt = [\"false\"] ; Obt = Ss ),
-            ( Ss0 == [] -> Aff = [\"false\"] ; Aff = Ss0 ),
+            (   Ss0 == [] -> Aff = [\"false\"]
+            ;   Ss == [\"true\"] -> Aff = [\"true\"]
+            ;   Aff = Ss0
+            ),
             forall(member(O, Aff), format(\"   ~w~n\", [O])),
             metal_repetees(Ss0, Reps),
             (   Reps \\== []
@@ -726,7 +868,7 @@ point final ignorés.")
          (fichier (buffer-file-name programme))
          (swipl (metal-prompt--swipl)))
     (unless exemples
-      (user-error "Aucun exemple « ?- … . » dans la section « Exemples »"))
+      (user-error "Aucun exemple dans la section « Exemples » : écrire « ?- requête. » puis le résultat attendu, ou un but complet comme « conjuguer(parler, pi, [parle, …]). »"))
     (with-current-buffer programme
       (when (buffer-modified-p) (save-buffer)))
     (let* ((script (make-temp-file "metal-prompt-tests-" nil ".pl"))
@@ -840,6 +982,74 @@ point final ignorés.")
         (beginning-of-line)
       (message "La consigne %s n'est marquée nulle part dans le programme" num))))
 
+;;;; Activer / désactiver une consigne
+
+(defun metal-prompt--bloc-item ()
+  "Bornes (DÉBUT . FIN) de l'élément de liste au point et de ses sous-éléments.
+L'élément peut être commenté.  Retourne nil hors d'un élément numéroté."
+  (save-excursion
+    (beginning-of-line)
+    (let ((ligne (buffer-substring-no-properties (point) (line-end-position)))
+          ind)
+      (cond
+       ((string-match metal-prompt--re-item-commente ligne)
+        (setq ind (string-width (concat (match-string 1 ligne) (match-string 2 ligne)))))
+       ((string-match metal-algo--re-item ligne)
+        (setq ind (string-width (match-string 1 ligne)))))
+      (when ind
+        (let ((debut (point)) (fin (line-end-position)))
+          (forward-line 1)
+          (while (and (not (eobp))
+                      (let ((l (buffer-substring-no-properties
+                                (point) (line-end-position))))
+                        (and (not (string-match-p "^\\*" l))
+                             (or (string-blank-p l)
+                                 (> (if (string-match metal-prompt--re-item-commente l)
+                                        (string-width (concat (match-string 1 l)
+                                                              (match-string 2 l)))
+                                      (progn (string-match "^[ \t]*" l)
+                                             (string-width (match-string 0 l))))
+                                    ind)))))
+            (unless (string-blank-p (buffer-substring (point) (line-end-position)))
+              (setq fin (line-end-position)))
+            (forward-line 1))
+          (cons debut fin))))))
+
+(defun metal-prompt-basculer-consigne ()
+  "Mettre en commentaire la consigne au point, ou la réactiver.
+Les sous-consignes suivent.  Une consigne commentée n'est pas transmise
+à l'agent mais garde son numéro.  Ailleurs que sur un élément numéroté,
+commente ou décommente la ligne (ou la région)."
+  (interactive)
+  (let* ((bloc (and (not (use-region-p)) (metal-prompt--bloc-item)))
+         (debut (cond (bloc (car bloc))
+                      ((use-region-p) (save-excursion (goto-char (region-beginning))
+                                                      (line-beginning-position)))
+                      (t (line-beginning-position))))
+         (fin (cond (bloc (cdr bloc))
+                    ((use-region-p) (region-end))
+                    (t (line-end-position))))
+         (commenter (not (save-excursion
+                           (goto-char debut)
+                           (looking-at metal-prompt--re-commentaire)))))
+    (save-excursion
+      (goto-char debut)
+      (while (< (point) fin)
+        (let ((l (buffer-substring-no-properties (point) (line-end-position))))
+          (unless (string-blank-p l)
+            (if commenter
+                (unless (string-match-p metal-prompt--re-commentaire l)
+                  (skip-chars-forward " \t")
+                  (insert "# ")
+                  (setq fin (+ fin 2)))
+              (when (looking-at "\\([ \t]*\\)# ?")
+                (let ((n (- (match-end 0) (match-end 1))))
+                  (replace-match "\\1")
+                  (setq fin (- fin n)))))))
+        (forward-line 1)))
+    (deactivate-mark)
+    (message (if commenter "Désactivé (en commentaire)" "Réactivé"))))
+
 ;;;; Autres commandes du tampon
 
 (defun metal-prompt-aller-au-programme ()
@@ -880,7 +1090,7 @@ point final ignorés.")
                          "Appliquer le prompt au programme, puis réviser les modifications (F6)")
    "   "
    (metal-prompt--bouton (metal-toolbar-emoji "▶️") #'metal-prompt-tester
-                         "Consulter le programme et lancer les Exemples (F7)")
+                         "Vérifier les Exemples (F7)")
    "   "
    (metal-prompt--bouton (metal-toolbar-emoji "📄") #'metal-prompt-aller-au-programme
                          "Revenir au programme Prolog")
@@ -910,6 +1120,7 @@ point final ignorés.")
     (define-key m (kbd "<f6>") #'metal-prompt-appliquer)
     (define-key m (kbd "<f7>") #'metal-prompt-tester)
     (define-key m (kbd "<f8>") #'metal-prompt-aller-au-code)
+    (define-key m (kbd "<f9>") #'metal-prompt-basculer-consigne)
     m))
 
 (define-derived-mode metal-prompt-mode org-mode "Prompt"

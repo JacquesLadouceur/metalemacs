@@ -32,16 +32,18 @@ Réglable à la volée par `M-x treemacs-resize-icons' (un conseil ci-après
 sauvegarde alors la nouvelle valeur).")
 
 ;;; ── Repli des dossiers à enfant unique ──────────────────────────────
-;; Treemacs regroupe sur une seule ligne les dossiers qui n'ont qu'un
-;; enfant (« 01 - LNG-Cours/LNG-3101-A2026 »).  L'indentation ainsi
-;; économisée laisse plus de place aux noms longs.  Ce mécanisme exige
-;; un interpréteur Python 3 : sans lui, Treemacs signale une erreur à
-;; chaque rafraîchissement, d'où la désactivation automatique.
+;; Treemacs sait regrouper sur une seule ligne les dossiers qui n'ont
+;; qu'un enfant (« LNG-3108-2027/Contenu »).  Désactivé par défaut : chaque
+;; dossier garde sa propre ligne, comme dans le Finder ou l'Explorateur.
+;; Le repli exige en outre un interpréteur Python 3 : sans lui, Treemacs
+;; signale une erreur à chaque rafraîchissement, d'où la désactivation
+;; automatique quand il est demandé mais que Python 3 manque.
 
-(defvar metal-treemacs-collapse-dirs 3
+(defvar metal-treemacs-collapse-dirs 0
   "Profondeur maximale de repli des dossiers à enfant unique.
-0 désactive le repli.  Une valeur positive n'a d'effet que si un
-interpréteur Python 3 est trouvé par `metal-treemacs--python3'.")
+0 (défaut) désactive le repli : un dossier par ligne.  Une valeur
+positive n'a d'effet que si un interpréteur Python 3 est trouvé par
+`metal-treemacs--python3'.")
 
 (defvar metal-treemacs-python-executable nil
   "Chemin explicite d'un interpréteur Python 3, ou nil pour détection auto.
@@ -85,8 +87,7 @@ un changement d'environnement Python."
                    (format "Repli Treemacs actif (profondeur %d) — %s"
                            treemacs-collapse-dirs python)
                  "Repli Treemacs désactivé : aucun interpréteur Python 3 trouvé")))
-    (when (and python
-               (fboundp 'treemacs-get-local-window)
+    (when (and (fboundp 'treemacs-get-local-window)
                (treemacs-get-local-window))
       (treemacs-refresh))
     python))
