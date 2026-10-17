@@ -165,7 +165,7 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
 (defun metal-apparence--retoucher ()
   "Ajuster les faces qui ne dépendent pas de la palette seule."
   (let* ((sombre  (metal-apparence-sombre-p))
-         (bg-main (metal-apparence-couleur 'bg-main (if sombre "#000000" "#ffffff")))
+         (_bg-main (metal-apparence-couleur 'bg-main (if sombre "#000000" "#ffffff")))
          (bg-dim  (metal-apparence-couleur 'bg-dim  (if sombre "#1e1e1e" "#f2f2f2")))
          (border  (metal-apparence-couleur 'border  (if sombre "#646464" "#9f9f9f")))
          (fg-main (metal-apparence-couleur 'fg-main (if sombre "#ffffff" "#000000")))
@@ -205,36 +205,94 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
       (when (facep face)
         (set-face-attribute face nil :foreground fg-main)))))
 
+;;; ── Onglets colorés selon le type de fichier ────────────────────────
+;;
+;; Chaque onglet prend la couleur de son type (mêmes familles que les
+;; pastilles du tableau de bord) :
+;; - onglet courant de la fenêtre active : couleur pleine, texte blanc ;
+;; - onglet courant d'une autre fenêtre : teinte pâle, texte en demi-gras ;
+;; - autres onglets : teinte pâle, texte atténué.
+;; Les tampons sans fichier (scratch, tableau de bord…) sont en gris.
+
+(defvar tab-line-separator)
+(defvar tab-line-tab-face-functions)
+
+(defconst metal-apparence--couleurs-onglets
+  ;; type   extensions                         plein      pâle-clair  pâle-sombre
+  '((qmd   ("qmd" "md" "markdown" "tex" "bib") "#2C55C9" "#E3E9F8" "#232B40")
+    (py    ("py" "ipynb")                      "#9A7300" "#F6EED6" "#332D1A")
+    (pl    ("pl" "pro" "plt")                  "#C2570C" "#FBE7DA" "#3A271C")
+    (org   ("org")                             "#6A3FC7" "#ECE5FA" "#2C2640")
+    (pdf   ("pdf")                             "#C23030" "#F8E1E1" "#3A2224")
+    (el    ("el")                              "#1B8A6E" "#DDF0EA" "#1C322D")
+    (data  ("csv" "tsv" "xlsx" "json" "yml" "yaml") "#1B8A6E" "#DDF0EA" "#1C322D")
+    (autre nil                                 "#5A6270" "#E6E8EC" "#2A2D33"))
+  "Couleurs des onglets par type : pleine, pâle (thème clair), pâle (sombre).")
+
+(defun metal-apparence--type-onglet (buffer)
+  "Entrée de `metal-apparence--couleurs-onglets' pour BUFFER."
+  (let* ((fichier (buffer-file-name buffer))
+         (ext (and fichier (downcase (or (file-name-extension fichier) "")))))
+    (or (and ext
+             (cl-find-if (lambda (e) (member ext (nth 1 e)))
+                         metal-apparence--couleurs-onglets))
+        (assq 'autre metal-apparence--couleurs-onglets))))
+
+(defun metal-apparence--face-onglet (tab _tabs face buffer-p selected-p)
+  "Colorer l'onglet TAB selon le type de son fichier (voir plus haut).
+FACE est la face calculée par tab-line ; BUFFER-P et SELECTED-P
+viennent de `tab-line-tab-face-functions'."
+  (if (not buffer-p)
+      face
+    (let* ((sombre (metal-apparence-sombre-p))
+           (e (metal-apparence--type-onglet tab))
+           (plein (nth 2 e))
+           (pale (if sombre (nth 4 e) (nth 3 e)))
+           (fg-main (metal-apparence-couleur 'fg-main (if sombre "#ffffff" "#000000")))
+           (fg-dim (metal-apparence-couleur 'fg-dim (if sombre "#989898" "#595959")))
+           (actif (and selected-p (mode-line-window-selected-p)))
+           (fond (if actif plein pale)))
+      `(:background ,fond
+        :foreground ,(cond (actif "#ffffff") (selected-p fg-main) (t fg-dim))
+        :weight ,(if selected-p 'semi-bold 'normal)
+        :slant normal
+        :box (:line-width (10 . 6) :color ,fond)
+        :overline nil :underline nil))))
+
 (defun metal-apparence--retoucher-onglets ()
-  "Donner aux onglets un aspect plat aux couleurs du thème."
+  "Bande des onglets aux couleurs du thème ; onglets colorés par type."
   (let* ((sombre  (metal-apparence-sombre-p))
-         (bg-main (metal-apparence-couleur 'bg-main (if sombre "#000000" "#ffffff")))
          (bg-dim  (metal-apparence-couleur 'bg-dim  (if sombre "#1e1e1e" "#f2f2f2")))
          (fg-main (metal-apparence-couleur 'fg-main (if sombre "#ffffff" "#000000")))
          (fg-dim  (metal-apparence-couleur 'fg-dim  (if sombre "#989898" "#595959"))))
     (set-face-attribute 'tab-line nil
                         :background bg-dim :foreground fg-dim
                         :box nil :overline nil :underline nil)
-    ;; `tab-line-tab-special' met en italique les tampons sans fichier.
-    (when (facep 'tab-line-tab-special)
-      (set-face-attribute 'tab-line-tab-special nil :slant 'normal :weight 'unspecified))
-    (dolist (face '(tab-line-tab tab-line-tab-inactive
-                    tab-line-tab-inactive-alternate))
+    ;; Faces de base neutralisées : la couleur vient de `metal-apparence--face-onglet'.
+    (dolist (face '(tab-line-tab tab-line-tab-current tab-line-tab-inactive
+                    tab-line-tab-inactive-alternate tab-line-tab-special
+                    tab-line-tab-modified))
       (when (facep face)
-        (set-face-attribute face nil
-                            :background bg-dim :foreground fg-dim
-                            :weight 'normal :slant 'normal
-                            :box `(:line-width (1 . 6) :color ,bg-dim)
-                            :overline nil :underline nil)))
-    (dolist (face '(tab-line-tab-current))
-      (when (facep face)
-        (set-face-attribute face nil
-                            :background bg-main :foreground fg-main
-                            :weight 'medium :slant 'normal
-                            :box `(:line-width (1 . 6) :color ,bg-main)
-                            :overline nil :underline nil)))
-    (when (facep 'tab-line-tab-modified)
-      (set-face-attribute 'tab-line-tab-modified nil :slant 'normal))))
+        (set-face-attribute face nil :inherit 'unspecified :slant 'normal
+                            :box nil :overline nil :underline nil)))
+    (when (facep 'tab-line-highlight)
+      (set-face-attribute 'tab-line-highlight nil
+                          :background (if sombre "#2B3445" "#DCE4F7")
+                          :foreground fg-main :box nil))
+    ;; Notre fonction de couleur s'applique en dernier.
+    (setq tab-line-tab-face-functions
+          (append (delq 'metal-apparence--face-onglet
+                        (copy-sequence tab-line-tab-face-functions))
+                  '(metal-apparence--face-onglet)))
+    ;; Espace de 3 pixels entre les onglets (laisse voir la bande grise).
+    (setq tab-line-separator
+          (propertize " " 'display '(space :width (3))
+                      'face `(:background ,bg-dim)))
+    ;; Vider le cache des onglets de chaque fenêtre pour redessiner.
+    (dolist (f (frame-list))
+      (dolist (w (window-list f 'no-minibuf))
+        (set-window-parameter w 'tab-line-cache nil)))
+    (force-mode-line-update t)))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Barre de titre macOS
@@ -318,12 +376,15 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
 (add-hook 'after-make-frame-functions #'metal-apparence--titre-macos)
 
 (defvar tab-line-tab-close-map)
+(defvar tab-line-separator)
+(defvar tab-line-close-button)
+(defvar tab-line-tab-name-format-function)
 
 (with-eval-after-load 'tab-line
   ;; Bouton de fermeture en texte (×) : l'image XPM d'origine ne
   ;; s'affiche pas sous Windows et ne suit pas le thème.
   (setq tab-line-close-button
-        (propertize " ×"
+        (propertize " × "
                     'keymap tab-line-tab-close-map
                     'mouse-face 'tab-line-close-highlight
                     'help-echo "Fermer l'onglet"))
@@ -370,7 +431,7 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
          (nom (if (equal nom "Tableau-de-bord") "Tableau de bord" nom))
          (modifie (and (buffer-file-name buffer)
                        (buffer-modified-p buffer))))
-    (concat "   " nom (if modifie " •" "") "  ")))
+    (concat " " nom (if modifie " •" "") " ")))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Mode-line épurée

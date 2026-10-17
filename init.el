@@ -1202,8 +1202,8 @@ Hors minibuffer, demande le motif via read-string."
 ;; Onglets plats aux couleurs du thème (`metal-apparence').  Les vagues
 ;; powerline d'avant étaient des images calculées une seule fois : elles
 ;; ne suivaient pas le passage au thème sombre.
-(setq tab-line-tab-name-function #'metal-apparence--nom-onglet
-      tab-line-separator "")
+;; Le séparateur (filet vertical) est posé par `metal-apparence'.
+(setq tab-line-tab-name-function #'metal-apparence--nom-onglet)
 (setq tab-line-new-button-show nil)
 
 ;; --- Tab-line mur à mur : afficher un onglet PARTOUT, sans exception -------
@@ -1535,9 +1535,6 @@ Raccourci Treemacs : M (Shift+M)"
   (define-key dired-mode-map [mouse-2] #'dired-mouse-find-file)
   ;; Idem pour le double-clic gauche.
   (define-key dired-mode-map [double-mouse-1] #'dired-mouse-find-file))
-;; Habillage de Dired dans le style du tableau de bord (fil d'Ariane,
-;; pastilles de type, dates relatives, dossiers d'abord).
-(load (expand-file-name "metal-dired.el" user-emacs-directory))
 
 ;; *******************************************
 ;;  Wikitionnaire
