@@ -97,7 +97,7 @@ limite à « Bonjour »."
     (border-mode-line-inactive unspecified)
     (bg-mode-line-active bg-dim)
     (fg-mode-line-active fg-main)
-    (bg-mode-line-inactive bg-main)
+    (bg-mode-line-inactive bg-dim)
     (fg-mode-line-inactive fg-dim)
     (bg-tab-bar bg-dim)
     (bg-tab-current bg-main)
@@ -170,23 +170,28 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
          (border  (metal-apparence-couleur 'border  (if sombre "#646464" "#9f9f9f")))
          (fg-main (metal-apparence-couleur 'fg-main (if sombre "#ffffff" "#000000")))
          (fg-dim  (metal-apparence-couleur 'fg-dim  (if sombre "#989898" "#595959"))))
-    ;; Mode-line : bande plate, rembourrée verticalement.
-    (set-face-attribute 'mode-line nil
-                        :background bg-dim :foreground fg-main
-                        :box `(:line-width (8 . 5) :color ,bg-dim)
-                        :overline nil :underline nil)
+    ;; Mode-line : bande plate, rembourrée verticalement.  Celle de la
+    ;; fenêtre active est teintée à la couleur d'accent ; les autres sont
+    ;; grises (jamais blanches : elles doivent clore leur fenêtre).
+    (let ((actif (if sombre "#2B3445" "#DCE4F7")))
+      (set-face-attribute 'mode-line nil
+                          :background actif :foreground fg-main
+                          :box `(:line-width (8 . 5) :color ,actif)
+                          :overline nil :underline nil))
     (set-face-attribute 'mode-line-inactive nil
-                        :background bg-main :foreground fg-dim
-                        :box `(:line-width (8 . 5) :color ,bg-main)
+                        :background bg-dim :foreground fg-dim
+                        :box `(:line-width (8 . 5) :color ,bg-dim)
                         :overline nil :underline nil)
     ;; Onglets plats (si tab-line est déjà chargé ; sinon voir plus bas).
     (when (featurep 'tab-line)
       (metal-apparence--retoucher-onglets))
-    ;; Séparateurs de fenêtres : couleur du panneau, filet d'un pixel.
+    ;; Séparateurs de fenêtres : couleur du panneau, avec un filet d'un
+    ;; pixel du côté de la fenêtre de gauche (séparateur vertical) ou du
+    ;; haut (séparateur horizontal, juste sous la mode-line).
     (when (facep 'window-divider)
       (set-face-attribute 'window-divider nil :foreground bg-dim)
-      (set-face-attribute 'window-divider-first-pixel nil :foreground bg-dim)
-      (set-face-attribute 'window-divider-last-pixel nil :foreground border))
+      (set-face-attribute 'window-divider-first-pixel nil :foreground border)
+      (set-face-attribute 'window-divider-last-pixel nil :foreground bg-dim))
     (set-face-attribute 'vertical-border nil :foreground border)
     ;; Panneau latéral teinté (Treemacs remappe déjà `default' sur sa
     ;; propre face de fond : c'est elle qu'il faut colorer).
