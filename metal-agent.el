@@ -1821,9 +1821,13 @@ Contraintes obligatoires :
 - Explique le passage fourni ci-dessous ; concentre-toi sur lui.
 - NE recopie PAS le programme complet et NE liste PAS les autres
   définitions du fichier ; n'explore aucun autre fichier.
-- Tu PEUX en revanche inclure de courts extraits illustratifs (par
-  exemple la forme interne, une transformation, un exemple d'appel)
-  s'ils clarifient le passage.
+- Va à l'essentiel : au plus 8 à 10 lignes en tout.  Commence par une
+  phrase qui dit à quoi sert le passage.
+- Vulgarise : des mots simples, pas de jargon ; si un terme technique
+  est indispensable, explique-le en quelques mots.
+- Au plus un court exemple concret, s'il aide vraiment à comprendre.
+- Pas de titres, pas de tableau, pas de liste de cas particuliers ni de
+  remarques secondaires.
 
 Passage à expliquer :
 ```%s
@@ -1832,8 +1836,8 @@ Passage à expliquer :
       (metal-agent--context-header)
       (metal-agent--blindage-anti-agentique)
       (if texte-p
-          "Explique ou clarifie ce passage en français : reformule l'idée, précise ce qui est ambigu, sans le réécrire dans le document."
-        "Explique cette sélection en français, de façon technique et approfondie. Détaille la sémantique, le fonctionnement interne et les points subtils pertinents pour un lecteur qui connaît déjà le langage — ne te limite pas à une paraphrase de surface.")
+          "Explique ce passage en français, simplement : dis l'idée principale dans tes mots et précise seulement ce qui pourrait être mal compris, sans le réécrire dans le document."
+        "Explique cette sélection en français à quelqu'un qui débute dans ce langage : ce qu'elle fait et comment, dans les grandes lignes.  Ne détaille pas le fonctionnement interne ni les points subtils.")
       (metal-agent--bloc-instructions-libres)
       (metal-agent--code-block-language)
       code)
