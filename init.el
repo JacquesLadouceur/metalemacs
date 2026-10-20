@@ -976,6 +976,7 @@ L'argument FRAME est ignore (garde pour compatibilite)."
 ;;  TREEMACS [EXTERNE]
 ;; ===============================
 (require 'metal-explorateur)
+(require 'metal-dired)
 
 (require 'metal-nettoyer)
 
