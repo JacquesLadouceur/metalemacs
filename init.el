@@ -1779,6 +1779,8 @@ Raccourci Treemacs : M (Shift+M)"
 ;; Préparation d'une distribution MetalEmacs (déplacé dans metal-distribution.el)
 (require 'metal-distribution)
 
+(require 'metal-capture)
+
 
 (with-eval-after-load 'markdown-mode
   (define-key markdown-mode-map (kbd "<f6>") #'markdown-table-align))
