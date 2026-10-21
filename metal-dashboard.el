@@ -1433,15 +1433,30 @@ n'est jamais posée si le dossier contient déjà un .qmd."
         (insert ligne1 "\n" ligne2 "\n\n"))))
   (insert "\n"))
 
+(defun metal-dashboard--recents-par-date (fichiers)
+  "Trier FICHIERS du plus récemment modifié au plus ancien.
+C'est la date de modification que l'onglet affiche : l'ordre de la
+liste suit donc la colonne des dates.  Les fichiers absents sont omis."
+  (let ((dates (delq nil
+                     (mapcar (lambda (f)
+                               (let ((attrs (file-attributes f)))
+                                 (and attrs
+                                      (cons f (file-attribute-modification-time
+                                               attrs)))))
+                             fichiers))))
+    (mapcar #'car
+            (sort dates (lambda (a b) (time-less-p (cdr b) (cdr a)))))))
+
 (defun metal-dashboard-recents-tous ()
   "Afficher tous les fichiers récents dans un onglet Dired (metal-dired).
-Les fichiers gardent l'ordre de `recentf-list' : le plus récent en tête.
+Les fichiers sont triés du plus récemment modifié au plus ancien.
 Repli sur la sélection au minitampon si metal-dired n'est pas chargé."
   (interactive)
   (if (fboundp 'metal-dired-liste)
       (metal-dired-liste
        "Fichiers récents"
-       (seq-filter #'metal-dashboard--recentf-acceptable-p recentf-list))
+       (metal-dashboard--recents-par-date
+        (seq-filter #'metal-dashboard--recentf-acceptable-p recentf-list)))
     (call-interactively (if (fboundp 'recentf-open) #'recentf-open #'recentf-open-files))))
 
 (defun metal-dashboard--inserer-recents (marge largeur)

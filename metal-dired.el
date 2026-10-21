@@ -15,7 +15,6 @@
 ;;     taille lisible, police proportionnelle ;
 ;;   - « .. » devient « Dossier parent », « . » disparaît ;
 ;;   - marques visibles : ✓ sur fond bleu, D barré en rouge ;
-;;   - rappel des touches principales au bas de la liste.
 ;;
 ;; Touches ajoutées :
 ;;   (  affichage classique (permissions, dates exactes) — natif Dired ;
@@ -301,38 +300,7 @@ le caractère de marque sur place, sans relire le listage."
               (setq dossier-courant (expand-file-name (match-string 1)))))
           (forward-line 1))
         (setq metal-dired--nb-dossiers nb-dossiers
-              metal-dired--nb-fichiers nb-fichiers)
-        ;; Rappel des touches au bas de la liste.
-        (unless details
-          (metal-dired--ov (point-max) (point-max)
-                           'after-string (metal-dired--pied))))))))
-
-(defun metal-dired--touche (touche)
-  "Indication de raccourci TOUCHE."
-  (propertize (concat " " touche " ")
-              'face `(:family ,metal-dired--mono :height 0.8 :inherit shadow
-                      :box (:line-width 1 :color ,(metal-dired--teinte 'bordure)))))
-
-(defun metal-dired--pied ()
-  "Chaîne du rappel des touches."
-  (concat
-   "\n"
-   (mapconcat (lambda (k)
-                (concat (metal-dired--touche (car k)) " "
-                        (propertize (cdr k) 'face '(:inherit shadow :height 0.92))))
-              (if metal-dired--titre
-                  '(("RET" . "ouvrir") ("g" . "rafraîchir") ("(" . "détails"))
-                '(("RET" . "ouvrir") ("^" . "dossier parent") ("+" . "nouveau dossier")
-                  ("(" . "détails") ("." . "fichiers cachés")))
-              "    ")
-   "\n\n"
-   (mapconcat (lambda (k)
-                (concat (metal-dired--touche (car k)) " "
-                        (propertize (cdr k) 'face '(:inherit shadow :height 0.92))))
-              '(("m" . "marquer") ("u" . "démarquer") ("D" . "supprimer")
-                ("x" . "exécuter les suppressions") ("R" . "renommer") ("C" . "copier"))
-              "    ")
-   "\n"))
+              metal-dired--nb-fichiers nb-fichiers))))))
 
 ;;; ── Ligne d'en-tête : fil d'Ariane et comptes ──────────────────────
 

@@ -41,6 +41,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 
 ;; ============================================================================
 ;; Configuration
@@ -139,7 +140,9 @@ Retourne nil si le fichier .meta n'existe pas."
   "Supprimer le fichier .meta associé à CHEMIN-CORBEILLE, s'il existe."
   (let ((meta (metal-securite--chemin-meta chemin-corbeille)))
     (when (file-exists-p meta)
-      (delete-file meta t))))
+      ;; Effacement réel : sans quoi, avec `delete-by-moving-to-trash',
+      ;; les .meta s'accumulent dans la corbeille du système.
+      (delete-file meta))))
 
 ;; ============================================================================
 ;; Corbeille interne MetalEmacs
@@ -392,7 +395,7 @@ Retourne t si la restauration a réussi, nil sinon."
               (metal-securite--supprimer-meta source)
               (if est-dossier
                   (delete-directory source t)
-                (delete-file source t))
+                (delete-file source))
               (message "✅ Restauré : %s" (abbreviate-file-name destination))
               t)
           (error
@@ -410,7 +413,7 @@ Retourne t si la restauration a réussi, nil sinon."
     (metal-securite--supprimer-meta chemin)
     (if (file-directory-p chemin)
         (delete-directory chemin t)
-      (delete-file chemin t))))
+      (delete-file chemin))))
 
 ;; ============================================================================
 ;; Mode majeur pour le buffer corbeille
@@ -423,6 +426,7 @@ Retourne t si la restauration a réussi, nil sinon."
     (define-key map (kbd "D")   #'metal-corbeille-supprimer-element)
     (define-key map (kbd "V")   #'metal-corbeille-vider-tout)
     (define-key map (kbd "r")   #'metal-corbeille-rafraichir)
+    (define-key map (kbd "s")   #'metal-corbeille-changer-tri)
     (define-key map (kbd "q")   #'metal-corbeille-quitter)
     (define-key map (kbd "n")   #'metal-corbeille-ligne-suivante)
     (define-key map (kbd "p")   #'metal-corbeille-ligne-precedente)
@@ -436,10 +440,21 @@ Retourne t si la restauration a réussi, nil sinon."
 Raccourcis clavier :
 \\{metal-corbeille-mode-map}"
   :group 'metal-securite
-  (setq truncate-lines t)
   (setq buffer-read-only t)
+  (metal-corbeille--sans-enroulement)
+  (metal-corbeille--activer-presentation)
   (when (fboundp 'hl-line-mode)
     (hl-line-mode 1)))
+
+(defun metal-corbeille--sans-enroulement ()
+  "Couper l'enroulement des lignes dans le tampon de la corbeille.
+Le `global-visual-line-mode' de MetalEmacs l'emporte sinon sur
+`truncate-lines' et casse l'alignement des colonnes."
+  (setq-local truncate-lines t)
+  (setq-local truncate-partial-width-windows nil)
+  (setq-local word-wrap nil)
+  (when (bound-and-true-p visual-line-mode)
+    (visual-line-mode -1)))
 
 ;; ============================================================================
 ;; Propriétés textuelles et navigation
@@ -495,77 +510,410 @@ Scanne les premières positions de la ligne pour trouver la propriété."
 ;; Affichage du buffer corbeille
 ;; ============================================================================
 
-(defun metal-corbeille--inserer-contenu ()
-  "Insérer le contenu de la corbeille dans le buffer courant."
-  (let ((fichiers (metal-securite--lister-fichiers-corbeille))
-        (inhibit-read-only t))
+;; ---------------------------------------------------------------------------
+;; Présentation en liste, à la manière du Finder
+;; ---------------------------------------------------------------------------
+
+(defconst metal-corbeille--mois-abreges
+  ["janv." "févr." "mars" "avr." "mai" "juin" "juil."
+   "août" "sept." "oct." "nov." "déc."]
+  "Mois abrégés, indépendants de la locale du système.")
+
+(defconst metal-corbeille--types
+  ;; extensions                         icône   libellé du type
+  '((("png")                             "🖼️" "Image PNG")
+    (("jpg" "jpeg")                      "🖼️" "Image JPEG")
+    (("gif" "webp" "heic")               "🖼️" "Image")
+    (("svg")                             "🖼️" "Image SVG")
+    (("pdf")                             "📕" "Document PDF")
+    (("org")                             "📝" "Document Org")
+    (("qmd")                             "📝" "Document Quarto")
+    (("md")                              "📝" "Document Markdown")
+    (("txt")                             "📝" "Texte")
+    (("tex" "sty" "cls")                 "📜" "Document LaTeX")
+    (("bib")                             "📜" "Bibliographie")
+    (("pl" "pro")                        "🦉" "Programme Prolog")
+    (("py")                              "🐍" "Script Python")
+    (("ipynb")                           "🐍" "Carnet Jupyter")
+    (("pptx" "ppt" "key")                "📊" "Présentation")
+    (("xlsx" "xls")                      "📈" "Classeur")
+    (("csv" "tsv")                       "📈" "Données CSV")
+    (("docx" "doc")                      "📘" "Document Word")
+    (("el")                              "⚙️" "Lisp Emacs")
+    (("zip" "gz" "tar" "7z")             "📦" "Archive"))
+  "Icône et libellé de type pour chaque famille d'extensions.")
+
+(defvar-local metal-corbeille--entrees-cache nil
+  "Entrées de la corbeille lues au dernier rafraîchissement.")
+
+(defvar-local metal-corbeille--tri '(:date . t)
+  "Clé de tri (:nom, :date, :taille, :type ou :origine) et ordre décroissant.")
+
+(defvar-local metal-corbeille--largeur nil
+  "Largeur de fenêtre utilisée au dernier rendu.")
+
+(defun metal-corbeille--sombre-p ()
+  "Non nil si le thème courant est sombre."
+  (if (fboundp 'metal-apparence-sombre-p)
+      (metal-apparence-sombre-p)
+    (eq (frame-parameter nil 'background-mode) 'dark)))
+
+(defun metal-corbeille--couleur (role)
+  "Couleur de ROLE, accordée au thème clair ou sombre du tableau de bord."
+  (let ((s (metal-corbeille--sombre-p)))
+    (pcase role
+      ('accent  (if s "#8AA8FF" "#2C55C9"))
+      ('danger  (if s "#F07F7F" "#A42525"))
+      ('bande   (if s "#23262C" "#F4F5F7"))
+      ('bouton  (if s "#2B303A" "#ECEDF0"))
+      ('filet   (if s "#3A3F48" "#D5D9DF")))))
+
+(defun metal-corbeille--mono ()
+  "Famille de la police à chasse fixe par défaut (pour les tailles)."
+  (face-attribute 'default :family nil t))
+
+(defun metal-corbeille--type (nom est-dossier)
+  "Retourner (ICÔNE . LIBELLÉ) pour l'élément NOM."
+  (if est-dossier
+      (cons "📁" "Dossier")
+    (let* ((ext (downcase (or (file-name-extension nom) "")))
+           (e (cl-find-if (lambda (e) (member ext (car e)))
+                          metal-corbeille--types)))
+      (if e
+          (cons (nth 1 e) (nth 2 e))
+        (cons "📄" (if (string-empty-p ext)
+                      "Document"
+                    (format "Fichier %s" (upcase ext))))))))
+
+(defun metal-corbeille--heure-suppression (nom-brut)
+  "Moment de la suppression, lu dans le préfixe horodaté de NOM-BRUT."
+  (when (string-match (concat "^\\([0-9]\\{4\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)"
+                              "-\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)\\([0-9]\\{2\\}\\)_")
+                      nom-brut)
+    (let ((n (lambda (i) (string-to-number (match-string i nom-brut)))))
+      (encode-time (list (funcall n 6) (funcall n 5) (funcall n 4)
+                         (funcall n 3) (funcall n 2) (funcall n 1)
+                         nil -1 nil)))))
+
+(defun metal-corbeille--date (temps)
+  "TEMPS à la manière du Finder : « aujourd'hui à 20:26 », « 16 oct. 2026 à 16:41 »."
+  (if (null temps)
+      "—"
+    (let ((ecart (- (time-to-days (current-time)) (time-to-days temps)))
+          (heure (format-time-string "%H:%M" temps))
+          (d (decode-time temps)))
+      (pcase ecart
+        (0 (concat "aujourd’hui à " heure))
+        (1 (concat "hier à " heure))
+        (_ (format "%d %s %d à %s"
+                   (decoded-time-day d)
+                   (aref metal-corbeille--mois-abreges (1- (decoded-time-month d)))
+                   (decoded-time-year d)
+                   heure))))))
+
+(defun metal-corbeille--taille (octets est-dossier)
+  "Taille lisible, à la manière du Finder (« -- » pour un dossier vide)."
+  (cond
+   ((and est-dossier (< octets 1)) "--")
+   ((< octets 1000) (format "%d octet%s" octets (if (> octets 1) "s" "")))
+   ((< octets 1000000) (format "%d ko" (round octets 1000)))
+   ((< octets 1000000000) (format "%.1f Mo" (/ octets 1e6)))
+   (t (format "%.1f Go" (/ octets 1e9)))))
+
+(defun metal-corbeille--lire-entrees ()
+  "Lire la corbeille et décrire chaque élément sous forme de pliste."
+  (mapcar
+   (lambda (f)
+     (let* ((est-dossier (file-directory-p f))
+            (nom-brut (file-name-nondirectory (directory-file-name f)))
+            (nom (metal-securite--extraire-nom-original nom-brut))
+            (origine (metal-securite--lire-meta f))
+            (type (metal-corbeille--type nom est-dossier)))
+       (list :chemin f
+             :dossier est-dossier
+             :nom nom
+             :temps (or (metal-corbeille--heure-suppression nom-brut)
+                        (file-attribute-modification-time (file-attributes f)))
+             :taille (round
+                      (if est-dossier
+                          (* (metal-securite--taille-dossier-mo f) 1048576.0)
+                        (or (file-attribute-size (file-attributes f)) 0)))
+             :icone (car type)
+             :type (cdr type)
+             :origine (and origine
+                           (abbreviate-file-name
+                            (directory-file-name (file-name-directory origine)))))))
+   (metal-securite--lister-fichiers-corbeille)))
+
+(defun metal-corbeille--trier (entrees)
+  "Trier ENTREES selon `metal-corbeille--tri'."
+  (let* ((cle (car metal-corbeille--tri))
+         (desc (cdr metal-corbeille--tri))
+         (avant
+          (pcase cle
+            (:date (lambda (a b) (time-less-p (plist-get a :temps)
+                                              (plist-get b :temps))))
+            (:taille (lambda (a b) (< (plist-get a :taille)
+                                      (plist-get b :taille))))
+            (_ (lambda (a b) (string-collate-lessp
+                              (or (plist-get a cle) "") (or (plist-get b cle) "")
+                              nil t))))))
+    (sort (copy-sequence entrees)
+          (if desc (lambda (a b) (funcall avant b a)) avant))))
+
+(defun metal-corbeille--tronquer-debut (texte largeur)
+  "Raccourcir le chemin TEXTE par le début pour qu'il tienne en LARGEUR colonnes.
+On retire des dossiers entiers à gauche (« …/Cours 08 ») : c'est la fin
+du chemin, le dossier lui-même, qui est utile.  Si le dernier dossier
+seul est trop long, il est coupé par la fin."
+  (if (<= (string-width texte) largeur)
+      texte
+    (let* ((parties (reverse (split-string texte "/" t)))
+           (garde (list (car parties))))
+      ;; Ajouter des dossiers depuis la fin, tant qu'ils tiennent
+      (cl-loop for p in (cdr parties)
+               while (<= (+ (string-width (string-join (cons p garde) "/")) 2)
+                         largeur)
+               do (push p garde))
+      (let ((res (concat "…/" (string-join garde "/"))))
+        (if (<= (string-width res) largeur)
+            res
+          (truncate-string-to-width res largeur nil nil "…"))))))
+
+(defun metal-corbeille--a (colonne)
+  "Espace qui aligne le texte suivant sur COLONNE (spécification :align-to)."
+  (propertize " " 'display `(space :align-to ,colonne)))
+
+(defun metal-corbeille--colonnes ()
+  "Positions des colonnes : nom, origine, date, fin de la taille, type."
+  (let* ((l (max 60 (window-width)))
+         (droite 58)                     ; date + taille + type, ancrés à droite
+         (libre (- l droite 6))
+         (c-origine (+ 6 (max 18 (round (* libre 0.55))))))
+    (list :nom 6
+          :larg-nom (- c-origine 6 2)
+          :origine c-origine
+          :larg-origine (max 8 (- l droite c-origine 2))
+          :date '(- right 56)
+          :taille '(- right 24)
+          :larg-taille 10
+          :type '(- right 21))))
+
+(defun metal-corbeille-trier-par (cle)
+  "Trier la corbeille selon CLE ; un second appel inverse l'ordre."
+  (setq metal-corbeille--tri
+        (if (eq (car metal-corbeille--tri) cle)
+            (cons cle (not (cdr metal-corbeille--tri)))
+          (cons cle (memq cle '(:date :taille)))))
+  (metal-corbeille--redessiner))
+
+(defun metal-corbeille-changer-tri ()
+  "Passer à la clé de tri suivante (nom, date, taille, type)."
+  (interactive)
+  (let* ((cles '(:nom :date :taille :type :origine))
+         (suiv (or (cadr (memq (car metal-corbeille--tri) cles)) (car cles))))
+    (metal-corbeille-trier-par suiv)
+    (message "Tri par %s" (substring (symbol-name suiv) 1))))
+
+(defun metal-corbeille--titre-colonne (libelle cle)
+  "Titre de colonne cliquable LIBELLE, qui trie selon CLE."
+  (let* ((actif (eq (car metal-corbeille--tri) cle))
+         (map (make-sparse-keymap)))
+    (define-key map [header-line mouse-1]
+                (lambda () (interactive) (metal-corbeille-trier-par cle)))
+    (propertize (concat libelle
+                        (if actif (if (cdr metal-corbeille--tri) "  ▾" "  ▴") ""))
+                'face (if actif '(:weight bold) 'shadow)
+                'mouse-face 'highlight
+                'help-echo (format "Trier par %s" (downcase libelle))
+                'local-map map)))
+
+(defun metal-corbeille--en-tete ()
+  "Ligne d'en-tête : titres des colonnes, cliquables pour trier."
+  (let ((c (metal-corbeille--colonnes)))
+    (concat
+     (metal-corbeille--a (plist-get c :nom))
+     (metal-corbeille--titre-colonne "Nom" :nom)
+     (metal-corbeille--a (plist-get c :origine))
+     (metal-corbeille--titre-colonne "Emplacement d’origine" :origine)
+     (metal-corbeille--a (plist-get c :date))
+     (metal-corbeille--titre-colonne "Date de suppression" :date)
+     (metal-corbeille--a '(- right 30))
+     (metal-corbeille--titre-colonne "Taille" :taille)
+     (metal-corbeille--a (plist-get c :type))
+     (metal-corbeille--titre-colonne "Type" :type))))
+
+(defun metal-corbeille--bouton (libelle action aide &optional danger)
+  "Bouton cliquable LIBELLE qui appelle ACTION."
+  (let ((map (make-sparse-keymap))
+        (fond (metal-corbeille--couleur 'bouton)))
+    (define-key map [mouse-1] action)
+    (define-key map (kbd "RET") action)
+    (propertize (concat " " libelle " ")
+                'face `(:background ,fond
+                        :foreground ,(if danger (metal-corbeille--couleur 'danger)
+                                       (face-foreground 'default nil t))
+                        :height 0.9
+                        :box (:line-width (8 . 3) :color ,fond))
+                'mouse-face 'highlight
+                'help-echo aide
+                'keymap map)))
+
+(defun metal-corbeille--touche (touche libelle)
+  "Rappel de raccourci : TOUCHE en encadré, puis LIBELLE."
+  (concat
+   (propertize (concat " " touche " ")
+               'face `(:family ,(metal-corbeille--mono) :height 0.8 :inherit shadow
+                       :box (:line-width 1 :color ,(metal-corbeille--couleur 'filet))))
+   " "
+   (propertize libelle 'face '(:inherit shadow :height 0.92))))
+
+(defun metal-corbeille--inserer-contenu (&optional relire)
+  "Dessiner la corbeille dans le tampon courant.
+Avec RELIRE non nil (ou au premier rendu), relire le dossier de la corbeille."
+  (metal-corbeille--sans-enroulement)
+  (when (or relire (null metal-corbeille--entrees-cache))
+    (setq metal-corbeille--entrees-cache (metal-corbeille--lire-entrees)))
+  (setq metal-corbeille--largeur (window-width))
+  (let* ((inhibit-read-only t)
+         (entrees (metal-corbeille--trier metal-corbeille--entrees-cache))
+         (total (apply #'+ 0 (mapcar (lambda (e) (plist-get e :taille)) entrees)))
+         (c (metal-corbeille--colonnes))
+         (mono (metal-corbeille--mono))
+         (impaire nil))
     (erase-buffer)
-    ;; En-tête
-    (insert (propertize "🗑️ Corbeille MetalEmacs\n"
-                        'face '(:height 1.3 :weight bold)))
-    (insert (propertize (format "   Dossier : %s\n"
-                                metal-securite-dossier-corbeille)
-                        'face 'font-lock-comment-face))
-    (insert (propertize (format "   Éléments : %d\n"
-                                (length fichiers))
-                        'face 'font-lock-comment-face))
-    ;; Rappel des raccourcis
-    (insert "\n")
-    (insert (propertize "   Raccourcis : " 'face '(:weight bold)))
-    (insert (propertize "R" 'face '(:foreground "#4488cc" :weight bold)))
-    (insert (propertize ":restaurer  " 'face 'font-lock-comment-face))
-    (insert (propertize "D" 'face '(:foreground "#cc4444" :weight bold)))
-    (insert (propertize ":supprimer  " 'face 'font-lock-comment-face))
-    (insert (propertize "V" 'face '(:foreground "#cc4444" :weight bold)))
-    (insert (propertize ":vider tout  " 'face 'font-lock-comment-face))
-    (insert (propertize "r" 'face 'font-lock-comment-face))
-    (insert (propertize ":rafraîchir  " 'face 'font-lock-comment-face))
-    (insert (propertize "?" 'face 'font-lock-comment-face))
-    (insert (propertize ":aide" 'face 'font-lock-comment-face))
-    (insert "\n\n")
 
-    (if (not fichiers)
-        ;; Corbeille vide
-        (insert (propertize "\n   La corbeille est vide. 🎉\n"
-                            'face 'font-lock-comment-face))
-      ;; En-tête du tableau
-      (insert (propertize (format "     %-20s  %-10s  %-30s  %s\n"
-                                  "Date" "Taille" "Élément" "Origine")
-                          'face '(:weight bold :underline t)))
-      ;; Lignes de données
-      (dolist (f fichiers)
-        (let* ((attrs (file-attributes f))
-               (est-dossier (file-directory-p f))
-               (nom-brut (file-name-nondirectory (directory-file-name f)))
-               (date (metal-securite--extraire-date-lisible nom-brut))
-               (taille (if est-dossier
-                           (* (metal-securite--taille-dossier-mo f) 1048576.0)
-                         (or (file-attribute-size attrs) 0)))
-               (taille-str (metal-securite--formater-taille taille))
-               (nom-original (metal-securite--extraire-nom-original nom-brut))
-               (icone (if est-dossier "📁" "  "))
-               (chemin-origine (metal-securite--lire-meta f))
-               (origine-str (if chemin-origine
-                                (metal-securite--raccourcir-chemin
-                                 (file-name-directory chemin-origine))
-                              ""))
-               (ligne (format "     %-20s  %-10s  %s %-28s%s\n"
-                              date taille-str icone nom-original origine-str))
-               (debut (point)))
-          (insert ligne)
-          (put-text-property debut (point) 'metal-corbeille-chemin f)
-          (put-text-property debut (point) 'metal-corbeille-nom nom-original)
-          ;; Colorer le chemin d'origine en gris
-          (when (and chemin-origine (> (length origine-str) 0))
-            (save-excursion
-              (goto-char debut)
-              (when (search-forward origine-str (line-end-position) t)
-                (put-text-property (match-beginning 0) (match-end 0)
-                                   'face 'font-lock-comment-face)))))))
+    ;; ── Barre de titre ─────────────────────────────────────────────
+    (insert "\n   "
+            (propertize "Corbeille" 'face '(:height 1.25 :weight bold))
+            (propertize
+             (if entrees
+                 (format "    %d élément%s  ·  %s"
+                         (length entrees) (if (> (length entrees) 1) "s" "")
+                         (metal-corbeille--taille total nil))
+               "    vide")
+             'face '(:inherit shadow :height 0.92))
+            (metal-corbeille--a '(- right 12))
+            (if entrees
+                (metal-corbeille--bouton "Vider" #'metal-corbeille-vider-tout
+                                         "Supprimer définitivement tout le contenu"
+                                         t)
+              "")
+            "\n\n")
 
-    ;; Pied de page
-    (insert (propertize "\n─────────────────────────────────────────────────────────────────────────────\n"
-                        'face 'font-lock-comment-face))))
+    ;; ── Rappel des touches, sous le titre ─────────────────────────
+    (when entrees
+      (insert "   "
+              (mapconcat (lambda (k) (metal-corbeille--touche (car k) (cdr k)))
+                         '(("R" . "restaurer") ("RET" . "aperçu")
+                           ("D" . "supprimer") ("V" . "vider")
+                           ("s" . "trier") ("r" . "rafraîchir") ("?" . "aide"))
+                         "    ")
+              "\n\n"))
+
+    (if (null entrees)
+        (insert (propertize "\n\n      La corbeille est vide.\n"
+                            'face 'shadow))
+      ;; ── Lignes ───────────────────────────────────────────────────
+      (dolist (e entrees)
+        (let* ((debut (point))
+               (nom (plist-get e :nom))
+               (origine (plist-get e :origine))
+               (taille (metal-corbeille--taille (plist-get e :taille)
+                                                (plist-get e :dossier))))
+          (insert
+           (metal-corbeille--a 2)
+           (if (fboundp 'metal-icone)
+               (metal-icone (plist-get e :icone))
+             (plist-get e :icone))
+           (metal-corbeille--a (plist-get c :nom))
+           (propertize (truncate-string-to-width nom (plist-get c :larg-nom)
+                                                 nil nil "…")
+                       'face (and (plist-get e :dossier) '(:weight semi-bold)))
+           (metal-corbeille--a (plist-get c :origine))
+           (propertize (metal-corbeille--tronquer-debut (or origine "—")
+                                                        (plist-get c :larg-origine))
+                       'face 'shadow)
+           (metal-corbeille--a (plist-get c :date))
+           (propertize (metal-corbeille--date (plist-get e :temps)) 'face 'shadow)
+           ;; Taille alignée à droite, en chasse fixe
+           (let ((tx (propertize taille 'face `(:inherit shadow :family ,mono
+                                                         :height 0.85))))
+             (concat (metal-corbeille--a
+                      (if (and (fboundp 'string-pixel-width) (display-graphic-p))
+                          `(- right 24 (,(string-pixel-width tx)))
+                        `(- right ,(+ 24 (string-width taille)))))
+                     tx))
+           (metal-corbeille--a (plist-get c :type))
+           (propertize (plist-get e :type) 'face 'shadow)
+           "\n")
+          (add-text-properties
+           debut (point)
+           (list 'metal-corbeille-chemin (plist-get e :chemin)
+                 'metal-corbeille-nom nom
+                 'help-echo (if origine
+                                (format "%s\nOrigine : %s" nom origine)
+                              nom)))
+          ;; Bandes alternées, comme dans le Finder
+          (when impaire
+            (add-face-text-property
+             debut (point)
+             `(:background ,(metal-corbeille--couleur 'bande) :extend t)
+             t))
+          (setq impaire (not impaire))))
+
+      (insert "\n"))))
+
+(defun metal-corbeille--redessiner ()
+  "Redessiner sans relire le disque, en gardant l'élément courant."
+  (let ((chemin (metal-corbeille--chemin-a-la-ligne)))
+    (metal-corbeille--inserer-contenu)
+    (metal-corbeille--aller-a chemin)))
+
+(defun metal-corbeille--aller-a (chemin)
+  "Placer le curseur sur la ligne de CHEMIN, ou sur la première entrée."
+  (goto-char (point-min))
+  (let ((trouve nil))
+    (when chemin
+      (while (and (not trouve) (not (eobp)))
+        (if (equal (metal-corbeille--chemin-a-la-ligne) chemin)
+            (setq trouve t)
+          (forward-line 1))))
+    (unless trouve
+      (metal-corbeille--aller-premiere-entree))))
+
+(defun metal-corbeille--taille-fenetre (fenetre)
+  "Redessiner si la largeur de FENETRE a changé."
+  (let ((buf (window-buffer fenetre)))
+    (with-current-buffer buf
+      (when (and (derived-mode-p 'metal-corbeille-mode)
+                 (not (eql (window-width fenetre) metal-corbeille--largeur)))
+        (with-selected-window fenetre
+          (metal-corbeille--redessiner))))))
+
+(defun metal-corbeille--activer-presentation ()
+  "Police, interligne et ligne d'en-tête de la corbeille."
+  (setq-local line-spacing (if (boundp 'metal-dashboard-interligne)
+                               metal-dashboard-interligne
+                             0.3))
+  (setq-local buffer-face-mode-face 'variable-pitch)
+  (buffer-face-mode 1)
+  (setq-local header-line-format '(:eval (metal-corbeille--en-tete)))
+  (face-remap-add-relative 'header-line
+                           `(:inherit variable-pitch :weight normal
+                             :background ,(face-background 'default nil t)
+                             :box nil
+                             :underline (:color ,(metal-corbeille--couleur 'filet)
+                                         :position t)))
+  (add-hook 'window-size-change-functions #'metal-corbeille--taille-fenetre nil t))
+
+;; Thème choisi au tableau de bord : redessiner la corbeille si elle est ouverte.
+(add-hook 'metal-apparence-apres-changement-hook
+          (lambda ()
+            (let ((b (get-buffer metal-securite-nom-buffer)))
+              (when (buffer-live-p b)
+                (with-current-buffer b
+                  (ignore-errors (metal-corbeille--redessiner)))))))
 
 (defun metal-corbeille ()
   "Afficher le contenu de la corbeille interne MetalEmacs dans un buffer interactif."
@@ -573,28 +921,32 @@ Scanne les premières positions de la ligne pour trouver la propriété."
   (let ((buf (get-buffer-create metal-securite-nom-buffer)))
     (with-current-buffer buf
       (metal-corbeille-mode)
-      (metal-corbeille--inserer-contenu)
-      (metal-corbeille--aller-premiere-entree)
       (when (fboundp 'tab-line-mode)
         (setq-local tab-line-exclude nil)
         (tab-line-mode 1)))
-    ;; Ouvrir dans la fenêtre principale (pas Treemacs)
+    ;; Ouvrir dans la fenêtre principale (pas Treemacs), puis dessiner :
+    ;; les colonnes dépendent de la largeur de cette fenêtre.
     (let ((fenetre (or (get-mru-window nil nil t)
                        (selected-window))))
       (select-window fenetre)
-      (switch-to-buffer buf))))
+      (switch-to-buffer buf)
+      (metal-corbeille--inserer-contenu t)
+      (metal-corbeille--aller-premiere-entree))))
 
-(defun metal-corbeille-rafraichir ()
-  "Rafraîchir le buffer de la corbeille."
+(defun metal-corbeille-rafraichir (&optional silencieux)
+  "Rafraîchir le buffer de la corbeille.
+Avec SILENCIEUX non nil, ne rien afficher dans la zone d'écho (pour
+laisser visible le message de l'action qui vient d'avoir lieu)."
   (interactive)
   (when (string= (buffer-name) metal-securite-nom-buffer)
     (let ((ligne (line-number-at-pos)))
-      (metal-corbeille--inserer-contenu)
+      (metal-corbeille--inserer-contenu t)
       (goto-char (point-min))
       (forward-line (1- ligne))
       (unless (metal-corbeille--chemin-a-la-ligne)
         (metal-corbeille--aller-premiere-entree))
-      (message "Corbeille rafraîchie."))))
+      (unless silencieux
+        (message "Corbeille rafraîchie.")))))
 
 (defun metal-corbeille-quitter ()
   "Fermer le buffer de la corbeille."
@@ -612,7 +964,7 @@ Scanne les premières positions de la ligne pour trouver la propriété."
     (if (not chemin)
         (message "Placez le curseur sur un élément de la corbeille.")
       (when (metal-securite--restaurer-depuis-corbeille chemin)
-        (metal-corbeille-rafraichir)))))
+        (metal-corbeille-rafraichir t)))))
 
 (defun metal-corbeille-previsualiser ()
   "Prévisualiser le fichier sous le curseur (lecture seule).
@@ -635,10 +987,13 @@ Pour un dossier, ouvre dired."
     (if (not chemin)
         (message "Placez le curseur sur un élément de la corbeille.")
       (let ((nom-original (metal-corbeille--nom-a-la-ligne)))
-        (when (y-or-n-p (format "Supprimer définitivement « %s » ? " nom-original))
+        (if (not (y-or-n-p (format "Supprimer définitivement « %s » ? "
+                                   nom-original)))
+            ;; Effacer la question restée dans la zone d'écho
+            (message "Suppression annulée.")
           (metal-securite--supprimer-element-corbeille chemin)
-          (message "🗑️ Supprimé définitivement : %s" nom-original)
-          (metal-corbeille-rafraichir))))))
+          (metal-corbeille-rafraichir t)
+          (message "🗑️ Supprimé définitivement : %s" nom-original))))))
 
 (defun metal-corbeille-vider-tout ()
   "Vider complètement la corbeille depuis le buffer interactif."
@@ -646,12 +1001,14 @@ Pour un dossier, ouvre dired."
   (let ((fichiers (metal-securite--lister-fichiers-corbeille)))
     (if (not fichiers)
         (message "🗑️ La corbeille est déjà vide.")
-      (when (y-or-n-p (format "Supprimer définitivement les %d éléments de la corbeille ? "
-                               (length fichiers)))
+      (if (not (y-or-n-p (format "Supprimer définitivement les %d éléments de la corbeille ? "
+                                 (length fichiers))))
+          ;; Effacer la question restée dans la zone d'écho
+          (message "Corbeille conservée.")
         (dolist (f fichiers)
           (metal-securite--supprimer-element-corbeille f))
-        (message "🗑️ Corbeille vidée : %d éléments supprimés" (length fichiers))
-        (metal-corbeille-rafraichir)))))
+        (metal-corbeille-rafraichir t)
+        (message "🗑️ Corbeille vidée : %d éléments supprimés" (length fichiers))))))
 
 ;; ============================================================================
 ;; Aide
@@ -666,6 +1023,7 @@ Pour un dossier, ouvre dired."
             "  D     Supprimer définitivement\n"
             "  V     Vider toute la corbeille\n"
             "  r     Rafraîchir\n"
+            "  s     Changer le tri (ou cliquer un titre de colonne)\n"
             "  RET   Prévisualiser le fichier\n"
             "  n/p   Naviguer (bas/haut)\n"
             "  q     Fermer")))
@@ -738,8 +1096,9 @@ Par défaut, utilise `metal-securite-jours-retention' (30 jours)."
   (let ((fichiers (metal-securite--lister-fichiers-corbeille)))
     (if (not fichiers)
         (message "🗑️ La corbeille MetalEmacs est déjà vide.")
-      (when (y-or-n-p (format "Supprimer définitivement %d élément(s) de la corbeille ? "
-                               (length fichiers)))
+      (if (not (y-or-n-p (format "Supprimer définitivement %d élément(s) de la corbeille ? "
+                                 (length fichiers))))
+          (message "Corbeille conservée.")
         (dolist (f fichiers)
           (metal-securite--supprimer-element-corbeille f))
         (message "🗑️ Corbeille vidée : %d élément(s) supprimés"
