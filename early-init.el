@@ -223,6 +223,12 @@ Sinon, prépare des instructions pour l'utilisateur."
         (insert "╚══════════════════════════════════════════════════════════════════╝\n\n")
         (insert (format "Votre dossier HOME contient des caractères spéciaux :\n  %s\n\n" original))
         (insert "Cela peut causer des problèmes avec conda, git et d'autres outils.\n\n")
+        (insert "Correction automatique : ")
+        (insert-text-button "[Corriger maintenant]"
+                            'action (lambda (_) (metal-corriger-home))
+                            'follow-link t
+                            'help-echo "Crée le lien ASCII (une demande d'autorisation Windows s'affiche), puis fixe HOME")
+        (insert "\n(ou M-x metal-corriger-home ; sinon, suivre les étapes ci-dessous)\n\n")
         (insert "══════════════════════════════════════════════════════════════════\n")
         (insert "ÉTAPE 1 : Créer un lien symbolique (une seule fois)\n")
         (insert "══════════════════════════════════════════════════════════════════\n\n")
@@ -252,6 +258,85 @@ Sinon, prépare des instructions pour l'utilisateur."
                      (selected-window))))
         (select-window win)
         (switch-to-buffer buf)))))
+
+;; ----------------------------
+;; Correction automatique du HOME
+;; ----------------------------
+
+(defun metal-early--normaliser-chemin (chemin)
+  "Retourner CHEMIN avec des barres obliques et sans barre finale."
+  (directory-file-name (replace-regexp-in-string "\\\\" "/" chemin t t)))
+
+(defun metal-early--powershell-eleve (commande)
+  "Lancer COMMANDE (ligne cmd.exe) dans un cmd élevé et attendre sa fin.
+Le script PowerShell est transmis en -EncodedCommand (UTF-16LE en
+base 64) : les accents des chemins traversent ainsi intacts, quelle que
+soit la page de codes de la console.  Retourne le code de sortie de
+PowerShell (non nul si l'utilisateur refuse l'élévation)."
+  (let* ((script (format "Start-Process -FilePath cmd.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '/c %s'"
+                         (replace-regexp-in-string "'" "''" commande t t)))
+         (encode (base64-encode-string
+                  (encode-coding-string script 'utf-16le) t)))
+    (call-process "powershell.exe" nil nil nil
+                  "-NoProfile" "-ExecutionPolicy" "Bypass"
+                  "-EncodedCommand" encode)))
+
+(defun metal-corriger-home ()
+  "Corriger un dossier personnel Windows contenant espaces ou accents.
+Automatise les étapes du tampon *MetalEmacs - Configuration HOME* :
+
+  1. Crée une jonction ASCII (ex. C:/Users/claudie_vezina) pointant
+     vers le vrai profil.  Écrire dans C:/Users exige l'élévation :
+     Windows affiche une demande d'autorisation.
+  2. Fixe HOME de façon permanente sur ce chemin (setx, sans droits
+     d'administrateur).
+  3. Réécrit `metal-conda-environnement-defaut' s'il désigne encore
+     l'ancien chemin, pour que l'activation Conda en profite aussi.
+
+Un redémarrage d'Emacs est nécessaire : `metal-early--fix-problematic-home'
+basculera alors HOME et USERPROFILE sur la jonction."
+  (interactive)
+  (unless (eq system-type 'windows-nt)
+    (user-error "Cette correction ne concerne que Windows"))
+  (let* ((original (metal-early--normaliser-chemin
+                    (or metal-early--home-original
+                        (getenv "USERPROFILE") (getenv "HOME"))))
+         (sur (metal-early--normaliser-chemin
+               (format "C:/Users/%s" (metal-early--sanitize-username-ascii
+                                      (or (getenv "USERNAME") "user")))))
+         (sur-win (replace-regexp-in-string "/" "\\\\" sur t t))
+         (original-win (replace-regexp-in-string "/" "\\\\" original t t)))
+    (cond
+     ((not (metal-early--path-has-problematic-chars-p original))
+      (message "✓ Le dossier personnel (%s) ne contient ni espace ni accent : rien à corriger" original))
+     ((and metal-early--home-adjusted-p
+           (equal (metal-early--normaliser-chemin (getenv "HOME")) sur))
+      (message "✓ Correction déjà en place : HOME = %s" sur))
+     (t
+      ;; 1. Jonction (pas de lien symbolique : une jonction de dossier ne
+      ;;    demande pas le privilège SeCreateSymbolicLink).
+      (unless (file-directory-p sur)
+        (unless (yes-or-no-p
+                 (format "Créer %s → %s ? Windows va demander une autorisation. " sur original))
+          (user-error "Correction annulée"))
+        (metal-early--powershell-eleve
+         (format "mklink /J \"%s\" \"%s\"" sur-win original-win)))
+      ;; Vérification réelle : AppData existe dans tout profil Windows.
+      (unless (file-directory-p (expand-file-name "AppData" sur))
+        (user-error "La jonction %s n'a pas pu être créée (autorisation refusée ?)" sur))
+      ;; 2. HOME permanent (variable utilisateur, chemin ASCII).
+      (call-process "setx" nil nil nil "HOME" sur-win)
+      ;; 3. Environnement Conda par défaut enregistré avec l'ancien chemin.
+      (when (and (boundp 'metal-conda-environnement-defaut)
+                 (stringp metal-conda-environnement-defaut))
+        (let ((env (metal-early--normaliser-chemin metal-conda-environnement-defaut)))
+          (when (string-prefix-p (downcase original) (downcase env))
+            (customize-save-variable 'metal-conda-environnement-defaut
+                                     (concat sur (substring env (length original)))))))
+      (if (and (fboundp 'restart-emacs)
+               (y-or-n-p (format "✓ HOME = %s. Redémarrer MetalEmacs maintenant ? " sur)))
+          (restart-emacs)
+        (message "✓ HOME = %s — redémarrez MetalEmacs pour appliquer la correction" sur))))))
 
 (add-hook 'emacs-startup-hook #'metal-early--show-symlink-instructions 99)
 

@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Figure - Image avec légende et référence
+# key: fig
+# --
+![${1:Légende.}](images/${2:fichier.png}){#fig-${2:$(replace-regexp-in-string "[^[:alnum:]]+" "-" (downcase (file-name-base yas-text)))} width=${3:90}%}$0

@@ -3,4 +3,4 @@
 # key: image
 # condition: yas-selected-text
 # --
-![](./ `yas-selected-text`){fig-align="center" width=60%}
+![](./`yas-selected-text`){fig-align="center" width=60%}
