@@ -4944,56 +4944,79 @@ colonne d'action, l'action principale dans la colonne."
                                 (lambda () (metal-deps--afficher-procedure-auth id))
                                 "Afficher la procédure d'authentification"))
         (t ""))))
-    (when (and desc (not (string-empty-p desc)))
-      (insert "  " (propertize (truncate-string-to-width
-                                desc (max 10 (- x-action x-desc 38)) nil nil "…")
-                               'face '(:inherit shadow :height 0.92))))
+    ;; --- Éditer : colonne fixe, juste après la pastille la plus large
+    ;; (« AUTH. EXTERNE » ≈ 17 colonnes).  La description ne s'intercale
+    ;; plus ici : en police proportionnelle, sa largeur réelle déborde la
+    ;; troncature calculée en colonnes et poussait « éditer » sur la
+    ;; colonne « Par défaut » (« éditerPar défaut », pastilles superposées).
+    ;; Elle passe sur la deuxième ligne, avec l'accès aux fichiers.
     (when (and spec (fboundp 'metal-deps-formulaire-editer-agent))
       (let ((aid agent-id))
-        (insert "  " (metal-dashboard--lien
-                      "éditer"
-                      (lambda () (metal-deps-formulaire-editer-agent aid))
-                      "Modifier cet agent dans le formulaire"))))
-    ;; --- Agent par défaut : pastille, ou lien pour le devenir ---
-    (cond
-     (est-defaut
-      (insert (metal-dashboard--aller (- x-action 16))
-              (propertize (metal-deps--ui-pastille "par défaut" 'qmd)
-                          'help-echo (format "%s est l'agent utilisé au démarrage" nom))))
-     (utilisable
-      (let ((id agent-id))
-        (insert (metal-dashboard--aller (- x-action 16))
+        (insert (metal-dashboard--aller (+ x-desc 19))
                 (metal-dashboard--lien
-                 "Par défaut"
-                 (lambda () (metal-deps--definir-agent-defaut id))
-                 (format "Faire de « %s » l'agent utilisé au démarrage" nom))))))
+                 "éditer"
+                 (lambda () (metal-deps-formulaire-editer-agent aid))
+                 "Modifier cet agent dans le formulaire"))))
+    ;; --- Agent par défaut : boutons radio ---
+    ;; Un seul agent peut être l'agent par défaut : le bouton radio rend
+    ;; cette exclusivité lisible d'un coup d'œil (◉ choisi, ○ les autres),
+    ;; là où une pastille « PAR DÉFAUT » voisine de liens « Par défaut »
+    ;; de même libellé laissait croire à plusieurs agents par défaut.
+    (when utilisable
+      (let* ((id agent-id)
+             (accent (metal-dashboard--couleur 'accent))
+             (rond (if est-defaut
+                       (metal-deps--ui-rond accent 'radio)
+                     (metal-deps--ui-rond (metal-deps--ui-teinte 'gris) 'creux)))
+             (libelle (if est-defaut
+                          (propertize "Par défaut" 'face `(:foreground ,accent :weight semi-bold))
+                        (propertize "Par défaut" 'face 'shadow))))
+        (insert (metal-dashboard--aller (- x-action 16))
+                (if est-defaut
+                    (propertize (concat rond " " libelle)
+                                'help-echo (format "%s est l'agent utilisé au démarrage" nom))
+                  (metal-dashboard--cliquable
+                   (concat rond " " libelle)
+                   (lambda () (metal-deps--definir-agent-defaut id))
+                   (format "Faire de « %s » l'agent utilisé au démarrage" nom))))))
     (metal-deps--ui-actions outil present x-action)
     (insert "\n")
-    ;; --- Accès aux fichiers (metal-agent-permissions.el) ---
-    (when (and present
-               (require 'metal-agent-permissions nil t)
-               (metal-agent-permissions-spec agent-id))
-      (let* ((id agent-id)
-             (ouvert (ignore-errors (metal-agent-permissions-active-p agent-id)))
-             (aide (concat "L'agent peut-il lire les fichiers que MetalEmacs "
-                           "lui transmet ?  Le changement vaut dès la "
-                           "prochaine requête."))
-             (e (assq (if ouvert 'el 'pl) metal-dashboard--types))
-             (encre (if (metal-dashboard--sombre-p) (nth 4 e) (nth 2 e))))
-        (insert (metal-dashboard--aller x-desc)
-                (propertize "Accès aux fichiers : " 'face '(:inherit shadow :height 0.92)
-                            'help-echo aide)
-                (propertize (if ouvert "autorisé" "bloqué")
-                            'face `(:foreground ,encre :weight semi-bold :height 0.92)
-                            'help-echo aide)
-                (propertize "  ·  " 'face 'shadow)
-                (metal-dashboard--lien
-                 (if ouvert "Bloquer" "Autoriser")
-                 (lambda ()
-                   (metal-deps--executer-et-rafraichir
-                    (lambda () (metal-agent-permissions-basculer id))))
-                 aide)
-                "\n")))))
+    ;; --- Deuxième ligne : description, puis accès aux fichiers ---
+    (let* ((acces (and present
+                       (require 'metal-agent-permissions nil t)
+                       (metal-agent-permissions-spec agent-id)))
+           (a-desc (and desc (not (string-empty-p desc)))))
+      (when (or acces a-desc)
+        (insert (metal-dashboard--aller x-desc))
+        (when a-desc
+          (insert (propertize (truncate-string-to-width
+                               desc (max 10 (- x-action x-desc (if acces 40 2)))
+                               nil nil "…")
+                              'face '(:inherit shadow :height 0.92)
+                              'help-echo desc)))
+        (when acces
+          (let* ((id agent-id)
+                 (ouvert (ignore-errors (metal-agent-permissions-active-p agent-id)))
+                 (aide (concat "L'agent peut-il lire les fichiers que MetalEmacs "
+                               "lui transmet ?  Le changement vaut dès la "
+                               "prochaine requête."))
+                 (e (assq (if ouvert 'el 'pl) metal-dashboard--types))
+                 (encre (if (metal-dashboard--sombre-p) (nth 4 e) (nth 2 e))))
+            (when a-desc
+              (insert (propertize "  ·  " 'face 'shadow)))
+            (insert (propertize "Accès aux fichiers : " 'face '(:inherit shadow :height 0.92)
+                                'help-echo aide)
+                    (propertize (if ouvert "autorisé" "bloqué")
+                                'face `(:foreground ,encre :weight semi-bold :height 0.92)
+                                'help-echo aide)
+                    (propertize "  ·  " 'face 'shadow)
+                    (metal-dashboard--lien
+                     (if ouvert "Bloquer" "Autoriser")
+                     (lambda ()
+                       (metal-deps--executer-et-rafraichir
+                        (lambda () (metal-agent-permissions-basculer id))))
+                     aide))))
+        (insert "\n")))))
 
 (defun metal-deps--rendre-etat (&optional sans-afficher)
   "Construit et affiche le tampon de l'Assistant.
@@ -5161,8 +5184,8 @@ affiché ni sélectionné (changement de thème)."
                   (propertize " installé     " 'face 'shadow)
                   (metal-deps--ui-rond (metal-deps--ui-teinte 'gris) 'creux)
                   (propertize " absent     " 'face 'shadow)
-                  (metal-deps--ui-pastille "par défaut" 'qmd)
-                  (propertize " agent utilisé au démarrage (lien « Par défaut » pour en changer)"
+                  (metal-deps--ui-rond (metal-dashboard--couleur 'accent) 'radio)
+                  (propertize " agent par défaut (cliquer un autre ○ pour en changer)"
                               'face 'shadow)
                   "\n"
                   (metal-dashboard--touche "TAB")
