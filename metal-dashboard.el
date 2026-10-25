@@ -684,7 +684,7 @@ page distante."
                              (kill-buffer liste))))))
        fichiers comptes)
       :clavier `(("a" . ,ajouter) ("n" . ,creer))
-      :touches '(("a" . "ajouter le lien copié") ("n" . "nouvelle liste"))))
+      :touches '(("a" . "ajouter") ("n" . "nouvelle liste"))))
     buf))
 
 (defun metal-dashboard-signets-ouvrir ()
@@ -821,19 +821,106 @@ Elle est plus stable entre macOS et Windows pour ce dashboard."
               (push (cons name (match-string 0)) sites))))))
     (nreverse sites)))
 
-(defun metal-dashboard-actualites-menu ()
-  "Afficher un menu pour choisir un site d'actualités."
+(defcustom metal-dashboard-actualites-tri 'ordre
+  "Critère de tri dans le tampon « Actualités ».
+  - `ordre' : l'ordre du fichier metal-news.org
+  - `nom'   : par ordre alphabétique du nom du site"
+  :type '(choice (const :tag "Ordre du fichier" ordre)
+                 (const :tag "Par nom" nom))
+  :group 'metal-dashboard)
+
+(defun metal-dashboard--actualites-hote (url)
+  "Nom d'hôte de URL, sans « www. »."
+  (let ((hote (or (ignore-errors (url-host (url-generic-parse-url url))) url)))
+    (replace-regexp-in-string "\\`www\\." "" hote)))
+
+(defun metal-dashboard--actualites-changer-tri ()
+  "Basculer le tri des actualités entre l'ordre du fichier et le nom."
   (interactive)
-  (let ((sites (metal-dashboard--parse-actualites)))
-    (if (null sites)
-        (progn
-          (message "Aucun site trouvé dans %s" metal-dashboard-actualites-file)
-          (when (y-or-n-p "Créer le fichier metal-news.org ? ")
-            (find-file metal-dashboard-actualites-file)))
-      (let* ((choices (mapcar #'car sites))
-             (choice (completing-read "Actualités: " choices nil t)))
-        (when choice
-          (browse-url (cdr (assoc choice sites))))))))
+  (setq metal-dashboard-actualites-tri
+        (if (eq metal-dashboard-actualites-tri 'nom) 'ordre 'nom))
+  (metal-dashboard--actualites-rendre))
+
+(defun metal-dashboard-actualites-ajouter ()
+  "Ajouter un site à metal-news.org (adresse prise dans le presse-papiers)."
+  (interactive)
+  (let* ((url (or (metal-dashboard--signets-extraire-url
+                   (metal-dashboard--signets-presse-papiers))
+                  (metal-dashboard--signets-extraire-url
+                   (read-string "Aucun lien dans le presse-papiers, URL : ")))))
+    (unless (metal-dashboard--signets-url-p url)
+      (user-error "Adresse invalide : %s" (or url "")))
+    (let* ((attente (metal-dashboard--signets-titre-async url))
+           (nom (read-string "Nom du site : "
+                             (or (car attente)
+                                 (metal-dashboard--actualites-hote url))))
+           (fichier metal-dashboard-actualites-file))
+      (with-temp-buffer
+        (when (file-exists-p fichier) (insert-file-contents fichier))
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (unless (save-excursion (re-search-backward "^\\* " nil t))
+          (insert "* Sites d'actualités\n"))
+        (insert "\n** " nom "\n" url "\n")
+        (write-region (point-min) (point-max) fichier nil 'silent))
+      (message "Site ajouté : %s" nom)
+      (when (get-buffer "*Actualités*")
+        (metal-dashboard--actualites-rendre)))))
+
+(defun metal-dashboard--actualites-rendre ()
+  "Dessiner le tampon `*Actualités*' et le retourner (sans l'afficher)."
+  (let* ((buf (get-buffer-create "*Actualités*"))
+         (fichier metal-dashboard-actualites-file)
+         (sites (metal-dashboard--parse-actualites))
+         (sites (if (eq metal-dashboard-actualites-tri 'nom)
+                    (sort (copy-sequence sites)
+                          (lambda (x y) (string-collate-lessp
+                                         (car x) (car y) nil t)))
+                  sites))
+         (n (length sites))
+         (editer (lambda ()
+                   (find-file fichier)))
+         (ajouter (lambda ()
+                    (call-interactively #'metal-dashboard-actualites-ajouter))))
+    (metal-dashboard--liste-rendre
+     buf
+     (list
+      :titre "Actualités"
+      :dossier (file-name-directory fichier)
+      :resume (format "%d site%s" n (if (> n 1) "s" ""))
+      :pilules (list (metal-dashboard--pilule
+                      "#2C55C9" "Ajouter le lien copié"
+                      "Ajouter le site copié dans le navigateur (touche a)"
+                      ajouter)
+                     (metal-dashboard--pilule
+                      "#7C95DE" "Modifier la liste"
+                      "Ouvrir metal-news.org (touche e)" editer))
+      :section "Sites"
+      :tri (if (eq metal-dashboard-actualites-tri 'nom) 'nom 'date)
+      :tri-libelle "ordre"
+      :basculer-tri #'metal-dashboard--actualites-changer-tri
+      :rafraichir #'metal-dashboard-actualites-menu
+      :entrees
+      (mapcar (lambda (site)
+                (let ((url (cdr site)))
+                  (list :nom (car site)
+                        :date (metal-dashboard--actualites-hote url)
+                        :aide (format "Ouvrir %s dans le navigateur" url)
+                        :action (lambda () (browse-url url)))))
+              sites)
+      :clavier `(("a" . ,ajouter) ("e" . ,editer))
+      :touches '(("a" . "ajouter") ("e" . "modifier"))))
+    buf))
+
+(defun metal-dashboard-actualites-menu ()
+  "Ouvrir le tampon `*Actualités*' listant les sites de metal-news.org."
+  (interactive)
+  (if (null (metal-dashboard--parse-actualites))
+      (progn
+        (message "Aucun site trouvé dans %s" metal-dashboard-actualites-file)
+        (when (y-or-n-p "Créer le fichier metal-news.org ? ")
+          (find-file metal-dashboard-actualites-file)))
+    (switch-to-buffer (metal-dashboard--actualites-rendre))))
 
 (defun metal-dashboard--make-action-button (label help-text action)
   "Créer un bouton cliquable avec LABEL, HELP-TEXT et ACTION."
@@ -1379,7 +1466,7 @@ n'est jamais posée si le dossier contient déjà un .qmd."
            "#7B4FDB" "Signets" "Ouvrir les signets web"
            #'metal-dashboard-signets-ouvrir)
           (metal-dashboard--pilule
-           "#2C55C9" "Actualités" "Choisir un site d'actualités"
+           "#2C55C9" "Actualités" "Ouvrir les sites d'actualités"
            #'metal-dashboard-actualites-menu)
           (metal-dashboard--pilule
            "#1F9E80" "Assistant" "Ouvrir l'assistant d'installation"
@@ -1656,6 +1743,9 @@ Repli sur la sélection au minitampon si metal-dired n'est pas chargé."
   "Retourner ACTION sous forme de commande interactive."
   (if (commandp action) action (lambda () (interactive) (funcall action))))
 
+(defvar-local metal-dashboard--largeur-rendue nil
+  "Largeur de fenêtre (en colonnes) au dernier rendu du tampon.")
+
 (defun metal-dashboard--liste-rendre (buf spec)
   "Dessiner dans BUF une liste de fichiers dans le style du tableau de bord.
 SPEC est une plist :
@@ -1663,6 +1753,7 @@ SPEC est une plist :
   :pilules                 boutons d'action déjà construites ;
   :section                 titre de la liste ;
   :tri :basculer-tri       critère courant (`date'/`nom') et sa commande ;
+  :tri-libelle             libellé du critère autre que `nom' (« date ») ;
   :rafraichir              commande de la touche g ;
   :entrees                 plists (:nom :info :date :aide :action) ;
   :clavier :touches        raccourcis propres (touche . action) et leur
@@ -1684,7 +1775,7 @@ SPEC est une plist :
       (setq-local global-hl-line-mode nil)
       (let* ((fenetre (or win (selected-window)))
              (marge 6)
-             (largeur (max 72 (- (window-width fenetre) (* 2 marge) 2)))
+             (largeur (max 44 (- (window-width fenetre) (* 2 marge) 2)))
              (droite (+ marge largeur))
              (x-nom (+ marge 6))
              (x-date (- droite 18))
@@ -1693,10 +1784,15 @@ SPEC est une plist :
              (dossier (plist-get spec :dossier))
              (critere (plist-get spec :tri))
              (basculer (plist-get spec :basculer-tri))
+             (libelle-tri (or (plist-get spec :tri-libelle) "date"))
              (entrees (plist-get spec :entrees))
-             (avec-info (cl-some (lambda (e) (plist-get e :info)) entrees))
+             ;; Colonne d'info masquée quand la fenêtre est trop étroite
+             ;; pour la loger sans écraser les noms.
+             (avec-info (and (>= (- x-info x-nom) 24)
+                             (cl-some (lambda (e) (plist-get e :info)) entrees)))
              (n 0)
              (map (make-sparse-keymap)))
+        (setq-local metal-dashboard--largeur-rendue (window-width fenetre))
         (setq-local line-prefix `(space :width ,marge))
         (setq-local wrap-prefix `(space :width ,marge))
         ;; --- En-tête ---
@@ -1720,8 +1816,9 @@ SPEC est une plist :
                 (metal-dashboard--aller (- droite 19))
                 (propertize "Trier par  " 'face '(:inherit shadow :height 0.9))
                 (if (eq critere 'nom)
-                    (metal-dashboard--lien "date" basculer "Trier par date (touche t)")
-                  (propertize "date" 'face '(:weight semi-bold :height 0.9)))
+                    (metal-dashboard--lien libelle-tri basculer
+                                           (format "Trier par %s (touche t)" libelle-tri))
+                  (propertize libelle-tri 'face '(:weight semi-bold :height 0.9)))
                 (propertize "  ·  " 'face 'shadow)
                 (if (eq critere 'nom)
                     (propertize "nom" 'face '(:weight semi-bold :height 0.9))
@@ -1741,7 +1838,7 @@ SPEC est une plist :
                              (propertize nom 'face '(:weight semi-bold)))
                      action
                      (plist-get e :aide)))
-            (when (plist-get e :info)
+            (when (and avec-info (plist-get e :info))
               (insert (metal-dashboard--aller x-info)
                       (propertize (plist-get e :info)
                                   'face '(:inherit shadow :height 0.92))))
@@ -1759,14 +1856,16 @@ SPEC est une plist :
         (let ((touches (append (plist-get spec :touches)
                                (list (cons (cond ((>= n 9) "1–9") ((<= n 1) "1") (t (format "1–%d" n)))
                                            "ouvrir")
-                                     '("t" . "changer le tri")
+                                     '("t" . "trier")
                                      '("g" . "rafraîchir")
-                                     '("TAB" . "élément suivant")))))
+                                     '("TAB" . "suivant")))))
+          ;; Une seule ligne, libellés courts : les pilules au-dessus
+          ;; donnent déjà le sens complet de chaque action.
           (insert "\n\n"
                   (mapconcat (lambda (k)
                                (concat (metal-dashboard--touche (car k)) " "
                                        (propertize (cdr k) 'face 'shadow)))
-                             touches "      ")
+                             touches "    ")
                   "\n"))
         ;; --- Clavier local ---
         (dolist (k (plist-get spec :clavier))
@@ -1788,7 +1887,9 @@ SPEC est une plist :
             (when (get-buffer "*Notes rapides*")
               (ignore-errors (metal-dashboard--notes-rendre)))
             (when (get-buffer "*Signets*")
-              (ignore-errors (metal-dashboard--signets-rendre)))))
+              (ignore-errors (metal-dashboard--signets-rendre)))
+            (when (get-buffer "*Actualités*")
+              (ignore-errors (metal-dashboard--actualites-rendre)))))
 
 ;;; ═══════════════════════════════════════════════════════════════════
 ;;; Démarrage automatique
@@ -1813,16 +1914,46 @@ SPEC est une plist :
 (setq inhibit-startup-buffer-menu t
       inhibit-startup-message t)
 
-;; Rafraîchir le dashboard quand la fenêtre est redimensionnée
+;; Redessiner le tableau de bord et ses listes quand leur fenêtre change
+;; de largeur.  Les listes ne sont redessinées que si la largeur a
+;; réellement changé (un simple changement de hauteur n'y touche pas).
+(defconst metal-dashboard--tampons-adaptatifs
+  '(("*Notes rapides*" . metal-dashboard--notes-rendre)
+    ("*Signets*"       . metal-dashboard--signets-rendre)
+    ("*Actualités*"    . metal-dashboard--actualites-rendre))
+  "Tampons de liste à redessiner au redimensionnement, avec leur fonction.")
+
+(defvar metal-dashboard--minuterie-taille nil
+  "Minuterie du redessin différé après un redimensionnement.")
+
+(defun metal-dashboard--redessiner-apres-taille ()
+  "Redessiner les tampons visibles dont la largeur de fenêtre a changé."
+  (setq metal-dashboard--minuterie-taille nil)
+  (when-let ((buf (get-buffer "*Tableau-de-bord*")))
+    (when (get-buffer-window buf t)
+      (metal-dashboard-open)))
+  (dolist (e metal-dashboard--tampons-adaptatifs)
+    (let* ((buf (get-buffer (car e)))
+           (win (and buf (get-buffer-window buf t))))
+      (when (and win (fboundp (cdr e))
+                 (not (eql (window-width win)
+                           (buffer-local-value 'metal-dashboard--largeur-rendue buf))))
+        (let ((pt (window-point win))
+              (debut (window-start win)))
+          (ignore-errors (funcall (cdr e)))
+          (when (window-live-p win)
+            (set-window-start win (min debut (with-current-buffer buf (point-max))) t)
+            (set-window-point win (min pt (with-current-buffer buf (point-max))))))))))
+
 (add-hook 'window-size-change-functions
           (lambda (_frame)
-            (when-let ((buf (get-buffer "*Tableau-de-bord*")))
-              (when (get-buffer-window buf)
-                ;; Éviter de rafraîchir en boucle avec un timer
-                (run-with-idle-timer 0.3 nil
-                  (lambda ()
-                    (when (get-buffer-window buf)
-                      (metal-dashboard-open))))))))
+            ;; Différer et regrouper : un glissement de bordure émet une
+            ;; rafale d'événements.
+            (when metal-dashboard--minuterie-taille
+              (cancel-timer metal-dashboard--minuterie-taille))
+            (setq metal-dashboard--minuterie-taille
+                  (run-with-idle-timer 0.3 nil
+                                       #'metal-dashboard--redessiner-apres-taille))))
 
 (add-hook 'window-setup-hook
           (lambda ()
