@@ -4698,6 +4698,9 @@ devant un Emacs figé."
 (defconst metal-deps--assistant-tampon "*MetalEmacs Assistant*"
   "Nom du tampon de l'Assistant.")
 
+(defvar-local metal-deps--largeur-rendue nil
+  "Largeur de fenêtre (en colonnes) au dernier rendu de l'Assistant.")
+
 (defun metal-deps--ui-charger ()
   "Charger les primitives graphiques du tableau de bord si nécessaire.
 metal-deps.el est chargé avant metal-dashboard.el dans init.el ; au
@@ -5070,6 +5073,7 @@ affiché ni sélectionné (changement de thème)."
         (setq-local global-hl-line-mode nil)
         (let* ((fenetre (or win-existante (selected-window)))
                (marge 6)
+               (_mem (setq-local metal-deps--largeur-rendue (window-width fenetre)))
                (largeur (max 72 (- (window-width fenetre) (* 2 marge) 2)))
                (x-nom (+ marge 3))
                (x-desc (+ x-nom (max 18 metal-deps--largeur-colonne-nom)))
@@ -5227,6 +5231,37 @@ affiché ni sélectionné (changement de thème)."
     ;; rendu appelle `metal-deps--rafraichir-path-agent', qui invalide le
     ;; cache s'il découvre un répertoire à ajouter au PATH.
     (setq metal-deps--cache-chaud t))))
+
+;; Redimensionnement : l'Assistant suit la largeur de sa fenêtre, comme
+;; le tableau de bord, sans qu'il faille presser « g ».  Le redessin
+;; n'utilise que le cache de détection : s'il est froid (détection
+;; coûteuse, surtout sous Windows), on s'abstient plutôt que de figer
+;; Emacs pendant un glissement de bordure.
+(defvar metal-deps--minuterie-taille nil
+  "Minuterie du redessin différé de l'Assistant après redimensionnement.")
+
+(defun metal-deps--redessiner-apres-taille ()
+  "Redessiner l'Assistant visible si la largeur de sa fenêtre a changé."
+  (setq metal-deps--minuterie-taille nil)
+  (let* ((buf (get-buffer metal-deps--assistant-tampon))
+         (win (and buf (get-buffer-window buf t))))
+    (when (and win metal-deps--cache-chaud
+               (not (eql (window-width win)
+                         (buffer-local-value 'metal-deps--largeur-rendue buf))))
+      ;; `metal-deps--rendre-etat' mesure la fenêtre sélectionnée quand
+      ;; il ne trouve pas celle du tampon ; on se place donc dans la
+      ;; fenêtre de l'Assistant, sans changer la sélection visible.
+      (with-selected-window win
+        (ignore-errors (metal-deps--rendre-etat t))))))
+
+(add-hook 'window-size-change-functions
+          (lambda (_frame)
+            (when (get-buffer metal-deps--assistant-tampon)
+              (when metal-deps--minuterie-taille
+                (cancel-timer metal-deps--minuterie-taille))
+              (setq metal-deps--minuterie-taille
+                    (run-with-idle-timer 0.3 nil
+                                         #'metal-deps--redessiner-apres-taille)))))
 
 ;; Le thème se choisit au tableau de bord et vaut pour tout Emacs :
 ;; redessiner l'Assistant ouvert pour que pastilles et boutons suivent.
