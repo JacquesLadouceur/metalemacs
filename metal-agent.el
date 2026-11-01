@@ -544,7 +544,7 @@ Le hook reçoit la fenêtre en argument, qu'on ignore puisqu'on lit
 
 (defun metal-agent-codex-disponible-p ()
   "Retourne t si la CLI du provider courant est disponible."
-  (when-let ((cmd (metal-agent--current-command)))
+  (when-let* ((cmd (metal-agent--current-command)))
     (executable-find cmd)))
 
 (defalias 'metal-agent-disponible-p 'metal-agent-codex-disponible-p
@@ -553,7 +553,7 @@ Le hook reçoit la fenêtre en argument, qu'on ignore puisqu'on lit
 (defun metal-agent--project-root ()
   "Retourne la racine du projet courant, sinon `default-directory'."
   (or (when (fboundp 'project-current)
-        (when-let ((proj (project-current nil)))
+        (when-let* ((proj (project-current nil)))
           (expand-file-name (project-root proj))))
       default-directory))
 
@@ -790,7 +790,7 @@ Si APPEND est non nil, ajoute le texte à la fin ; sinon remplace le contenu."
           (insert "\n"))
         (goto-char (point-max))))
     (display-buffer buf)
-    (when-let ((win (get-buffer-window buf t)))
+    (when-let* ((win (get-buffer-window buf t)))
       (with-selected-window win
         (goto-char (point-max))))
     (redisplay t)
@@ -800,8 +800,8 @@ Si APPEND est non nil, ajoute le texte à la fin ; sinon remplace le contenu."
   "Fermer les buffers UI temporaires de Metal Agent."
   (dolist (name (list metal-agent-status-buffer-name
                       (metal-agent--current-buffer-name)))
-    (when-let ((buf (get-buffer name)))
-      (when-let ((win (get-buffer-window buf t)))
+    (when-let* ((buf (get-buffer name)))
+      (when-let* ((win (get-buffer-window buf t)))
         (ignore-errors (delete-window win)))
       (ignore-errors (kill-buffer buf)))))
 
@@ -1322,8 +1322,8 @@ artefact NEUF, pas une correction du contenu source à réviser."
         (goto-char (point-min))))
     (display-buffer buf))
   ;; Nettoyer l'éventuel buffer d'état résiduel.
-  (when-let ((status (get-buffer metal-agent-status-buffer-name)))
-    (when-let ((win (get-buffer-window status t)))
+  (when-let* ((status (get-buffer metal-agent-status-buffer-name)))
+    (when-let* ((win (get-buffer-window status t)))
       (ignore-errors (delete-window win)))
     (ignore-errors (kill-buffer status)))
   (message nil)
@@ -1449,8 +1449,8 @@ hunks souhaités depuis APRÈS) est appliqué dans le buffer cible."
                 ;; Refus : le diagnostic et la sortie brute sont déjà affichés.
                 (message nil)
               ;; Cas normal, ou override explicite : ouvrir la révision.
-              (when-let ((status (get-buffer metal-agent-status-buffer-name)))
-                (when-let ((win (get-buffer-window status t)))
+              (when-let* ((status (get-buffer metal-agent-status-buffer-name)))
+                (when-let* ((win (get-buffer-window status t)))
                   (ignore-errors (delete-window win)))
                 (ignore-errors (kill-buffer status)))
               (metal-agent--reviser-via-ediff metal-agent--last-original proposed))))))))))
@@ -1849,10 +1849,10 @@ Passage à expliquer :
              (progn
                ;; Ouvrir automatiquement le buffer de sortie pour que
                ;; l'utilisateur n'ait pas à le chercher.
-               (when-let ((buf (get-buffer buf-name)))
+               (when-let* ((buf (get-buffer buf-name)))
                  (display-buffer buf))
                (message "Explication %s terminée — voir %s." label buf-name))
-           (when-let ((buf (get-buffer buf-name)))
+           (when-let* ((buf (get-buffer buf-name)))
              (display-buffer buf))
            (message "Erreur %s — voir %s." label buf-name)))))))
 
@@ -1947,8 +1947,8 @@ une réécriture du fichier."
                                  (string-trim-right fonction)
                                  sep-apres apres)))
           (setq metal-agent--last-proposed proposed)
-          (when-let ((status (get-buffer metal-agent-status-buffer-name)))
-            (when-let ((win (get-buffer-window status t)))
+          (when-let* ((status (get-buffer metal-agent-status-buffer-name)))
+            (when-let* ((win (get-buffer-window status t)))
               (ignore-errors (delete-window win)))
             (ignore-errors (kill-buffer status)))
           (metal-agent--reviser-via-ediff original proposed)))))))
@@ -2112,7 +2112,7 @@ en texte brut, étroit :
      (lambda (exit-code _raw)
        (let ((buf-name (metal-agent--current-buffer-name))
              (label (or (metal-agent--current-label) "Agent")))
-         (when-let ((buf (get-buffer buf-name)))
+         (when-let* ((buf (get-buffer buf-name)))
            (display-buffer buf))
          (if (= exit-code 0)
              (message "Analyse %s terminée — voir %s." label buf-name)
@@ -2446,7 +2446,7 @@ Avec un préfixe (`C-u', FORCER-ANSI-TERM non nil), force ansi-term."
     (let ((buffer-name (format "*Metal Agent — Auth %s*" label)))
       ;; Si un ancien buffer d'auth existe (avec l'ancienne commande), le
       ;; tuer pour repartir propre avec la nouvelle commande.
-      (when-let ((old-buf (get-buffer buffer-name)))
+      (when-let* ((old-buf (get-buffer buffer-name)))
         (let ((kill-buffer-query-functions nil))
           (kill-buffer old-buf)))
       (cond
@@ -4480,7 +4480,7 @@ correspond à l'extension de SORTIE ; sinon retourne TEXTE entier."
             (write-region (concat (file-name-nondirectory fichier) "\n") nil
                           (metal-agent-lot-journal lot) t 'silent)))
         ;; Tampon de sortie ouvert et non modifié : le mettre à jour.
-        (when-let ((buf (get-file-buffer sortie)))
+        (when-let* ((buf (get-file-buffer sortie)))
           (with-current-buffer buf
             (unless (buffer-modified-p)
               (revert-buffer t t t))))
@@ -4502,11 +4502,11 @@ correspond à l'extension de SORTIE ; sinon retourne TEXTE entier."
 
 (defun metal-agent-lot--terminer ()
   "Clore le lot actif et afficher le bilan."
-  (when-let ((lot metal-agent-lot--actif))
+  (when-let* ((lot metal-agent-lot--actif))
     (unless (metal-agent-lot-fin lot)
       (when (timerp (metal-agent-lot-minuterie lot))
         (cancel-timer (metal-agent-lot-minuterie lot)))
-      (when-let ((f (metal-agent-lot-courant lot)))
+      (when-let* ((f (metal-agent-lot-courant lot)))
         (when (eq (plist-get (metal-agent-lot--etat lot f) :etat) 'en-cours)
           (metal-agent-lot--marquer lot f :etat 'attente)))
       (setf (metal-agent-lot-courant lot) nil
@@ -4551,7 +4551,7 @@ correspond à l'extension de SORTIE ; sinon retourne TEXTE entier."
 Avec plusieurs sorties : celle du fichier de la ligne courante, ou à
 défaut le dossier des sorties."
   (interactive)
-  (if-let ((lot metal-agent-lot--actif))
+  (if-let* ((lot metal-agent-lot--actif))
       (let* ((modele (metal-agent-lot-sortie lot))
              (ligne (get-text-property (line-beginning-position)
                                        'metal-agent-lot-fichier))
@@ -4570,7 +4570,7 @@ défaut le dossier des sorties."
 (defun metal-agent-lot-ouvrir-fichier ()
   "Ouvrir le fichier d'entrée de la ligne courante."
   (interactive)
-  (if-let ((f (get-text-property (line-beginning-position)
+  (if-let* ((f (get-text-property (line-beginning-position)
                                  'metal-agent-lot-fichier)))
       (find-file-other-window f)
     (message "Pas de fichier sur cette ligne.")))
@@ -4587,7 +4587,7 @@ défaut le dossier des sorties."
 (defun metal-agent-lot--rafraichir ()
   "Redessiner le tampon *Lot agent*."
   (interactive)
-  (when-let ((lot metal-agent-lot--actif)
+  (when-let* ((lot metal-agent-lot--actif)
              (buf (get-buffer metal-agent-lot-buffer-name)))
     (with-current-buffer buf
       (let* ((inhibit-read-only t)

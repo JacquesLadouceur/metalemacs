@@ -201,7 +201,7 @@ pour que les autres ne changent pas de numéro — et leurs marques
 « % Consigne N » dans le code restent justes.  Ses sous-consignes, même
 non commentées, sont désactivées avec elle ; les autres lignes
 commentées sont ignorées."
-  (when-let ((debut (metal-algo--section metal-prompt--noms-consignes)))
+  (when-let* ((debut (metal-algo--section metal-prompt--noms-consignes)))
     (org-with-wide-buffer
      (goto-char debut)
      (let ((fin (save-excursion (org-end-of-subtree t t) (point)))
@@ -466,7 +466,7 @@ Programme actuel (%s) :
 
 (defun metal-prompt--notes (raw)
   "Lignes de notes trouvées après le marqueur dédié de RAW."
-  (when-let ((d (string-search metal-prompt--marqueur-notes raw)))
+  (when-let* ((d (string-search metal-prompt--marqueur-notes raw)))
     (seq-remove
      (lambda (l) (or (string-empty-p l)
                      (string-match-p "\\`aucune?\\.?\\'" (downcase l))
@@ -536,7 +536,7 @@ NUM est nil pour une note qui ne nomme aucune consigne.  Le préfixe
 PROPOSE est le programme qu'elles commentent."
   (let ((nom "*Notes de l'agent*"))
     (if (null lignes)
-        (when-let ((b (get-buffer nom))) (quit-windows-on b))
+        (when-let* ((b (get-buffer nom))) (quit-windows-on b))
       (with-current-buffer (get-buffer-create nom)
         (metal-prompt-notes-mode)
         (setq metal-prompt--notes-prompt prompt
@@ -677,8 +677,8 @@ affichée en lecture seule ; le programme n'est pas modifié."
                "Précision de la note"))))))))
 
 (defun metal-prompt--afficher-precision (note code raw)
-  (when-let ((status (get-buffer metal-agent-status-buffer-name)))
-    (when-let ((win (get-buffer-window status t)))
+  (when-let* ((status (get-buffer metal-agent-status-buffer-name)))
+    (when-let* ((win (get-buffer-window status t)))
       (ignore-errors (delete-window win))))
   (if (or (/= code 0) (null raw) (string-empty-p (string-trim raw)))
       (metal-agent--handle-codex-code-response code raw)
@@ -701,8 +701,8 @@ affichée en lecture seule ; le programme n'est pas modifié."
       (let* ((programme metal-agent--last-target-buffer)
              (original metal-agent--last-original)
              (nouveau (concat (string-trim-right nouveau) "\n")))
-        (when-let ((status (get-buffer metal-agent-status-buffer-name)))
-          (when-let ((win (get-buffer-window status t)))
+        (when-let* ((status (get-buffer metal-agent-status-buffer-name)))
+          (when-let* ((win (get-buffer-window status t)))
             (ignore-errors (delete-window win))))
         (metal-prompt--afficher-notes prompt (metal-prompt--notes raw) nouveau)
         (cond
@@ -746,11 +746,11 @@ affichée en lecture seule ; le programme n'est pas modifié."
   (when (metal-revision-active-p)
     (user-error "Une révision est déjà ouverte — terminez-la d'abord"))
   (when buffer-file-name (save-buffer))
-  (when-let ((manquants (metal-prompt--fichiers-manquants)))
+  (when-let* ((manquants (metal-prompt--fichiers-manquants)))
     (message "⚠ Fichier(s) introuvable(s) dans « Contexte » : %s"
              (string-join manquants ", "))
     (sit-for 1.5))
-  (when-let ((off (metal-prompt--consignes-desactivees)))
+  (when-let* ((off (metal-prompt--consignes-desactivees)))
     (message "📝 Consigne(s) en commentaire, non transmise(s) : %s"
              (string-join off ", "))
     (sit-for 1))
@@ -891,7 +891,7 @@ point final ignorés.")
                              exemples ",\n")
                   "\n]).\n\n"
                   metal-prompt--script-tests)))
-      (when-let ((p (get-buffer-process tampon))) (delete-process p))
+      (when-let* ((p (get-buffer-process tampon))) (delete-process p))
       (with-current-buffer tampon
         (special-mode)
         (setq-local metal-agent--buffer-sortie-p t)
@@ -954,7 +954,7 @@ point final ignorés.")
   (unless (buffer-live-p prompt)
     (user-error "Le tampon de prompt n'est plus ouvert"))
   (pop-to-buffer prompt)
-  (if-let ((c (seq-find (lambda (c) (equal (car c) num))
+  (if-let* ((c (seq-find (lambda (c) (equal (car c) num))
                         (nth 1 (metal-prompt--analyser-consignes)))))
       (progn (goto-char (nth 3 c))
              (org-fold-show-context)

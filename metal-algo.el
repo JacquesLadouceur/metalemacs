@@ -124,7 +124,7 @@ est lancé dans un tampon comint."
   "Lien Org vers un fichier : [[file:chemin]] ou [[file:chemin][description]].")
 
 (defun metal-algo--mot-cle (cle)
-  (when-let ((v (cadr (assoc cle (org-collect-keywords (list cle))))))
+  (when-let* ((v (cadr (assoc cle (org-collect-keywords (list cle))))))
     (string-trim v)))
 
 (defun metal-algo--section (noms)
@@ -138,7 +138,7 @@ est lancé dans un tampon comint."
      nil)))
 
 (defun metal-algo--texte-section (noms)
-  (when-let ((pos (metal-algo--section noms)))
+  (when-let* ((pos (metal-algo--section noms)))
     (org-with-wide-buffer
      (goto-char pos)
      (let* ((fin (save-excursion (org-end-of-subtree t t) (point)))
@@ -158,7 +158,7 @@ Retourne (INTRO ETAPES DEBUT FIN), où ETAPES est une liste ordonnée de
 \(NUMERO TEXTE CORPS POSITION NIVEAU).  La numérotation hiérarchique
 \(1, 2, 2.1, 2.2…) est calculée d'après l'imbrication des listes
 numérotées ; les numéros saisis ne servent qu'à repérer les éléments."
-  (when-let ((debut (metal-algo--section metal-algo--noms-procedure)))
+  (when-let* ((debut (metal-algo--section metal-algo--noms-procedure)))
     (org-with-wide-buffer
      (goto-char debut)
      (let ((fin (save-excursion (org-end-of-subtree t t) (point)))
@@ -252,7 +252,7 @@ numérotées ; les numéros saisis ne servent qu'à repérer les éléments."
         blocs)
     (dolist (f (metal-algo--fichiers-donnees))
       (let ((chemin (expand-file-name f dossier)))
-        (when-let ((lignes (and (file-regular-p chemin)
+        (when-let* ((lignes (and (file-regular-p chemin)
                                 (file-readable-p chemin)
                                 (metal-algo--premieres-lignes
                                  chemin metal-algo-apercu-lignes))))
@@ -396,7 +396,7 @@ Contraintes obligatoires :
 
 (defun metal-algo--ambiguites (raw)
   "Lignes d'ambiguïtés trouvées après le marqueur dédié de RAW."
-  (when-let ((d (string-search metal-algo--marqueur-ambiguites raw)))
+  (when-let* ((d (string-search metal-algo--marqueur-ambiguites raw)))
     (seq-remove
      (lambda (l) (or (string-empty-p l)
                      (string-match-p "\\`aucune?\\.?\\'" (downcase l))
@@ -408,7 +408,7 @@ Contraintes obligatoires :
 (defun metal-algo--afficher-ambiguites (algo lignes)
   (let ((nom "*Choix de l'agent*"))
     (if (null lignes)
-        (when-let ((b (get-buffer nom))) (quit-windows-on b))
+        (when-let* ((b (get-buffer nom))) (quit-windows-on b))
       (with-current-buffer (get-buffer-create nom)
         (special-mode)
         (let ((inhibit-read-only t))
@@ -454,8 +454,8 @@ Contraintes obligatoires :
              (original metal-agent--last-original)
              (nouveau (concat (string-trim programme) "\n"))
              (exemples (eq executer 'exemples)))
-        (when-let ((status (get-buffer metal-agent-status-buffer-name)))
-          (when-let ((win (get-buffer-window status t)))
+        (when-let* ((status (get-buffer metal-agent-status-buffer-name)))
+          (when-let* ((win (get-buffer-window status t)))
             (ignore-errors (delete-window win))))
         (metal-algo--afficher-ambiguites algo (metal-algo--ambiguites raw))
         (cond
@@ -491,7 +491,7 @@ EXECUTER : t pour exécuter ensuite, `exemples' pour vérifier les exemples."
   (when (metal-algo--en-cours-p)
     (user-error "Une requête agent est déjà en cours"))
   (when buffer-file-name (save-buffer))
-  (when-let ((manquants (metal-algo--fichiers-manquants)))
+  (when-let* ((manquants (metal-algo--fichiers-manquants)))
     (message "⚠ Fichier(s) introuvable(s) dans « Données » : %s"
              (string-join manquants ", "))
     (sit-for 1.5))
@@ -548,7 +548,7 @@ Si une révision Ediff est nécessaire, l'exécution suit sa validation."
              (default-directory (file-name-directory fichier))
              (process-environment (append '("PYTHONUTF8=1" "PYTHONIOENCODING=utf-8")
                                           process-environment)))
-        (when-let ((p (get-buffer-process tampon))) (delete-process p))
+        (when-let* ((p (get-buffer-process tampon))) (delete-process p))
         (with-current-buffer tampon
           (let ((inhibit-read-only t)) (erase-buffer)))
         (apply #'make-comint-in-buffer "metal-algo-exec" tampon
@@ -582,7 +582,7 @@ Si une révision Ediff est nécessaire, l'exécution suit sa validation."
   (unless (buffer-live-p algo)
     (user-error "Le tampon d'algorithme n'est plus ouvert"))
   (pop-to-buffer algo)
-  (if-let ((e (seq-find (lambda (e) (equal (car e) num)) (metal-algo--etapes))))
+  (if-let* ((e (seq-find (lambda (e) (equal (car e) num)) (metal-algo--etapes))))
       (progn (goto-char (nth 3 e))
              (org-fold-show-context)
              (org-fold-show-entry))

@@ -338,7 +338,7 @@ suivi de blancs ou d'un commentaire %). Ceci exclut les points dans
 
 (defun metal--prolog-afficher-ou-repositionner (buf cote)
   "Afficher BUF à COTE; si déjà visible ailleurs, le repositionner."
-  (when-let ((win (get-buffer-window buf t)))
+  (when-let* ((win (get-buffer-window buf t)))
     (when (window-live-p win) (delete-window win)))
   (if (eq cote 'bottom)
       (display-buffer
@@ -389,7 +389,7 @@ suivi de blancs ou d'un commentaire %). Ceci exclut les points dans
     (setq metal-prolog-shell-position-defaut nouvelle-pos)
     (customize-save-variable 'metal-prolog-shell-position-defaut nouvelle-pos)
     (metal--prolog-appliquer-regle nouvelle-pos)
-    (when-let ((buf (metal--prolog-get-buffer)))
+    (when-let* ((buf (metal--prolog-get-buffer)))
       (metal--prolog-afficher-ou-repositionner buf nouvelle-pos))
     (message "Position du shell Prolog : %s"
              (if (eq nouvelle-pos 'bottom) "bas" "droite"))))

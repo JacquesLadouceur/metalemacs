@@ -136,7 +136,7 @@ un changement d'environnement Python."
 
   (defun metal-treemacs--save-width ()
     "Sauvegarde la largeur courante de Treemacs dans metal-prefs."
-    (when-let ((tw (treemacs-get-local-window)))
+    (when-let* ((tw (treemacs-get-local-window)))
       (let ((new-width (window-width tw)))
         (setq metal-treemacs-width new-width
               treemacs-width new-width)
@@ -153,7 +153,7 @@ un changement d'environnement Python."
 
   (defun metal-treemacs--maybe-save-width ()
     "Sauvegarde la largeur si elle a changé depuis la dernière sauvegarde."
-    (when-let ((tw (treemacs-get-local-window)))
+    (when-let* ((tw (treemacs-get-local-window)))
       (let ((current-width (window-width tw)))
         (unless (= current-width metal-treemacs--last-saved-width)
           (setq metal-treemacs--last-saved-width current-width)
@@ -362,7 +362,7 @@ Destinée à `after-change-functions', d'où les arguments ignorés."
 
 (defun metal-treemacs--update-line-spacing ()
   "Met à jour le line-spacing de Treemacs selon la taille de police courante."
-  (when-let ((buf (treemacs-get-local-buffer)))
+  (when-let* ((buf (treemacs-get-local-buffer)))
     (with-current-buffer buf
       (setq-local line-spacing
                   (round (* (metal-font-height) 0.04))))))
@@ -404,7 +404,7 @@ Destinée à `after-change-functions', d'où les arguments ignorés."
 lors du redimensionnement du frame.
 Simule un left-click interne qui déclenche le mécanisme de
 préservation de la taille de la side-window dans Emacs."
-  (when-let ((tw (treemacs-get-local-window)))
+  (when-let* ((tw (treemacs-get-local-window)))
     (save-selected-window
       (treemacs-leftclick-action `(down-mouse-1 (,tw 1 (0 . 0) 0))))))
 
@@ -1119,7 +1119,7 @@ Le nom est saisi dans le minibuffer, sans dialogue graphique."
                     (exts (car paire)))
                 (treemacs-create-icon :icon ico :extensions exts)))))
         (treemacs-load-theme "Metal")
-        (when-let ((w (treemacs-get-local-window)))
+        (when-let* ((w (treemacs-get-local-window)))
           (with-selected-window w
             (ignore-errors (treemacs-refresh)))))))
   (metal-treemacs-installer-icones)

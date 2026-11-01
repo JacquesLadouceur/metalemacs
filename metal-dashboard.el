@@ -1929,7 +1929,7 @@ SPEC est une plist :
 (defun metal-dashboard--redessiner-apres-taille ()
   "Redessiner les tampons visibles dont la largeur de fenêtre a changé."
   (setq metal-dashboard--minuterie-taille nil)
-  (when-let ((buf (get-buffer "*Tableau-de-bord*")))
+  (when-let* ((buf (get-buffer "*Tableau-de-bord*")))
     (when (get-buffer-window buf t)
       (metal-dashboard-open)))
   (dolist (e metal-dashboard--tampons-adaptatifs)
