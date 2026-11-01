@@ -1973,9 +1973,10 @@ défaut."
      (message "MetalEmacs : échec du chargement de %s — %s"
               mod (error-message-string err)))))
 
-(let ((file (expand-file-name "metal-agent.el" user-emacs-directory)))
-  (when (file-exists-p file)
-    (load file)))
+(condition-case err
+    (require 'metal-agent)
+  (error (message "MetalEmacs : échec du chargement de metal-agent — %s"
+                  (error-message-string err))))
 
 ;; Comparer deux documents dans le frame de révision de l'agent
 ;; (mêmes boutons ⬅️ ➡️ ✅ ↩️ Terminer / Annuler).
