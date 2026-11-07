@@ -250,6 +250,57 @@ jusque-là.  Si les numéros sont éteints, retombe sur la colonne 0.
          (cible (+ gouttiere metal-toolbar-left-margin)))
     (propertize " " 'display `(space :align-to ,cible))))
 
+;;; --- Espaces de largeur fixe ----------------------------------------------
+
+(defvar metal-toolbar--char-cache (make-hash-table :test 'equal)
+  "Cache des images SVG des boutons-lettres des chevrons et des séparateurs.")
+
+
+(defun metal-toolbar--mode-image-p ()
+  "Non nil si les icônes de la barre sont rendues en images SVG."
+  (and (fboundp 'metal-icones-disponible-p) (metal-icones-disponible-p)))
+
+(defcustom metal-toolbar-espace-ratio 0.25
+  "Largeur d'une unité d'espace de la barre, en fraction de la taille d'icône.
+Avec des icônes de 20 pixels, une unité vaut 5 pixels ; un bouton est
+entouré de `metal-toolbar-button-padding' unités, plus une entre boutons."
+  :type 'number
+  :group 'metal-toolbar)
+
+(defun metal-toolbar--blanc (&optional n)
+  "Espace horizontal de N unités (défaut 1) pour la barre.
+En mode image, sa largeur est fixée en PIXELS d'après la taille des
+icônes (`metal-toolbar-emoji-px') : un espace ordinaire suit la police du
+tampon et s'élargit dès qu'un agrandissement de texte local
+\(`text-scale-adjust', remappage de face) y est actif, alors que les
+icônes-images gardent leur taille — la barre s'étirait.  Proportionné aux
+icônes, l'espacement suit aussi `metal-toolbar-emoji-increase'.  En mode
+texte, des espaces ordinaires."
+  (let ((n (or n 1)))
+    (if (metal-toolbar--mode-image-p)
+        (propertize (make-string n ?\s)
+                    'display `(space :width
+                                     (,(max 1 (round (* n metal-toolbar-espace-ratio
+                                                        (metal-toolbar-emoji-px)))))))
+      (make-string n ?\s))))
+
+(defun metal-toolbar--separateur-image (px)
+  "Image SVG d'un séparateur vertical pour des icônes de PX pixels."
+  (let* ((cle (list 'separateur px))
+         (cache (gethash cle metal-toolbar--char-cache 'absent)))
+    (if (not (eq cache 'absent))
+        cache
+      (let* ((larg (max 8 (round (* 0.7 px))))
+             (haut (* 0.8 px))
+             (y0 (/ (- px haut) 2.0))
+             (svg (format "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d' viewBox='0 0 %d %d'><rect x='%.1f' y='%.1f' width='%.1f' height='%.1f' rx='1' fill='#a8a8a8'/></svg>"
+                          larg px larg px
+                          (- (/ larg 2.0) (max 1.0 (* 0.06 px))) y0
+                          (max 2.0 (* 0.12 px)) haut))
+             (image (ignore-errors (create-image svg 'svg t :ascent 'center))))
+        (puthash cle image metal-toolbar--char-cache)
+        image))))
+
 (defun metal-toolbar-separator (&optional char)
   "Séparateur vertical entre groupes de boutons.
 CHAR peut surcharger le caractère utilisé (défaut : \"|\").
@@ -260,14 +311,20 @@ quand les icônes sont des images (elles ne flottent pas), sinon
   (let* ((h (/ (metal-toolbar-emoji-size) 100.0))
          (mode-image (and (fboundp 'metal-icones-disponible-p)
                           (metal-icones-disponible-p)))
+         (image (and mode-image (null char)
+                     (metal-toolbar--separateur-image (metal-toolbar-emoji-px h))))
          (r (if mode-image
                 metal-toolbar-char-raise-image
               metal-toolbar-char-raise))
          (s (propertize (format " %s " (or char "|"))
                         'face `(:weight bold :foreground "gray" :height ,h))))
-    (if (and r (not (zerop r)))
-        (propertize s 'display `((raise ,r)))
-      s)))
+    (cond
+     (image (concat (metal-toolbar--blanc 1)
+                    (propertize "|" 'display image)
+                    (metal-toolbar--blanc 1)))
+     ((and r (not (zerop r)))
+      (propertize s 'display `((raise ,r))))
+     (t s))))
 
 (cl-defun metal-toolbar-emoji (emoji &key height color raise)
   "Retourne un EMOJI Unicode propertize pour la header-line.
@@ -342,10 +399,160 @@ RAISE : décalage vertical ; si nil, choisi automatiquement selon le mode
          (face `(:height ,h
                  ,@(when color `(:foreground ,color))
                  ,@attrs))
-         (s (propertize texte 'face face)))
-    (if (and r (not (zerop r)))
-        (propertize s 'display `((raise ,r)))
-      s)))
+         (s (propertize texte 'face face))
+         (image (and mode-image
+                     (metal-toolbar--char-image texte style color
+                                                (metal-toolbar-emoji-px h)))))
+    (cond
+     ;; Mode image : la lettre devient elle aussi une image SVG, de même
+     ;; hauteur et centrée comme les icônes Twemoji.  Sa taille et sa
+     ;; position ne dépendent plus de la police du système (Menlo,
+     ;; Consolas…) : rendu identique sous macOS et Windows.
+     (image (propertize texte 'display image 'rear-nonsticky t))
+     ((and r (not (zerop r)))
+      (propertize s 'display `((raise ,r))))
+     (t s))))
+
+;;; --- Pictogrammes SVG fournis par le mode -------------------------------
+
+(cl-defun metal-toolbar-svg (source &key repli height)
+  "Bouton dessiné à partir du SVG SOURCE, à la taille des icônes.
+SOURCE doit avoir un viewBox carré ; la largeur et la hauteur sont
+imposées ici.  Hors mode image (ou si le SVG échoue), on affiche
+l'emoji REPLI, ou un « ▣ »."
+  (let* ((h (or height (/ (metal-toolbar-emoji-size) 100.0)))
+         (px (metal-toolbar-emoji-px h))
+         (cle (list 'svg source px))
+         (image (and (metal-toolbar--mode-image-p)
+                     (image-type-available-p 'svg)
+                     (let ((c (gethash cle metal-toolbar--char-cache 'absent)))
+                       (if (not (eq c 'absent)) c
+                         (puthash cle
+                                  (ignore-errors
+                                    (create-image
+                                     (replace-regexp-in-string
+                                      "\\`<svg " (format "<svg width='%d' height='%d' " px px)
+                                      source t t)
+                                     'svg t :ascent 'center))
+                                  metal-toolbar--char-cache))))))
+    (if image
+        (propertize "▣" 'display image 'rear-nonsticky t)
+      (if repli
+          (metal-toolbar-emoji repli :height height)
+        (propertize "▣" 'face `(:height ,h))))))
+
+;;; --- Lettres et chevrons en SVG ------------------------------------------
+
+(defcustom metal-toolbar-char-police
+  "Helvetica Neue, Helvetica, Arial, Liberation Sans, sans-serif"
+  "Familles (CSS) des boutons-lettres rendus en SVG.
+Une police sans empattement présente partout : Helvetica sous macOS,
+Arial sous Windows, Liberation Sans sous Linux."
+  :type 'string
+  :group 'metal-toolbar)
+
+(defcustom metal-toolbar-char-corps 1.0
+  "Corps des boutons-lettres SVG, en fraction de la taille d'icône.
+À 1.0, la hauteur des capitales (≈ 0,72 em) égale la masse visuelle
+d'une icône Twemoji, qui occupe environ 72 % de son cadre."
+  :type 'number
+  :group 'metal-toolbar)
+
+
+(defun metal-toolbar--avant-plan (color)
+  "Couleur effective : COLOR, sinon l'avant-plan de la header-line."
+  (or color
+      (let ((c (face-attribute 'header-line :foreground nil 'default)))
+        (and (stringp c) (not (string-prefix-p "unspecified" c)) c))
+      "#333333"))
+
+(defun metal-toolbar--chasse (texte)
+  "Largeur approximative de TEXTE en em (police sans empattement grasse).
+Une estimation suffit : le texte est centré dans son cadre, une erreur
+ne fait que varier la marge."
+  (let ((w 0.0))
+    (dolist (c (string-to-list texte) w)
+      (setq w (+ w (cond ((memq c '(?· ?. ?, ?: ?\; ?! ?| ?i ?l ?I)) 0.30)
+                         ((memq c '(?/ ?\\)) 0.34)
+                         ((memq c '(?< ?> ?=)) 0.60)
+                         ((memq c '(?M ?W ?m ?w)) 0.86)
+                         ((<= ?A c ?Z) 0.70)
+                         ((<= ?0 c ?9) 0.58)
+                         (t 0.58)))))))
+
+(defun metal-toolbar--xml (texte)
+  "Échapper TEXTE pour un nœud SVG."
+  (replace-regexp-in-string
+   "[<>&]" (lambda (m) (pcase m ("<" "&lt;") (">" "&gt;") ("&" "&amp;")))
+   texte t t))
+
+(defun metal-toolbar--char-image (texte style color px)
+  "Image SVG de TEXTE (STYLE, COLOR) haute de PX pixels, ou nil."
+  (when (image-type-available-p 'svg)
+    (let* ((fg  (metal-toolbar--avant-plan color))
+           (cle (list texte style fg px metal-toolbar-char-corps
+                      metal-toolbar-char-police))
+           (cache (gethash cle metal-toolbar--char-cache 'absent)))
+      (if (not (eq cache 'absent))
+          cache
+        (let ((image (ignore-errors
+                       (create-image (metal-toolbar--char-svg texte style fg px)
+                                     'svg t :ascent 'center))))
+          (puthash cle image metal-toolbar--char-cache)
+          image)))))
+
+(defun metal-toolbar--char-svg (texte style fg px)
+  "Source SVG du bouton-lettre TEXTE (STYLE, couleur FG), haut de PX pixels."
+  (let* ((fs    (* px metal-toolbar-char-corps))
+         (marge (* 0.08 px))
+         (larg  (max (* 0.6 px)
+                     (+ (* 2 marge) (* fs (metal-toolbar--chasse texte)))))
+         (larg  (ceiling larg))
+         ;; Ligne de base : capitales (≈ 0,72 em) centrées dans le cadre.
+         (base  (+ (/ px 2.0) (* 0.36 fs)))
+         (trait (max 1.0 (* 0.075 fs)))
+         (ligne (lambda (y)
+                  (format "<line x1='%.1f' y1='%.1f' x2='%.1f' y2='%.1f' stroke='%s' stroke-width='%.1f'/>"
+                          marge y (- larg marge) y fg trait)))
+         (svg
+          (concat
+           (format "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d' viewBox='0 0 %d %d'>"
+                   larg px larg px)
+           (format "<text x='%.1f' y='%.1f' text-anchor='middle' font-family='%s' font-size='%.1f' font-weight='%s' font-style='%s' fill='%s'>%s</text>"
+                   (/ larg 2.0) base metal-toolbar-char-police fs
+                   (if (eq style 'bold) "bold" "normal")
+                   (if (eq style 'italic) "italic" "normal")
+                   fg (metal-toolbar--xml texte))
+           (pcase style
+             ('underline (funcall ligne (+ base (* 0.14 fs))))
+             ('strike    (funcall ligne (- base (* 0.34 fs))))
+             (_ ""))
+           "</svg>")))
+    svg))
+
+(defun metal-toolbar--chevron-image (px)
+  "Image SVG du chevron ▾ pour une icône de PX pixels, ou nil."
+  (when (and (fboundp 'metal-icones-disponible-p)
+             (metal-icones-disponible-p))
+    (let* ((cle (list 'chevron px))
+           (cache (gethash cle metal-toolbar--char-cache 'absent)))
+      (if (not (eq cache 'absent))
+          cache
+        (let* ((larg (max 6 (round (* 0.38 px))))
+               (cote (* 0.24 px))
+               (x0 (/ (- larg cote) 2.0))
+               (y0 (+ (* 0.62 px) (- (* 0.5 cote))))
+               (svg (format
+                     "<svg xmlns='http://www.w3.org/2000/svg' width='%d' height='%d' viewBox='0 0 %d %d'><polygon points='%.1f,%.1f %.1f,%.1f %.1f,%.1f' fill='%s'/></svg>"
+                     larg px larg px
+                     x0 y0 (+ x0 cote) y0 (+ x0 (/ cote 2.0)) (+ y0 (* 0.6 cote))
+                     (let ((c (face-attribute 'metal-toolbar-menu-face
+                                              :foreground nil t)))
+                       (if (stringp c) c "#8c8c8c"))))
+               (image (ignore-errors
+                        (create-image svg 'svg t :ascent 'center))))
+          (puthash cle image metal-toolbar--char-cache)
+          image)))))
 
 (defun metal-toolbar-button (icon tooltip command &optional context)
   "Construit un bouton cliquable pour une header-line ou une mode-line.
@@ -372,7 +579,7 @@ fusionneraient en une seule région de surbrillance."
   (let* ((ctxs (cond ((null context) '(header-line))
                      ((listp context) context)
                      (t (list context))))
-         (spc (make-string metal-toolbar-button-padding ?\s))
+         (spc (metal-toolbar--blanc metal-toolbar-button-padding))
          (map (make-sparse-keymap)))
     (dolist (ctx ctxs)
       (define-key map
@@ -395,6 +602,37 @@ rendu) aussi bien que statiques."
    ((functionp v) (funcall v))
    ((and (symbolp v) v (fboundp v)) (funcall v))
    (t v)))
+
+;;; --- Indicateur de menu ----------------------------------------------------
+
+(defface metal-toolbar-menu-face
+  '((t :foreground "gray55"))
+  "Visage du chevron ▾ des boutons qui ouvrent un menu."
+  :group 'metal-toolbar)
+
+(defun metal-toolbar--hauteur (item)
+  "Multiplicateur de hauteur de l'élément ITEM, ou nil (taille commune).
+:scale (ex. 0.7) s'applique à la taille commune des boutons : il corrige
+un pictogramme qui paraît trop gros ou trop petit à côté des autres (un
+mot de trois lettres, un carré plein…) sans casser l'agrandissement
+global (`metal-toolbar-emoji-increase')."
+  (let ((k (plist-get item :scale)))
+    (and (numberp k)
+         (* k (/ (metal-toolbar-emoji-size) 100.0)))))
+
+(defun metal-toolbar--avec-menu (icon item)
+  "Ajouter le chevron ▾ à ICON si l'élément ITEM porte :menu non nil.
+Le chevron suit la taille commune des boutons (environ la moitié)."
+  (if (plist-get item :menu)
+      (let ((image (metal-toolbar--chevron-image (metal-toolbar-emoji-px))))
+        (concat icon
+                (if image
+                    (propertize "▾" 'display image 'rear-nonsticky t)
+                  (propertize "▾" 'face
+                              `(:inherit metal-toolbar-menu-face
+                                :height ,(* 0.55 (/ (metal-toolbar-emoji-size)
+                                                    100.0)))))))
+    icon))
 
 ;;; --- Segment Snippets ----------------------------------------------------
 
@@ -444,7 +682,8 @@ CONTEXT est le contexte de clic (defaut `header-line'), comme pour
    #'yas-insert-snippet
    (or context 'header-line)))
 
-(cl-defun metal-toolbar-build (items &key agent secretaire (context 'header-line))
+(cl-defun metal-toolbar-build (items &key agent secretaire (snippets t)
+                                    (context 'header-line))
   "Construire une chaîne de header-line à partir d'ITEMS déclaratifs.
 
 Chaque élément d'ITEMS est une plist décrivant un bouton ou un séparateur.
@@ -461,14 +700,26 @@ Formes reconnues dans ITEMS :
       Un bouton-lettre, quand aucun emoji ne convient (formatage
       typographique).  La lettre porte son :style (bold, italic,
       underline, strike) : « G » en gras, « I » en italique, etc.
+  (:svg SOURCE [:repli \"🖥\"] [:tooltip TIP] [:command CMD])
+      Un bouton dessiné : SOURCE est un SVG carré (viewBox 0 0 36 36,
+      comme Twemoji) pour un pictogramme qu'aucun emoji n'offre.  Rendu
+      à la taille des icônes ; :repli (un emoji) sert hors mode image.
+  :menu t (sur :emoji, :char ou :svg)
+      Ajoute un petit chevron ▾ : le bouton ouvre un menu.
+  :scale K (sur :emoji ou :char)
+      Taille relative du bouton (1.0 = taille commune), pour l'équilibre
+      optique : un mot (« PDF ») ou un carré plein paraît plus gros.
   (:sep [CHAR])
       Un séparateur vertical (CHAR optionnel surcharge le \"|\").
 
 Un bouton « modèles » (🧩) est greffé automatiquement, après les boutons
 du mode, dans tout tampon où des modèles YASnippet s'appliquent.  Voir
-`metal-toolbar-snippets' pour le désactiver globalement.
+`metal-toolbar-snippets' pour le désactiver globalement, ou le mot-clé
+:snippets nil pour le retirer d'une seule barre.
 
 Mots-clés de BUILD :
+  :snippets   nil pour ne pas greffer le bouton 🧩 (défaut t) — utile quand
+              la barre du mode expose déjà ses modèles dans ses menus.
   :agent      si non nil, greffe l'extension Metal-Agent à la fin (protégée
               par `ignore-errors' : la barre survit si metal-agent est absent).
   :secretaire si non nil, greffe l'extension Metal-Secrétaire (bouton 🗒️
@@ -514,27 +765,43 @@ automatiquement."
                    (color   (metal-toolbar--resoudre (plist-get item :color)))
                    (tooltip (metal-toolbar--resoudre (plist-get item :tooltip)))
                    (command (plist-get item :command))
-                   (icon    (metal-toolbar-emoji glyphe :color color)))
+                   (icon    (metal-toolbar--avec-menu
+                             (metal-toolbar-emoji glyphe :color color
+                                                  :height (metal-toolbar--hauteur item))
+                             item)))
               (push (metal-toolbar-button icon tooltip command context) parts)
-              (push " " parts)))
+              (push (metal-toolbar--blanc) parts)))
+           ((eq kind :svg)
+            (let* ((tooltip (metal-toolbar--resoudre (plist-get item :tooltip)))
+                   (command (plist-get item :command))
+                   (icon    (metal-toolbar--avec-menu
+                             (metal-toolbar-svg (plist-get item :svg)
+                                                :repli (plist-get item :repli)
+                                                :height (metal-toolbar--hauteur item))
+                             item)))
+              (push (metal-toolbar-button icon tooltip command context) parts)
+              (push (metal-toolbar--blanc) parts)))
            ((eq kind :char)
             (let* ((texte   (metal-toolbar--resoudre (plist-get item :char)))
                    (style   (plist-get item :style))
                    (color   (metal-toolbar--resoudre (plist-get item :color)))
                    (tooltip (metal-toolbar--resoudre (plist-get item :tooltip)))
                    (command (plist-get item :command))
-                   (icon    (metal-toolbar-char texte :style style :color color)))
+                   (icon    (metal-toolbar--avec-menu
+                             (metal-toolbar-char texte :style style :color color
+                                                 :height (metal-toolbar--hauteur item))
+                             item)))
               (push (metal-toolbar-button icon tooltip command context) parts)
-              (push " " parts)))
+              (push (metal-toolbar--blanc) parts)))
            (t nil))))
       ;; Bouton « modèles » : présent dès qu'un modèle YASnippet s'applique
       ;; au tampon.  Placé dans le `unless' : il disparaît donc, comme les
       ;; boutons du mode, quand une barre spécialisée prend la barre.
-      (when (and metal-toolbar-snippets (metal-toolbar--snippets-p))
+      (when (and snippets metal-toolbar-snippets (metal-toolbar--snippets-p))
         (push (metal-toolbar-separator) parts)
-        (push " " parts)
+        (push (metal-toolbar--blanc) parts)
         (push (metal-toolbar-snippets-button context) parts)
-        (push " " parts)))
+        (push (metal-toolbar--blanc) parts)))
     ;; Segment Secrétaire : compact (🗒️ seul) si inactif, étendu si actif.
     ;; Affiché seulement si l'agent n'a pas pris la barre (priorité simple :
     ;; deux barres spécialisées ne s'affichent jamais en même temps).
@@ -550,7 +817,7 @@ automatiquement."
                      (ignore-errors (metal-agent-toolbar-buttons)))
                 "")
             parts))
-    (push " " parts)
+    (push (metal-toolbar--blanc) parts)
     (push (metal-toolbar-vpadding) parts)
     (apply #'concat (nreverse parts))))
 

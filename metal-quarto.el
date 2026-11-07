@@ -1271,33 +1271,9 @@ commande de citation."
 
 (require 'metal-toolbar)
 
-(defun metal-quarto-toolbar-format ()
-  "Construit la barre d'outils Quarto via `metal-toolbar-build'.
-Formatage typographique : lettres portant leur propre style (G gras,
-I italique, S souligné, B barré) faute d'emoji adéquat.  Le reste en
-emoji."
-  (metal-toolbar-build
-   '((:char "G" :style bold      :color "#2c3e50"
-            :tooltip "Gras" :command metal-quarto-bold)
-     (:char "I" :style italic    :color "#2c3e50"
-            :tooltip "Italique" :command metal-quarto-italic)
-     (:char "S" :style underline :color "#2980b9"
-            :tooltip "Souligné" :command metal-quarto-underline)
-     (:char "B" :style strike    :color "#c0392b"
-            :tooltip "Barré" :command metal-quarto-strike)
-     (:char "</>" :color "#8e44ad"
-            :tooltip "Code inline" :command metal-quarto-code)
-     (:emoji "💡" :tooltip "Encadré (callout)" :command metal-quarto-callout)
-     (:emoji "🔗" :tooltip "Références (note, citation, image, renvoi)" :command metal-quarto-references)
-     (:sep)
-     (:emoji "📄" :tooltip "Produire le document (F8)"
-             :command metal-quarto-produire-document)
-     (:sep)
-     (:emoji "📖" :tooltip "Wiktionnaire" :command search-wiktionary)
-     (:emoji "🌐" :tooltip "Wikipédia" :command search-wikipedia)
-     (:emoji "📘" :tooltip "Documentation Quarto" :command metal-quarto-doc-buffer)
-     (:emoji "📋" :tooltip "Aide-mémoire QMD" :command metal-quarto-open-cheatsheet))
-   :agent t))
+;; La barre elle-même (groupes, menus Titres/Insérer/Encadrés/Diapo/Aide)
+;; est définie dans metal-quarto-barre.el.
+(require 'metal-quarto-barre)
 
 (defun metal-quarto-header-line ()
   "Active la barre d'outils dans tout fichier Markdown (Quarto ou non).
