@@ -812,6 +812,39 @@ et un message d'erreur est affiché plutôt que de geler Emacs."
   :type 'integer
   :group 'metal-agent)
 
+;;; --- Mode agentique (profil #+EXECUTION: agentique) -----------------
+
+(defcustom metal-agent-timeout-agentique 3600
+  "Délai maximal (secondes) d'une exécution agentique.
+Une tâche sur un dossier entier (correction de plusieurs équipes)
+dure bien plus longtemps qu'une révision de tampon."
+  :type 'integer
+  :group 'metal-agent)
+
+(defcustom metal-agent-args-agentiques
+  '(("claude" "-p" "--output-format" "text"
+     "--permission-mode" "acceptEdits"
+     "--allowedTools" "Bash(unzip:*),Bash(tar:*),Bash(mkdir:*),Bash(ls:*)")
+    ("codex" "exec" "--sandbox" "workspace-write" "--skip-git-repo-check"))
+  "Arguments CLI du mode agentique, par nom d'exécutable d'agent.
+Contrairement aux :args du catalogue (lecture seule, réponse entre
+marqueurs), ils autorisent l'agent à écrire dans son dossier de
+travail.  Claude : modifications de fichiers acceptées et quelques
+commandes permises (décompression ; « tar » est livré avec macOS et
+Windows 10+, « unzip » avec macOS et Git Bash).  Codex : bac à sable
+en écriture limité au dossier.  Un agent absent de cette liste
+(Antigravity…) ne peut pas exécuter de profil agentique."
+  :type '(alist :key-type string :value-type (repeat string))
+  :group 'metal-agent)
+
+(defvar metal-agent--dossier-travail nil
+  "Dossier de travail imposé à `metal-agent--run-codex', ou nil.
+Lié dynamiquement par le mode agentique.")
+
+(defvar metal-agent--args-force nil
+  "Arguments CLI imposés à `metal-agent--run-codex', ou nil.
+Lié dynamiquement par le mode agentique.")
+
 (defvar metal-agent--process-courant nil
   "Processus agent en cours, ou nil. Permet l'interruption manuelle.")
 
@@ -892,7 +925,9 @@ Robustesse :
                 (metal-agent--current-label)
                 (metal-agent--current-command)))
   (let* ((veut-fichier (metal-agent--provider-veut-dernier-message))
-         (isoler (metal-agent--provider-prop :isoler-fichier))
+         ;; Mode agentique : jamais d'isolation, l'agent doit voir le dossier.
+         (isoler (and (not metal-agent--dossier-travail)
+                      (metal-agent--provider-prop :isoler-fichier)))
          (src-file (metal-agent--source-file))
          ;; ISOLATION : pour un provider exploratoire (`:isoler-fichier t'),
          ;; on exécute la CLI dans un dossier temporaire VIDE contenant
@@ -910,6 +945,7 @@ Robustesse :
                            t))
               d)))
          (default-directory (or dossier-isole
+                                metal-agent--dossier-travail
                                 (metal-agent--source-directory)))
          (buf (metal-agent--codex-buffer))
          (label (metal-agent--current-label))
@@ -940,7 +976,9 @@ Robustesse :
            :name (format "metal-agent-%s" (symbol-name metal-agent-provider))
            :buffer buf
            :command (metal-agent--codex-command
-                     (metal-agent--current-propose-args) prompt fichier-sortie)
+                     (or metal-agent--args-force
+                         (metal-agent--current-propose-args))
+                     prompt fichier-sortie)
            :noquery t
            :connection-type 'pipe
            ;; FILTRE : draine le tube en continu. Sans cela, une CLI très
@@ -2117,6 +2155,104 @@ en texte brut, étroit :
          (if (= exit-code 0)
              (message "Analyse %s terminée — voir %s." label buf-name)
            (message "Erreur %s — voir %s." label buf-name)))))))
+
+;;; --- Exécution agentique ----------------------------------------------
+
+(defun metal-agent--profil-agentique-p ()
+  "Non-nil si le profil actif déclare #+EXECUTION: agentique."
+  (eq (metal-agent--profil-prop :execution) 'agentique))
+
+(defun metal-agent--args-agentiques ()
+  "Arguments du mode agentique pour l'agent courant, ou nil."
+  (let ((cmd (metal-agent--current-command)))
+    (and cmd
+         (cdr (assoc (downcase (file-name-base (car (split-string cmd))))
+                     metal-agent-args-agentiques)))))
+
+(defun metal-agent--prompt-agentique (dossier demande)
+  "Prompt d'une exécution agentique de DEMANDE dans DOSSIER.
+Reprend le préambule du profil et ses options cochées ; aucun marqueur
+n'est exigé, puisque le résultat est écrit sur le disque par l'agent."
+  (let ((fragments (metal-agent--fragments-actifs)))
+    (concat
+     (format "[Profil : %s]\n" (or (metal-agent--profil-prop :nom) ""))
+     (or (metal-agent--profil-systeme) "")
+     (if fragments
+         (concat "\n\nConsignes du profil :\n"
+                 (mapconcat (lambda (f) (concat "- " f)) fragments "\n"))
+       "")
+     "\n"
+     (metal-agent--bloc-instructions-libres)
+     (format "\nDossier de travail : %s\n" (expand-file-name dossier))
+     (format "\nDemande :\n%s\n" demande)
+     "
+Tu travailles directement dans ce dossier : lis, crée et modifie les
+fichiers nécessaires, sans sortir du dossier.  Termine par un bref
+compte rendu en français, en texte brut (pas de tableau Markdown) :
+fichiers écrits ou modifiés, problèmes rencontrés ou signalés.\n")))
+
+(defun metal-agent-executer-agentique ()
+  "Exécuter la demande avec le profil actif en mode agentique.
+L'agent est lancé dans un dossier (nœud courant de Treemacs, sinon
+celui du tampon), où il lit et écrit lui-même ; aucun tampon n'est
+révisé et aucun marqueur n'est attendu.  Le compte rendu s'affiche
+dans le tampon de sortie de l'agent."
+  (interactive)
+  (unless metal-agent-provider
+    (user-error "Aucun agent sélectionné — voir l'Assistant MetalEmacs"))
+  (when (and metal-agent--process-courant
+             (process-live-p metal-agent--process-courant))
+    (user-error "Une requête agent est en cours ; attendez sa fin"))
+  (let ((args (metal-agent--args-agentiques)))
+    (unless args
+      (user-error "%s ne prend pas en charge les profils agentiques — choisissez Claude ou ChatGPT"
+                  (or (metal-agent--current-label) "Cet agent")))
+    (metal-agent--save-current-buffer-and-selection)
+    (let* ((dossier (file-name-as-directory
+                     (expand-file-name
+                      (read-directory-name
+                       "Dossier de travail de l'agent : "
+                       (or (metal-agent-lot--dossier-treemacs)
+                           default-directory)
+                       nil t))))
+           (demande (string-trim
+                     (read-string
+                      (format "Demande (%s) : "
+                              (metal-agent--profil-prop :nom))))))
+      (when (string-empty-p demande)
+        (user-error "Demande vide"))
+      (let ((metal-agent--dossier-travail dossier)
+            (metal-agent--args-force args)
+            (metal-agent-timeout metal-agent-timeout-agentique))
+        (metal-agent--run-codex
+         (metal-agent--prompt-agentique dossier demande)
+         (format "agentique (%s)"
+                 (file-name-nondirectory (directory-file-name dossier)))
+         (lambda (code _raw)
+           (let ((buf-name (metal-agent--current-buffer-name))
+                 (label (or (metal-agent--current-label) "Agent")))
+             (when-let* ((buf (get-buffer buf-name)))
+               (display-buffer buf))
+             (if (= code 0)
+                 (message "%s a terminé dans %s — compte rendu dans %s."
+                          label (abbreviate-file-name dossier) buf-name)
+               (message "Erreur %s (code %d) — voir %s."
+                        label code buf-name)))))))))
+
+(defun metal-agent--router-agentique (&rest _)
+  "Rediriger vers le mode agentique si le profil actif le demande.
+Posé en conseil `:before-until' sur les commandes de révision : avec
+un profil agentique, « Demande libre », « Analyse libre » et
+« Corriger » lancent l'agent dans un dossier au lieu de lui envoyer
+le tampon.  Retourne non-nil quand la commande d'origine est évitée."
+  (when (metal-agent--profil-agentique-p)
+    (call-interactively #'metal-agent-executer-agentique)
+    t))
+
+(dolist (cmd '(metal-agent-demande-libre
+               metal-agent-demande-libre-analyse
+               metal-agent-corriger))
+  (advice-add cmd :before-until #'metal-agent--router-agentique))
 
 (defun metal-agent-afficher-codex ()
   "Afficher le buffer du provider courant.
@@ -4693,33 +4829,6 @@ défaut le dossier des sorties."
                 "\n")
         (goto-char (point-min))
         (forward-line (1- ligne))))))
-
-(defvar metal-correction-prompt
-  "Identifie d'abord le cours et le travail concernés en lisant l'énoncé/mandat présent dans ce répertoire (cherche un .org, .qmd ou .pdf décrivant les compétences visées et le barème). Corrige ensuite chaque sous-dossier de travail en fonction de ces consignes, en appliquant le skill correction-travaux, puis écris la grille Org cumulative."
-  "Consigne envoyée à Claude Code pour la correction.")
-
-(defun metal-corriger-travaux ()
-  "Lance Claude Code dans le dossier Treemacs courant pour corriger les travaux."
-  (interactive)
-  (let* ((node (treemacs-node-at-point))
-         (path (and node (treemacs--nearest-path node)))
-         (dossier (cond
-                   ((null path)
-                    (user-error "Aucun nœud Treemacs sous le point"))
-                   ((file-directory-p path) path)
-                   (t (file-name-directory path)))))
-    (let ((default-directory (file-name-as-directory dossier))
-          (eat-buffer-name (format "*correction:%s*"
-                                   (file-name-nondirectory
-                                    (directory-file-name dossier)))))
-      (eat)
-      (eat-term-send-string
-       eat-terminal
-       (format "claude --profile correction %S" metal-correction-prompt))
-      (eat-term-send-string eat-terminal "\r"))))
-
-(with-eval-after-load 'treemacs
-  (define-key treemacs-mode-map (kbd "<f9>") #'metal-corriger-travaux))
 
 (global-set-key (kbd "C-c m a") #'metal-agent-toggle-active)
 (global-set-key (kbd "C-c m c") #'metal-agent-afficher-codex)

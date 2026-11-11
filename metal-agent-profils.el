@@ -290,6 +290,14 @@ Retourne nil si le fichier ne peut pas être parsé."
                 :options-disponibles (nreverse options-disponibles)
                 :boutons (metal-agent--parser-boutons meta)
                 :tache tache
+                ;; #+EXECUTION: agentique → l'agent travaille dans un
+                ;; dossier (lit, écrit, décompresse) au lieu de rendre
+                ;; un tampon révisé entre marqueurs.  Absent → révision.
+                :execution (when (equal (downcase
+                                         (string-trim
+                                          (or (cdr (assoc "EXECUTION" meta)) "")))
+                                        "agentique")
+                             'agentique)
                 :origine (or origine 'personnel)
                 :chemin chemin)))
     (error
