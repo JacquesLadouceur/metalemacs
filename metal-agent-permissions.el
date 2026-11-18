@@ -65,16 +65,29 @@ Y mettre au minimum le dossier où MetalEmacs dépose les fichiers isolés
   :group 'metal-agent-permissions)
 
 (defcustom metal-agent-permissions-defauts
-  '(("agy"
-     :fichier "~/.gemini/antigravity-cli/settings.json"
-     :format json
-     :operations ((:fixer ("allowNonWorkspaceAccess") :valeur t)
-                  (:ajouter ("permissions" "allow") :modele "read_file(%s)"))))
+  (append
+   '(("agy"
+      :fichier "~/.gemini/antigravity-cli/settings.json"
+      :format json
+      :operations ((:fixer ("allowNonWorkspaceAccess") :valeur t)
+                   (:ajouter ("permissions" "allow") :modele "read_file(%s)"))))
+   ;; Codex lit les fichiers par des commandes PowerShell, exécutées dans
+   ;; son bac à sable.  Sous Windows, ce bac à sable doit être déclaré
+   ;; dans ~/.codex/config.toml ([windows] sandbox = …) ; sans cela, toute
+   ;; lecture est refusée.  Sous macOS et Linux, rien à régler.
+   (when (eq system-type 'windows-nt)
+     '(("codex"
+        :format fonction
+        :active-p   metal-agent-permissions--codex-active-p
+        :activer    metal-agent-permissions--codex-activer
+        :desactiver metal-agent-permissions--codex-desactiver))))
   "SPEC de permissions par nom d'exécutable d'agent.
 Utilisée quand l'entrée du catalogue n'a pas de `:permissions'.
 N'y inscrire QUE les agents qui bloquent la lecture par défaut : un agent
 listé ici affiche « bloqué » tant que la permission n'est pas accordée.
-Claude et Codex n'y figurent donc pas — ils lisent déjà les fichiers."
+Claude n'y figure pas — il lit déjà les fichiers.  Codex n'y figure que
+sous Windows, où son bac à sable bloque la lecture tant qu'il n'est pas
+configuré."
   :type '(alist :key-type string :value-type plist)
   :group 'metal-agent-permissions)
 
@@ -247,6 +260,195 @@ Claude et Codex n'y figurent donc pas — ils lisent déjà les fichiers."
           (metal-agent-permissions--retirer obj chemin)
         (metal-agent-permissions--poser obj chemin (vconcat nouveau)))))
    (t obj)))
+
+;;; ─── Codex sous Windows : ~/.codex/config.toml ────────────────────
+;;
+;; Réglage visé :
+;;
+;;   [windows]
+;;   sandbox = "unelevated"
+;;
+;; Édition ligne à ligne, sans analyseur TOML : seule la clé `sandbox'
+;; de la table [windows] est touchée (ou la clé pointée `windows.sandbox'
+;; au premier niveau, si c'est ainsi qu'elle est écrite).  Tout le reste
+;; du fichier est conservé tel quel.  « elevated », posé par Codex
+;; lui-même après l'installation interactive, est aussi accepté.
+
+(defcustom metal-agent-permissions-codex-fichier "~/.codex/config.toml"
+  "Fichier de configuration de Codex."
+  :type 'file
+  :group 'metal-agent-permissions)
+
+(defcustom metal-agent-permissions-codex-sandbox "unelevated"
+  "Mode du bac à sable Windows de Codex écrit par MetalEmacs.
+« unelevated » ne demande aucun droit d'administrateur ; « elevated »
+est plus strict mais exige une installation confirmée par UAC."
+  :type '(choice (const "unelevated") (const "elevated"))
+  :group 'metal-agent-permissions)
+
+(defconst metal-agent-permissions--toml-entete-re
+  "^[ \t]*\\[\\[?[ \t]*\\([^]\n]*?\\)[ \t]*\\]\\]?[ \t]*\\(?:#.*\\)?$"
+  "En-tête de table TOML ; groupe 1 = nom de la table.")
+
+(defconst metal-agent-permissions--toml-sandbox-re
+  "^[ \t]*sandbox[ \t]*=[ \t]*[\"']\\([^\"'\n]*\\)[\"'].*$"
+  "Ligne `sandbox = \"…\"' ; groupe 1 = valeur.")
+
+(defconst metal-agent-permissions--toml-pointee-re
+  "^[ \t]*windows\\.sandbox[ \t]*=[ \t]*[\"']\\([^\"'\n]*\\)[\"'].*$"
+  "Ligne `windows.sandbox = \"…\"' au premier niveau ; groupe 1 = valeur.")
+
+(defun metal-agent-permissions--codex-fichier ()
+  (expand-file-name metal-agent-permissions-codex-fichier))
+
+(defun metal-agent-permissions--toml-premiere-table ()
+  "Position du premier en-tête de table du tampon, ou `point-max'."
+  (save-excursion
+    (goto-char (point-min))
+    (if (re-search-forward metal-agent-permissions--toml-entete-re nil t)
+        (line-beginning-position)
+      (point-max))))
+
+(defun metal-agent-permissions--toml-section (nom)
+  "Bornes (EN-TÊTE DÉBUT FIN) de la table NOM du tampon, ou nil.
+EN-TÊTE = début de la ligne d'en-tête ; DÉBUT/FIN = corps de la table."
+  (save-excursion
+    (goto-char (point-min))
+    (let (res)
+      (while (and (not res)
+                  (re-search-forward metal-agent-permissions--toml-entete-re nil t))
+        (when (and (string= (match-string 1) nom)
+                   ;; Exclure une table de tableaux [[windows]].
+                   (not (string-match-p "\\[\\["
+                                        (buffer-substring (line-beginning-position)
+                                                          (line-end-position)))))
+          (let ((entete (line-beginning-position))
+                (debut (min (point-max) (1+ (line-end-position)))))
+            (setq res (list entete debut
+                            (if (re-search-forward
+                                 metal-agent-permissions--toml-entete-re nil t)
+                                (line-beginning-position)
+                              (point-max)))))))
+      res)))
+
+(defun metal-agent-permissions--toml-chercher (re debut fin)
+  "Position de début de la ligne correspondant à RE entre DEBUT et FIN, ou nil.
+Laisse les données de correspondance sur cette ligne."
+  (save-excursion
+    (goto-char debut)
+    (and (re-search-forward re fin t)
+         (line-beginning-position))))
+
+(defmacro metal-agent-permissions--avec-toml (&rest corps)
+  "Exécute CORPS dans un tampon contenant ~/.codex/config.toml."
+  (declare (indent 0))
+  `(with-temp-buffer
+     (let ((f (metal-agent-permissions--codex-fichier)))
+       (when (file-exists-p f)
+         (let ((coding-system-for-read 'utf-8))
+           (insert-file-contents f))))
+     ,@corps))
+
+(defun metal-agent-permissions--toml-ecrire ()
+  "Écrit le tampon courant dans ~/.codex/config.toml (copie .metal-bak)."
+  (let ((f (metal-agent-permissions--codex-fichier)))
+    (make-directory (file-name-directory f) t)
+    (metal-agent-permissions--sauvegarder f)
+    (let ((coding-system-for-write 'utf-8-unix))
+      (write-region (point-min) (point-max) f nil 'silent))))
+
+(defun metal-agent-permissions--codex-sandbox-actuel ()
+  "Valeur actuelle du mode de bac à sable Windows de Codex, ou nil."
+  (metal-agent-permissions--avec-toml
+    (let ((sec (metal-agent-permissions--toml-section "windows")))
+      (or (and sec
+               (metal-agent-permissions--toml-chercher
+                metal-agent-permissions--toml-sandbox-re (nth 1 sec) (nth 2 sec))
+               (match-string-no-properties 1))
+          (and (metal-agent-permissions--toml-chercher
+                metal-agent-permissions--toml-pointee-re
+                (point-min) (metal-agent-permissions--toml-premiere-table))
+               (match-string-no-properties 1))))))
+
+(defun metal-agent-permissions--codex-active-p (_dossiers)
+  "Non-nil si le bac à sable Windows de Codex est configuré."
+  (member (metal-agent-permissions--codex-sandbox-actuel)
+          '("unelevated" "elevated")))
+
+(defun metal-agent-permissions--codex-activer (_dossiers)
+  "Déclare le bac à sable Windows dans ~/.codex/config.toml."
+  (unless (metal-agent-permissions--codex-active-p nil)
+    (metal-agent-permissions--avec-toml
+      (let* ((ligne (format "sandbox = \"%s\""
+                            metal-agent-permissions-codex-sandbox))
+             (sec (metal-agent-permissions--toml-section "windows"))
+             (pos-sec (and sec (metal-agent-permissions--toml-chercher
+                                metal-agent-permissions--toml-sandbox-re
+                                (nth 1 sec) (nth 2 sec))))
+             (pos-pointee (and (not pos-sec)
+                               (metal-agent-permissions--toml-chercher
+                                metal-agent-permissions--toml-pointee-re
+                                (point-min)
+                                (metal-agent-permissions--toml-premiere-table)))))
+        (cond
+         ;; Clé présente mais valeur invalide : la remplacer sur place.
+         (pos-sec
+          (goto-char pos-sec)
+          (delete-region (line-beginning-position) (line-end-position))
+          (insert ligne))
+         (pos-pointee
+          (goto-char pos-pointee)
+          (delete-region (line-beginning-position) (line-end-position))
+          (insert "windows." ligne))
+         ;; Table [windows] sans la clé : l'ajouter sous l'en-tête.
+         (sec
+          (goto-char (nth 1 sec))
+          (when (and (= (point) (point-max))
+                     (not (bolp)))
+            (insert "\n"))
+          (insert ligne "\n"))
+         ;; Ni table ni clé : ajouter la table en fin de fichier.
+         (t
+          (goto-char (point-max))
+          (unless (bobp)
+            (unless (bolp) (insert "\n"))
+            (insert "\n"))
+          (insert "[windows]\n" ligne "\n")))
+        (metal-agent-permissions--toml-ecrire)))))
+
+(defun metal-agent-permissions--codex-desactiver (_dossiers)
+  "Retire la déclaration du bac à sable Windows de ~/.codex/config.toml.
+La table [windows] est supprimée si elle devient vide."
+  (when (file-exists-p (metal-agent-permissions--codex-fichier))
+    (metal-agent-permissions--avec-toml
+      (let ((modifie nil))
+        (let ((sec (metal-agent-permissions--toml-section "windows")))
+          (when-let* ((pos (and sec (metal-agent-permissions--toml-chercher
+                                     metal-agent-permissions--toml-sandbox-re
+                                     (nth 1 sec) (nth 2 sec)))))
+            (goto-char pos)
+            (delete-region pos (min (point-max) (1+ (line-end-position))))
+            (setq modifie t)
+            ;; Table devenue vide (blancs seulement) : retirer l'en-tête.
+            (let ((sec (metal-agent-permissions--toml-section "windows")))
+              (when (and sec
+                         (string-blank-p
+                          (buffer-substring (nth 1 sec) (nth 2 sec))))
+                (delete-region (nth 0 sec) (nth 2 sec))
+                ;; Ne pas laisser la ligne vide ajoutée par l'activation.
+                (goto-char (point-max))
+                (when (re-search-backward "[^ \t\n]" nil t)
+                  (delete-region (min (point-max) (+ 2 (point)))
+                                 (point-max)))))))
+        (when-let* ((pos (metal-agent-permissions--toml-chercher
+                          metal-agent-permissions--toml-pointee-re
+                          (point-min)
+                          (metal-agent-permissions--toml-premiere-table))))
+          (goto-char pos)
+          (delete-region pos (min (point-max) (1+ (line-end-position))))
+          (setq modifie t))
+        (when modifie
+          (metal-agent-permissions--toml-ecrire))))))
 
 ;;; ─── API publique ─────────────────────────────────────────────────
 

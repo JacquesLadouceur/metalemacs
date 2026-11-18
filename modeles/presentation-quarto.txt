@@ -16,7 +16,10 @@ header-includes: |
   \newcommand{\suite}[1]{%
     \vfill{\footnotesize\hfill\textcolor{red}{\textit{#1 $\rightarrow$ diapositive suivante}}\par}}
   \AtBeginDocument{\def\ErrorTok#1{#1}}
-  
+  \AtBeginDocument{\hypersetup{colorlinks=true,
+    urlcolor=blue, filecolor=blue, runcolor=blue,
+    linkcolor=mDarkTeal}}
+
 format:
   beamer:
     theme: metropolis
