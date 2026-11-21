@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Jacques Ladouceur
 ;; Auteur: Jacques Ladouceur
-;; Version: 1.2
+;; Version: 1.3
 
 ;;; Commentaires:
 ;;
@@ -182,6 +182,14 @@ Sa couleur est fixée par `metal-apparence--retoucher' selon le thème."
                         :background bg-dim :foreground fg-dim
                         :box `(:line-width (8 . 5) :color ,bg-dim)
                         :overline nil :underline nil)
+    ;; Emacs 31 : la header-line est dessinée avec `header-line-active' ou
+    ;; `header-line-inactive'.  Modus fait hériter l'inactive d'une face à
+    ;; chasse variable : la barre d'outils changeait de police, donc de
+    ;; position, dès que la fenêtre perdait la sélection.  Les deux faces
+    ;; héritent désormais de `header-line', dont init.el fixe la police.
+    (dolist (face '(header-line-active header-line-inactive))
+      (when (facep face)
+        (set-face-attribute face nil :inherit 'header-line)))
     ;; Onglets plats (si tab-line est déjà chargé ; sinon voir plus bas).
     (when (featurep 'tab-line)
       (metal-apparence--retoucher-onglets))

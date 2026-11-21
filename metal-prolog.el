@@ -2,7 +2,7 @@
 
 ;; Copyright (C) 2026 Jacques Ladouceur
 ;; Auteur: Jacques Ladouceur
-;; Version: 1.1
+;; Version: 1.2
 
 ;;; Commentary:
 ;; Ce module gère la configuration SWI-Prolog pour MetalEmacs :
@@ -11,8 +11,10 @@
 ;; - Position du shell Prolog (bas/droite)
 ;; - Pliage de code (overlays) : plie/déplie les clauses Prolog
 ;; - Raccourcis clavier
+;; - Historique du shell Prolog conservé entre les relances et les sessions
 ;;
 ;; Version 1.1 : Correction SWI_HOME_DIR pour shims Scoop + chemin Scoop
+;; Version 1.2 : Historique des requêtes persistant (fichier prolog-historique)
 
 ;;; Code:
 
@@ -396,6 +398,58 @@ suivi de blancs ou d'un commentaire %). Ceci exclut les points dans
 
 ;; Appliquer la règle au démarrage selon la préférence enregistrée
 (metal--prolog-appliquer-regle metal-prolog-shell-position-defaut)
+
+;;; ═══════════════════════════════════════════════════════════════════
+;;; Historique du shell Prolog (conservé entre les relances)
+;;; ═══════════════════════════════════════════════════════════════════
+
+;; L'anneau `comint-input-ring' ne vit que dans le tampon *prolog* : il
+;; disparaît quand on ferme ce tampon ou qu'on quitte Emacs, et comint
+;; n'écrit rien sur le disque tant que `comint-input-ring-file-name' est
+;; nil.  On relit donc l'historique à l'entrée de `prolog-inferior-mode'
+;; et on l'écrit à la fermeture du tampon et d'Emacs.  La sauvegarde sur
+;; `change-major-mode-hook' couvre la relance dans le même tampon : sans
+;; elle, la relecture remplacerait l'anneau courant par un fichier périmé.
+
+(declare-function comint-read-input-ring "comint" (&optional silent))
+(declare-function comint-write-input-ring "comint" ())
+
+(defcustom metal-prolog-historique-fichier
+  (locate-user-emacs-file "prolog-historique")
+  "Fichier où l'historique des requêtes du shell Prolog est conservé."
+  :type 'file
+  :group 'metal-prolog)
+
+(defcustom metal-prolog-historique-taille 500
+  "Nombre maximal de requêtes conservées dans l'historique du shell Prolog."
+  :type 'integer
+  :group 'metal-prolog)
+
+(defun metal-prolog--historique-sauver ()
+  "Écrire l'anneau d'entrées du shell Prolog dans son fichier."
+  (when (eq major-mode 'prolog-inferior-mode)
+    (comint-write-input-ring)))
+
+(defun metal-prolog--historique-activer ()
+  "Relire l'historique du shell Prolog et prévoir sa sauvegarde."
+  (setq-local comint-input-ring-file-name metal-prolog-historique-fichier)
+  (setq-local comint-input-ring-size metal-prolog-historique-taille)
+  (setq-local comint-input-ignoredups t)
+  (comint-read-input-ring t)
+  ;; Avant qu'une relance ne réinitialise le tampon
+  (add-hook 'change-major-mode-hook #'metal-prolog--historique-sauver nil t)
+  ;; À la fermeture du tampon
+  (add-hook 'kill-buffer-hook #'metal-prolog--historique-sauver nil t))
+
+(add-hook 'prolog-inferior-mode-hook #'metal-prolog--historique-activer)
+
+(defun metal-prolog--historique-sauver-tout ()
+  "Écrire l'historique de chaque shell Prolog ouvert (fermeture d'Emacs)."
+  (dolist (b (buffer-list))
+    (with-current-buffer b
+      (metal-prolog--historique-sauver))))
+
+(add-hook 'kill-emacs-hook #'metal-prolog--historique-sauver-tout)
 
 ;;; metal-prolog-toolbar-snippet.el --- À ajouter dans metal-prolog.el -*- lexical-binding: t; -*-
 
