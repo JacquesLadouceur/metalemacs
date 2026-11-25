@@ -320,7 +320,7 @@ Ignore les buffers spéciaux comme Treemacs, Dashboard, etc."
       inhibit-startup-buffer-menu t)
 
 
-(setq-default indent-tabs-mode nil)
+(setq-default indent-tabs-mode t)
 (set-charset-priority 'unicode)
 ;; (prefer-coding-system 'utf-8-unix)
 (delete-selection-mode t)
@@ -1066,8 +1066,10 @@ Hors minibuffer, demande le motif via read-string."
 
 
 (defun mon/configure-tab-indentation ()
-  "TAB/S-TAB : décale via mes fonctions custom, sauf en Org/Markdown."
-  (unless (or (derived-mode-p 'org-mode 'markdown-mode)
+  "TAB/S-TAB : décale via mes fonctions custom, sauf en Org/Markdown/CSV/TSV.
+csv-mode (et tsv-mode, qui en dérive) hérite de text-mode : sans cette
+exclusion, TAB y insérait des espaces au lieu du séparateur \\t."
+  (unless (or (derived-mode-p 'org-mode 'markdown-mode 'csv-mode)
               (minibufferp))
     (local-set-key (kbd "<tab>")   #'metal-shift-right-at-point-or-region)
     (local-set-key (kbd "TAB")     #'metal-shift-right-at-point-or-region)
@@ -1096,13 +1098,23 @@ Hors minibuffer, demande le motif via read-string."
 
 ;; Configuration CSV mode
 
+(defun metal-inserer-tabulation ()
+  "Insérer un caractère de tabulation littéral (séparateur TSV)."
+  (interactive)
+  (insert "\t"))
+
 (use-package csv-mode
-  :mode (".tsv" ".csv" ".tabular" ".vcf")
+  ;; .tsv → tsv-mode (séparateur \t) ; motifs ancrés sur l'extension.
+  :mode (("\\.tsv\\'" . tsv-mode)
+         ("\\.\\(csv\\|tabular\\|vcf\\)\\'" . csv-mode))
   :config
   (add-hook 'csv-mode-hook
             (lambda ()
               (visual-line-mode -1)      ; désactive le Wrap
-              (setq truncate-lines t))))  ; active la troncature
+              (setq truncate-lines t)))  ; active la troncature
+  ;; Dans un TSV, TAB insère un vrai \t.
+  (define-key tsv-mode-map (kbd "TAB")   #'metal-inserer-tabulation)
+  (define-key tsv-mode-map (kbd "<tab>") #'metal-inserer-tabulation))
 
 (use-package vlf
   :ensure t

@@ -1,2 +1,27 @@
 p(X,[]).
 p([le,chat,mange,la,souris],[]).
+det(G,N,X,[]).
+det(G,N,[elle],[]).
+mot(elle,X,Y).
+decouper('Le chat mange la souris', L).
+decouper('Le chat mange la souris', L), atomic_list_concat(L,' ',Phrase).
+p(_,_,[le,chat,a,mangé,les,souris],[]).
+sn(_,_,[les,souris,que,le,chat,a,mangées],[]).
+sn(_,_,[les,souris,que,le,chat,a,mangée],[]).
+sn(_,_,[les,souris,que,le,chat,a,mangées],[]).
+decouper('La maison', L), sn(_,_,L,[]).
+atomic_list_concat([le,chat],' ',Ph).
+atomic_list_concat(L,' ','le chat').
+ph(X), decouper(X,Mots), p(Mots,[]).
+p(_,_,[le,chat,a,mangé,les,souris],[]).
+sn(_,_,[les,souris,que,le,chat,a,mangées],[]).
+sn(_,_,[les,souris,que,le,chat,a,mangée],[]).
+sn(_,_,[les,souris,que,le,chat,a,mangées],[]).
+mot(M,det,X).
+mot(M,pronP,X).
+mot(M,det,X).
+mot(X,Y,Z).
+mot(M,adj,X).
+det(G,N,[le],[]).
+det(G,N,M,[]).
+verbe(P,N,Verbe,[]).
