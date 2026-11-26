@@ -21,11 +21,14 @@ Le tout est organisé dans une interface unifiée qui comprend :
 - **Tableau de bord**
 - **Explorateur de fichiers** (Treemacs)
 - **Assistant d'installation interactif** pour les outils externes
-- **Agents IA**
+- **Agents IA**, avec profils par mode et révision des modifications dans Ediff
+- **Prompts structurés** : programmation en Prolog et en Python à partir d'une consigne rédigée en Org
+- **Comparaison de deux documents**, bloc par bloc
 - **Visualisation et annotation de documents PDF** intégrées
 - **Calendrier** avec import ICS
-- **Synchronisation iOS** d'Org-mode via Beorg
-- **Mises à jour automatiques**
+- **Synchronisation iOS** d'Org-mode via iCloud (Beorg ou autre application)
+- **Corbeille interne** avec restauration
+- **Mises à jour** depuis GitHub
 
 ## Plateformes supportées
 
@@ -204,16 +207,27 @@ L'Assistant gère aussi l'installation et l'authentification d'agents IA — **C
 
 Ces agents ne s'utilisent pas en ligne de commande : une fois installés, ils s'emploient depuis la **barre d'outils**, par des boutons dont les actions s'adaptent au mode du tampon courant. Les modifications que l'agent propose à un fichier sont soumises à révision avant d'être appliquées.
 
-Chacun exige un compte auprès de son propre fournisseur, et pour certains un abonnement payant : MetalEmacs installe la CLI et gère l'authentification, mais ne fournit aucun accès. L'Assistant affiche pour chaque agent son état d'authentification et ses conditions d'accès.
+Chacun exige un compte auprès de son propre fournisseur, et pour certains un abonnement payant : MetalEmacs installe l'outil en ligne de commande et gère l'authentification, mais ne fournit aucun accès. L'Assistant affiche pour chaque agent son état d'authentification et ses conditions d'accès.
 
-Un agent est désigné comme **agent par défaut au démarrage** ; le cercle ◯ en début de ligne permet d'en changer. Le bouton **+ Ajouter un autre agent…** ouvre un formulaire pour déclarer une CLI absente du catalogue.
+Un agent est désigné comme **agent par défaut au démarrage** ; le cercle ◯ en début de ligne permet d'en changer. Le bouton **+ Ajouter un autre agent…** ouvre un formulaire pour déclarer un outil en ligne de commande absent du catalogue.
+
+L'accès aux fichiers se règle aussi depuis l'Assistant, mais seulement pour les trois agents du catalogue ; pour un agent ajouté, les autorisations se configurent dans son propre outil.
+
+Le comportement de l'agent dépend d'un **profil** associé au mode du tampon (Python TAL, Prolog TAL, Documents Quarto-Markdown, Documents Org-mode, Texte simple). Les profils fournis se trouvent dans `metal-agent-profils-defaut/` ; on peut les copier pour créer ses propres profils, qui s'ajoutent à ceux du système.
+
+### Prompts structurés
+
+MetalEmacs permet d'écrire un programme en décrivant ce qu'il doit faire plutôt qu'en le codant directement :
+
+- **Prolog** — le bouton 📝 de la barre agent ouvre, pour `X.pl`, un prompt structuré `X.prompt.org` (sections *Contexte*, *Consignes* et *Tests*). L'agent rend le programme complet, toujours soumis à révision ; le bouton **Tester** exécute chaque test dans SWI-Prolog et affiche OK ou ÉCHEC.
+- **Python** — le bouton 🧭 ouvre un tampon où l'on rédige l'algorithme en Org (*Données*, *Procédure*, *Exemples*). L'agent produit le programme, puis on l'exécute.
 
 ## Mise à jour
 
 Depuis Emacs (recommandé) :
 
 ```
-M-x metal-git-mise-a-jour
+M-x metal-mise-a-jour-github
 ```
 
 Ou en ligne de commande :
@@ -227,25 +241,61 @@ Redémarrer ensuite Emacs ; les nouveaux paquets seront téléchargés automatiq
 
 ## Modules
 
-| Module                  | Rôle                                                           |
-|-------------------------|----------------------------------------------------------------|
-| `metal-toolbar.el`      | Primitives de barre d'outils header-line                       |
+**Interface**
+
+| Module                  | Rôle                                                            |
+|-------------------------|-----------------------------------------------------------------|
+| `metal-dashboard.el`    | Tableau de bord d'accueil, fichiers récents, signets            |
+| `metal-apparence.el`    | Thème clair/sombre, espacements, onglets                        |
+| `metal-toolbar.el`      | Primitives de barre d'outils en en-tête                           |
 | `metal-icones.el`       | Rendu couleur des icônes, identique sur toutes les plateformes  |
-| `metal-pdf.el`          | Visualisation et impression de PDF                             |
-| `metal-pdf-serveur.el`  | Serveur epdfinfo : installation et accord des versions         |
-| `metal-python.el`       | Environnement Python, REPL IPython, gestion Conda              |
-| `metal-prolog.el`       | Environnement SWI-Prolog avec pliage et tracing                |
-| `metal-org.el`          | Org-mode étendu, drag-and-drop, sync Beorg                     |
-| `metal-beorg.el`        | Synchronisation iOS d'Org-mode via Beorg/iCloud                |
-| `metal-quarto.el`       | Édition Quarto, gestion TinyTeX                                |
-| `metal-calendrier.el`   | Calendrier calfw avec import ICS                               |
-| `metal-deps.el`         | Assistant d'installation des dépendances et des agents IA      |
-| `metal-agent.el`        | Agents IA : dialogue et révision des modifications proposées   |
-| `metal-git.el`          | Mise à jour depuis GitHub (`M-x metal-git-mise-a-jour`)        |
-| `metal-distribution.el` | Mises à jour cloud                                             |
-| `metal-dashboard.el`    | Tableau de bord d'accueil                                      |
-| `metal-treemacs.el`     | Explorateur de fichiers                                        |
-| `metal-securite.el`     | Corbeille interne avec restauration                            |
+| `metal-explorateur.el`  | Explorateur de fichiers (Treemacs)                              |
+| `metal-dired.el`        | Dired dans le style du tableau de bord                          |
+| `metal-buf-deplace.el`  | Déplacement de tampons entre fenêtres                           |
+| `metal-capture.el`      | Capture PNG d'une fenêtre Emacs                                 |
+| `metal-utile.el`        | Utilitaires partagés                                            |
+
+**Langages et documents**
+
+| Module                     | Rôle                                                         |
+|----------------------------|--------------------------------------------------------------|
+| `metal-python.el`          | Environnement Python, console IPython, gestion Conda           |
+| `metal-prolog.el`          | Environnement SWI-Prolog avec pliage et traçage              |
+| `metal-org.el`             | Org-mode étendu, glisser-déposer, synchronisation iCloud          |
+| `metal-quarto.el`          | Mode Quarto, gestion TinyTeX                                 |
+| `metal-quarto-barre.el`    | Barre d'outils Quarto (.qmd / .md)                           |
+| `metal-quarto-reglages.el` | Panneau des réglages de mise en page                         |
+| `metal-quarto-entete.el`   | Masquage des réglages techniques de l'en-tête                |
+| `metal-pdf.el`             | Visualisation, annotation et impression de PDF               |
+| `metal-pdf-serveur.el`     | Serveur epdfinfo : installation et accord des versions       |
+| `metal-pdf-version.el`     | Version épinglée de pdf-tools (fichier généré)               |
+| `metal-nettoyer.el`        | Nettoyage des caractères parasites et reformatage            |
+| `metal-calendrier.el`      | Calendrier calfw avec import ICS                             |
+
+**Agents IA**
+
+| Module                                 | Rôle                                                  |
+|----------------------------------------|-------------------------------------------------------|
+| `metal-agent.el`                       | Dialogue avec l'agent depuis la barre d'outils        |
+| `metal-agent-profils.el`               | Profils d'agent par mode (défaut + personnels)        |
+| `metal-agent-permissions.el`           | Permissions de lecture des agents                     |
+| `metal-agents-catalogue-externe.el`    | Catalogue des agents (Claude, ChatGPT, Antigravity)   |
+| `metal-agents-formulaire.el`           | Formulaire d'ajout d'un agent                         |
+| `metal-agents-formulaire-detection.el` | Détection assistée des arguments d'un agent          |
+| `metal-revision.el`                    | Révision Ediff, bloc par bloc                         |
+| `metal-comparer.el`                    | Comparaison de deux documents                         |
+| `metal-prompt.el`                      | Prompt structuré lié à un programme Prolog            |
+| `metal-algo.el`                        | Algorithme en Org transformé en programme Python      |
+| `metal-secretaire.el`                  | Transcription d'assemblées (API Gladia, optionnel)    |
+
+**Système**
+
+| Module                  | Rôle                                                            |
+|-------------------------|-----------------------------------------------------------------|
+| `metal-deps.el`         | Assistant d'installation des dépendances et des agents IA       |
+| `metal-git.el`          | Mise à jour depuis GitHub (`M-x metal-mise-a-jour-github`)      |
+| `metal-distribution.el` | Préparation d'une archive ZIP de distribution                   |
+| `metal-securite.el`     | Corbeille interne avec restauration                             |
 
 ## Signalement de problèmes
 
