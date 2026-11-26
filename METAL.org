@@ -67,6 +67,10 @@ Dans l'explorateur de fichiers et dossiers Treemacs (ici à gauche), les raccour
 | Remplacements instantanés   | C-s recherche C-e modification      |                        |                                     |
 | Recherche et remplacement   | C-r                                 |                        |                                     |
 |-----------------------------+-------------------------------------+------------------------+-------------------------------------|
+| \fcbl Édition               | - Insérer une tabulation            | C-TAB                  | Sauf en Org-mode                    |
+|                             | ~~(vraie tabulation)                |                        |                                     |
+|                             | - Forcer une tabulation             | C-q TAB                | Fonctionne partout                  |
+|-----------------------------+-------------------------------------+------------------------+-------------------------------------|
 | \fcbl Gestion des fenêtres  | \fjn - Fermer la fenêtre active     | \fjn C-x 0             |                                     |
 |                             | - Fermer toutes les fenêtres        | C-x 1                  |                                     |
 |                             | ~~sauf la fenêtre active            |                        |                                     |

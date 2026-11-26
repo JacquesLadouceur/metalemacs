@@ -1066,10 +1066,12 @@ Hors minibuffer, demande le motif via read-string."
 
 
 (defun mon/configure-tab-indentation ()
-  "TAB/S-TAB : décale via mes fonctions custom, sauf en Org/Markdown/CSV/TSV.
+  "TAB/S-TAB : décale via mes fonctions custom, sauf en Org/Markdown/CSV/TSV/Makefile.
 csv-mode (et tsv-mode, qui en dérive) hérite de text-mode : sans cette
-exclusion, TAB y insérait des espaces au lieu du séparateur \\t."
-  (unless (or (derived-mode-p 'org-mode 'markdown-mode 'csv-mode)
+exclusion, TAB y insérait des espaces au lieu du séparateur \\t.
+makefile-mode hérite de prog-mode : les lignes de recette d'un Makefile
+doivent commencer par un vrai \\t, sinon make échoue (« missing separator »)."
+  (unless (or (derived-mode-p 'org-mode 'markdown-mode 'csv-mode 'makefile-mode)
               (minibufferp))
     (local-set-key (kbd "<tab>")   #'metal-shift-right-at-point-or-region)
     (local-set-key (kbd "TAB")     #'metal-shift-right-at-point-or-region)
@@ -1971,6 +1973,7 @@ défaut."
 (global-set-key (kbd "C-=") 'metal-text-scale-increase-mouse)
 (global-set-key (kbd "C--") 'metal-text-scale-decrease-mouse)
 (global-set-key (kbd "C-0") 'metal-text-scale-reset-all)
+(global-set-key (kbd "C-<tab>") #'metal-inserer-tabulation)
 
 ;; Chargement des modules d'interface.  metal-toolbar doit venir en premier
 ;; (les autres en dépendent).  Chaque require est isolé : si un module
